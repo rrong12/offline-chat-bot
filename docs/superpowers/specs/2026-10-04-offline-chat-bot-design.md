@@ -16,7 +16,7 @@ them. Each later phase gets its own short spec.
 
 | Phase | Contents |
 |---|---|
-| **1 (this spec)** | Core (Twitch connection, admin controls, activity log, outbox, stats database, game manager), `?leaderboard`, `?gamestats`, `?scramble`, `?hangman`, `?skip`, `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke`, `?cookie` |
+| **1 (this spec)** | Core (Twitch connection, admin controls, activity log, outbox, stats database, game manager), `?leaderboard`, `?gamestats`, `?scramble`, `?hangman` (+ `?g`), `?skip`, `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke`, `?cookie` |
 | 2 | `?trivia` (+ `?hint`), `?riddle`, `?familyfeud` / `?feud` / `?ffskip`, `?higherlower` |
 | 3 | `?rng` (own badge rules) |
 | 4 | `?ascii`, `?chatsummary` / `?cs continue` |
@@ -41,6 +41,8 @@ Not built: the `casino` option of `?leaderboard`. The bot has no gambling or cur
 | Where it runs | Robert's laptop for development and testing in his own channel. Later, an always-on Linux server under systemd | Moving to the server is a copy plus a service file. |
 | Shared chat | Only messages from the bot's own channel count | Partner channels' mods cannot control the bot, and games are not flooded. |
 | One game at a time | Yes, with a cooldown between games | Keeps a busy chat readable. |
+| Hangman guessing | Explicit `?g <letter>` or `?g <answer>`; plain chat is ignored | "W" and "L" are constant reactions in Jason's chat and would otherwise count as guesses. |
+| Word categories | `animals`, `countries`, `food`, `games`, `general`, `streamers` | Chosen by Robert from a pitch. Emotes, slang, Twitch terms, and memes were declined. |
 
 ## 3. Twitch integration
 
@@ -163,8 +165,9 @@ never create their own timers, so tests can drive time directly.
 
 Cooldowns, unless noted: each command has a **10 s per-user** cooldown and a **5 s global**
 cooldown. A command on cooldown is silently ignored. Control commands (`?bot ...`,
-`?stopgame`) and `?skip` have no cooldowns; `?skip` is limited to one vote per user per
-round instead. Quick-command answers use Twitch's
+`?stopgame`), `?skip`, and in-game commands such as `?g` skip these cooldowns. `?skip` is
+limited to one vote per user per round, and each game enforces its own limits on its
+in-game commands. Quick-command answers use Twitch's
 threaded reply (`reply_to`). Game announcements are plain messages.
 
 | Command | Who | Behavior |
@@ -179,6 +182,7 @@ threaded reply (`reply_to`). Game announcements are plain messages.
 | `?gamestats [game] [username]` | anyone | With no game: totals plus a per-game breakdown (wins, played, points), truncated to fit. With a game: wins, played, points, and rank in that game. If the first argument matches a game name it is the game; otherwise it is a username. A leading `@` is stripped. Unknown user: "No stats for \<name\> yet." Defaults to the caller. |
 | `?scramble [category]` | anyone | Start Scramble (section 7). |
 | `?hangman [category]` | anyone | Start Hangman (section 7). |
+| `?g <letter>` / `?g <answer>` | anyone, during Hangman | Guess a letter or the whole answer (section 7). Ignored when no Hangman game is running. |
 | `?8ball [question]` | anyone | One of 20 classic answers from `content/8ball.txt`. The question is not echoed. |
 | `?coinflip` | anyone | "Heads" or "Tails". |
 | `?catfact` | anyone | `GET https://catfact.ninja/fact` → `fact`. |
@@ -213,10 +217,12 @@ class Game(ABC):
     name: ClassVar[str]              # "scramble"; also the start command
     categories: ClassVar[list[str]]  # [] if the game has no categories
     time_limit: ClassVar[int]        # seconds
+    commands: ClassVar[tuple[str, ...]] = ()   # in-game commands, e.g. ("g",) for Hangman
 
     def __init__(self, category: str | None, rng: random.Random, assets: Assets): ...
     def start(self) -> str: ...
     def on_message(self, msg: ChatMessage, now: datetime) -> Outcome | None: ...
+    def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None: ...
     def on_tick(self, elapsed: float) -> Outcome | None: ...   # default: None
     def on_timeout(self) -> Outcome: ...
     def reveal(self) -> str: ...                               # answer text for skip/stop
@@ -229,8 +235,12 @@ Randomness comes from an injected `random.Random`, so tests can seed it.
 - **Start:** `?<name> [category]` starts a game when none is active and the cooldown is over.
   An unknown category gets "Categories: a, b, c" and starts nothing. With no category, one is
   chosen at random.
-- **Participation:** the game decides what counts as an attempt. `on_message` returns `None`
-  for ordinary chatter and an `Outcome`, possibly empty, for an attempt. Only attempts mark
+- **In-game commands:** while a game is active, a prefixed message whose command is in the
+  game's `commands` goes to `on_command` instead of the global registry. When no game
+  declares it, the command is ignored.
+- **Participation:** the game decides what counts as an attempt. `on_message` and
+  `on_command` return `None` for ordinary chatter or rejected input, and an `Outcome`,
+  possibly empty, for an attempt. Only attempts mark
   the sender as a player of the round, so people just chatting during a game do not inflate
   "played" in `?gamestats`.
 - **Timers:** `tick(now)` calls `on_tick(elapsed)`. At `time_limit` it calls `on_timeout()`.
@@ -276,20 +286,20 @@ Substrings do not count, which avoids false positives in a busy chat.
 ### Hangman
 - **Answer:** a random entry from `content/words/<category>.txt`. It may be a short phrase;
   spaces and punctuation are shown, and only letters are hidden.
+- **Start:** "🪢 Hangman (animals): _ _ _ _ _ _ _ _ _ · guess with ?g <letter> or ?g <answer> · 6 lives, 120s".
 - **Board:** `_ A _ _ M A N | wrong: E T R (3/6)`. Sent with `coalesce_key="hangman-board"`, so
   bursts of guesses produce one up-to-date board instead of a backlog.
-- **Letter guesses:** a message that is exactly one letter A to Z (after normalization) is a
-  letter guess.
-  - Each user may guess a letter at most once every 5 s.
+- **Guessing:** only through `?g`. Plain chat messages are ignored, so "W" and "L"
+  reactions never count.
+  - `?g <letter>`, one letter A to Z, is a letter guess.
+  - `?g <answer>`, anything longer, is a solve attempt.
+  - Each user may use `?g` at most once every 5 s.
   - Repeated letters are ignored.
   - A correct new letter earns its guesser 1 point, held until the round ends.
   - A wrong letter costs one of 6 lives.
-- **Known trade-off:** in a busy chat, reactions like "W" or "L" count as guesses. This is
-  accepted. A dedicated guess command is the fallback if it proves annoying in testing.
-- **Attempt:** an accepted letter guess, or a message whose normalized length equals the
-  answer's (a solve attempt). Other chatter is ignored.
-- **Solve:** a message equal to the full answer, normalized, solves it. Wrong solve attempts
-  cost nothing, so griefers cannot burn lives with junk words.
+- **Attempt:** any accepted `?g`.
+- **Solve:** `?g <answer>` that equals the full answer, normalized, solves it. Wrong solve
+  attempts cost nothing, so griefers cannot burn lives with junk words.
 - **Win:** the round is won by a full solve, or when the last hidden letter is revealed. The
   winner (the solver, or whoever revealed the last letter) gets 10 points. Held letter points
   are awarded too.
@@ -297,9 +307,20 @@ Substrings do not count, which avoids false positives in a busy chat.
   letter points included.
 
 ### Categories at launch
-`animals`, `food`, `countries`, `games`, `general`, with at least 100 entries each, checked
-for appropriate content. Adding a category means adding a text file. The requester may want
-custom categories, such as streamer lore or emotes; that only takes new files.
+| Category | Contents |
+|---|---|
+| `animals` | Common and well-known animals. |
+| `countries` | Countries of the world (multi-word names like *SOUTH KOREA* go to Hangman). |
+| `food` | Everyday food plus snack and fast-food items (TAKIS, RAMEN, BOBA, WINGSTOP, CHIPOTLE). |
+| `games` | Popular and streamed video games (MINECRAFT, VALORANT, GEOGUESSR, BALATRO, *LETHAL COMPANY*). |
+| `general` | Common, recognizable English words. |
+| `streamers` | Well-known streamers, by the name chat uses (XQC, LUDWIG, POKIMANE, SHROUD, *KAI CENAT*). |
+
+- **Size:** at least 100 entries per file, checked for appropriate content (no slurs, no
+  sexual terms).
+- **Scramble filter:** Scramble uses only single words of 4 to 10 letters from each file.
+- **Hangman:** also uses multi-word phrases (shown in *italics*).
+- **Adding a category:** add one text file to `content/words/`.
 
 ## 8. Data model (`data/bot.db`, SQLite, WAL mode)
 
@@ -466,7 +487,7 @@ needed.
    - GameManager start, cooldown, skip votes, stop, and error-in-game.
 2. **Full-flow tests** drive `BotCore` through a scripted `ConsoleConnector`. Scenarios:
    - Start scramble, a wrong answer, a right answer, points awarded, `?leaderboard` shows them.
-   - Hangman win and loss.
+   - Hangman win and loss through `?g`. Plain one-letter messages ("W") are ignored.
    - Three `?skip` votes.
    - A non-mod's `?bot shutdown` is ignored. A mod's `?bot off` blocks games; `?bot on`
      restores them.
@@ -530,8 +551,8 @@ cp .env.example .env            # fill in client id and secret
 These are not designed here. They are listed so Phase 1 does not block them.
 
 - **`?trivia [category] [difficulty]`, `?hint`, `?skip` (3 votes):** Open Trivia DB supplies
-  categories and difficulties. Needs game-specific commands (`?hint`) added to the `Game`
-  interface.
+  categories and difficulties. `?hint` uses the in-game command support built in
+  Phase 1.
 - **`?riddle`:** a bundled riddle list with forgiving answer matching. Only the keyword, or
   typo tolerance.
 - **`?familyfeud` / `?feud`, `?ffskip` (3 votes):** needs a survey dataset of answers with
@@ -551,6 +572,4 @@ These are not designed here. They are listed so Phase 1 does not block them.
 
 ## 18. Open items for the requester
 
-- Which word categories they want for Scramble and Hangman.
-- Whether single-letter Hangman guesses ("W", "L") are acceptable in Jason's chat.
 - Point values and timers. The defaults above are adjustable in code or config.
