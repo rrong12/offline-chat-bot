@@ -1,7 +1,7 @@
 # Offline Chat Bot: Design (Phase 1)
 
 Date: 2026-10-04
-Status: draft, awaiting review
+Status: approved by Robert 2026-10-04
 
 ## 1. Goal
 
@@ -332,6 +332,10 @@ Substrings do not count, which avoids false positives in a busy chat.
 - **Scramble filter:** Scramble uses only single words of 4 to 10 letters from each file.
 - **Hangman:** also uses multi-word phrases (shown in *italics*).
 - **Adding a category:** add one text file to `content/words/`.
+- **Review gate for `streamers` and `games`:**
+  - Every entry must be a real, verifiable streamer or game. Each entry is checked against a
+    public source while the list is built, and nothing is taken from memory alone.
+  - Robert reviews both files and signs off before the bot goes live in any channel.
 
 ## 8. Data model (`data/bot.db`, SQLite, WAL mode)
 
@@ -558,6 +562,7 @@ cp .env.example .env            # fill in client id and secret
 - `python -m bot console` lets a person play both games and all quick commands with no
   Twitch account.
 - A README covers setup, the commands, and the server move.
+- Robert has reviewed and approved `content/words/streamers.txt` and `content/words/games.txt`.
 
 ## 17. Later phases: captured requirements
 
