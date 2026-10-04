@@ -16,7 +16,7 @@ them. Each later phase gets its own short spec.
 
 | Phase | Contents |
 |---|---|
-| **1 (this spec)** | Core (Twitch connection, admin controls, activity log, outbox, stats database, game manager), `?leaderboard`, `?gamestats`, `?scramble`, `?hangman` (+ `?g`), `?skip`, `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke`, `?cookie` |
+| **1 (this spec)** | Core (Twitch connection, admin controls, activity log, outbox, stats database, game manager), `?help` / `?commands`, `?leaderboard`, `?gamestats`, `?scramble`, `?hangman` (+ `?g`), `?skip`, `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke`, `?cookie` |
 | 2 | `?trivia` (+ `?hint`), `?riddle`, `?familyfeud` / `?feud` / `?ffskip`, `?higherlower` |
 | 3 | `?rng` (own badge rules) |
 | 4 | `?ascii`, `?chatsummary` / `?cs continue` |
@@ -101,7 +101,8 @@ offline-chat-bot/
 │   │   ├── base.py          ChatMessage dataclass + Connector protocol
 │   │   ├── twitch.py        TwitchIO implementation (EventSub in, Helix out)
 │   │   └── console.py       stdin/stdout implementation for local play and tests
-│   ├── commands.py          command registry: name → handler, aliases, permission, cooldowns
+│   ├── commands.py          command registry: name → handler, aliases, permission, cooldowns,
+│   │                        usage + description (the single source for ?help)
 │   ├── permissions.py       is_controller(msg): broadcaster or moderator or owner
 │   ├── cooldowns.py         per-user and global cooldown tracking (injectable clock)
 │   ├── admin.py             ?bot off/on/status/shutdown, ?stopgame
@@ -178,6 +179,8 @@ threaded reply (`reply_to`). Game announcements are plain messages.
 | `?bot shutdown` | controller | Sends "Shutting down (requested by \<name\>)." at priority, stops the game, logs `admin`/`shutdown` with the user, flushes the outbox (max 3 s), closes the connector, exits with code 0. |
 | `?stopgame` | controller | Cancels the active game. Outcome `stopped`, no points, cooldown starts. |
 | `?skip` | anyone, in a game | Records one skip vote per user per round. When `skip_votes` (default 3) distinct users have voted, the answer is revealed and the round ends with outcome `skipped` and no points. Each vote is acknowledged in a coalesced message ("Skip 2/3"). |
+| `?help` / `?commands` | anyone | One message listing the public commands, grouped (Games, Stats, Fun), ending with "?help <command> for details". Built from the registry, so it never drifts. Control commands are left out to keep it short. |
+| `?help <command>` | anyone | The usage line and description for one command, with or without the `?`. Works for control commands too (`?help bot`). Unknown command: "No command named \<x\>. Try ?help." |
 | `?leaderboard [game] [limit]` | anyone | Top N (default 5, clamped 1 to 10) by points for one game, or across all games when no game is named. "Top 5 scramble: 1. a (120) 2. b (98) …". Ties go to more wins, then login. A numeric argument is the limit. |
 | `?gamestats [game] [username]` | anyone | With no game: totals plus a per-game breakdown (wins, played, points), truncated to fit. With a game: wins, played, points, and rank in that game. If the first argument matches a game name it is the game; otherwise it is a username. A leading `@` is stripped. Unknown user: "No stats for \<name\> yet." Defaults to the caller. |
 | `?scramble [category]` | anyone | Start Scramble (section 7). With no category, one is picked at random and named in the opening message. |
@@ -260,6 +263,8 @@ Randomness comes from an injected `random.Random`, so tests can seed it.
 - **Errors:** an exception from game code is logged with a traceback. The round is recorded
   as `stopped` with no points, and chat gets "Game ended due to an error." The bot keeps
   running.
+- **Help text:** each game supplies a `usage` and `description`, including its in-game commands,
+  which `?help <game>` shows.
 - **Registration:** games are listed in `config.toml` under `[games] enabled = [...]`. Adding
   a game takes one module plus one config entry.
 
@@ -487,6 +492,8 @@ needed.
    - the outbox's rate, burst, queue limit, coalescing, and priority, with a fake clock;
    - permissions;
    - command parsing, including the `?gamestats` and `?leaderboard` argument disambiguation;
+   - `?help` output stays under 500 characters, and every registered public command has usage
+     and description text;
    - stats queries on a temporary database;
    - the daily-use UTC boundary;
    - Scramble and Hangman with a seeded RNG and explicit `now` and `elapsed` values;
@@ -575,6 +582,10 @@ These are not designed here. They are listed so Phase 1 does not block them.
 - **`?chatsummary`, `?cs continue`:** keep the last 30 minutes of chat in memory only, never
   on disk, and summarize with an LLM API, which needs an API key and costs a little per call.
   `?cs continue` pages through a long summary.
+
+- **Commands web page (optional, after the move to a server):** a page of command cards,
+  like the reference bot's, generated from the registry's usage and description text, with
+  `?help` linking to it.
 
 ## 18. Open items for the requester
 
