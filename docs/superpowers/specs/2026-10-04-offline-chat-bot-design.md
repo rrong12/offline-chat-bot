@@ -180,8 +180,10 @@ threaded reply (`reply_to`). Game announcements are plain messages.
 | `?skip` | anyone, in a game | Records one skip vote per user per round. When `skip_votes` (default 3) distinct users have voted, the answer is revealed and the round ends with outcome `skipped` and no points. Each vote is acknowledged in a coalesced message ("Skip 2/3"). |
 | `?leaderboard [game] [limit]` | anyone | Top N (default 5, clamped 1 to 10) by points for one game, or across all games when no game is named. "Top 5 scramble: 1. a (120) 2. b (98) …". Ties go to more wins, then login. A numeric argument is the limit. |
 | `?gamestats [game] [username]` | anyone | With no game: totals plus a per-game breakdown (wins, played, points), truncated to fit. With a game: wins, played, points, and rank in that game. If the first argument matches a game name it is the game; otherwise it is a username. A leading `@` is stripped. Unknown user: "No stats for \<name\> yet." Defaults to the caller. |
-| `?scramble [category]` | anyone | Start Scramble (section 7). |
-| `?hangman [category]` | anyone | Start Hangman (section 7). |
+| `?scramble [category]` | anyone | Start Scramble (section 7). With no category, one is picked at random and named in the opening message. |
+| `?scramble categories` | anyone | "Scramble categories: animals, countries, …". Starts nothing and works while a game is running. |
+| `?hangman [category]` | anyone | Start Hangman (section 7). Same random pick as Scramble when no category is given. |
+| `?hangman categories` | anyone | Same as `?scramble categories`, for Hangman. |
 | `?g <letter>` / `?g <answer>` | anyone, during Hangman | Guess a letter or the whole answer (section 7). Ignored when no Hangman game is running. |
 | `?8ball [question]` | anyone | One of 20 classic answers from `content/8ball.txt`. The question is not echoed. |
 | `?coinflip` | anyone | "Heads" or "Tails". |
@@ -233,8 +235,12 @@ Randomness comes from an injected `random.Random`, so tests can seed it.
 
 ### GameManager rules
 - **Start:** `?<name> [category]` starts a game when none is active and the cooldown is over.
-  An unknown category gets "Categories: a, b, c" and starts nothing. With no category, one is
-  chosen at random.
+  - With no category, one is chosen at random, and the opening message names it.
+  - An unknown category gets the category list and starts nothing.
+- **Category list:** `?<name> categories` replies with the game's categories and starts
+  nothing. It is handled before the start rules, so it works during a game or the cooldown,
+  and it uses the normal command cooldowns. `categories` is reserved and cannot be a category
+  name.
 - **In-game commands:** while a game is active, a prefixed message whose command is in the
   game's `commands` goes to `on_command` instead of the global registry. When no game
   declares it, the command is ignored.
