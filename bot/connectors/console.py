@@ -7,6 +7,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterable, Iterator
 from itertools import count
+from typing import TextIO
 
 from bot.clock import Clock
 from bot.connectors.base import ChatMessage, OnMessage, OnReady, ReadyInfo, SendResult, UserRef
@@ -39,6 +40,19 @@ def parse_console_line(line: str, clock: Clock, ids: Iterator[int]) -> ChatMessa
     )
 
 
+def pump_lines(stream: TextIO, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[str | None]) -> None:
+    """Feed lines from a blocking stream into an asyncio queue (runs on a daemon thread).
+
+    Stops quietly if the event loop has already closed, e.g. a line typed after ?bot shutdown.
+    """
+    try:
+        for raw in stream:
+            loop.call_soon_threadsafe(queue.put_nowait, raw)
+        loop.call_soon_threadsafe(queue.put_nowait, None)
+    except RuntimeError:  # "Event loop is closed"
+        return
+
+
 class ConsoleConnector:
     channel_id = "console"
 
@@ -66,6 +80,8 @@ class ConsoleConnector:
 
     async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
         await on_ready(ReadyInfo("console", self.channel_id, True))
+        if self._closed:
+            return
         if self._lines is not None:
             for line in self._lines:
                 if self._closed:
@@ -78,12 +94,8 @@ class ConsoleConnector:
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._queue = queue
 
-        def read_stdin() -> None:  # daemon thread, so a blocked read never keeps the process alive
-            for raw in sys.stdin:
-                loop.call_soon_threadsafe(queue.put_nowait, raw)
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-        threading.Thread(target=read_stdin, daemon=True).start()
+        # Daemon thread, so a blocked read never keeps the process alive after shutdown.
+        threading.Thread(target=pump_lines, args=(sys.stdin, loop, queue), daemon=True).start()
         while not self._closed:
             line = await queue.get()
             if line is None:

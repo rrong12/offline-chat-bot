@@ -1,7 +1,9 @@
+import asyncio
+import io
 from itertools import count
 
 from bot.clock import FakeClock
-from bot.connectors.console import ConsoleConnector, parse_console_line
+from bot.connectors.console import ConsoleConnector, parse_console_line, pump_lines
 
 
 def test_parse_console_line_user_and_mod(clock: FakeClock):
@@ -37,6 +39,35 @@ async def test_console_send_marks_replies(clock: FakeClock):
     await conn.send("plain")
     assert printed == ["bot → alice: hello", "bot: plain"]
     assert conn.sent == ["hello", "plain"]
+
+
+async def test_close_before_run_returns_immediately(clock: FakeClock):
+    conn = ConsoleConnector(clock=clock, lines=["alice: hi"])
+    seen = []
+
+    async def on_message(msg):
+        seen.append(msg)
+
+    async def on_ready(info):
+        pass
+
+    await conn.close()
+    await conn.run(on_message, on_ready)
+    assert seen == []
+
+
+def test_stdin_pump_stops_quietly_after_the_loop_closes():
+    loop = asyncio.new_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    loop.close()
+    pump_lines(io.StringIO("typed after shutdown\n"), loop, queue)  # must not raise
+
+
+async def test_stdin_pump_delivers_lines_then_end_marker():
+    queue: asyncio.Queue = asyncio.Queue()
+    pump_lines(io.StringIO("a: hi\nb: yo\n"), asyncio.get_running_loop(), queue)
+    await asyncio.sleep(0)
+    assert [queue.get_nowait() for _ in range(3)] == ["a: hi\n", "b: yo\n", None]
 
 
 async def test_console_lookup_user(clock: FakeClock):
