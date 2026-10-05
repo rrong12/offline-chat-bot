@@ -1,0 +1,295 @@
+"""End-to-end flows: BotCore driven through console-style chat lines, with a fake clock."""
+
+import asyncio
+import json
+import random
+from itertools import count
+
+import pytest
+
+from bot.activity_log import ActivityLog
+from bot.config import ConfigError
+from bot.connectors.base import AuthRequired, ReadyInfo
+from bot.connectors.console import ConsoleConnector, parse_console_line
+from bot.core import BotCore
+from bot.stats import StatsStore
+from tests.helpers import FakeHttp, make_config, make_msg
+
+
+class Bot:
+    def __init__(self, tmp_path, clock, assets, *, db=":memory:", lines=None, connector=None, http=None):
+        self.clock = clock
+        self.ids = count(1)
+        self.connector = connector or ConsoleConnector(clock=clock, lines=lines, out=lambda s: None)
+        self.log = ActivityLog(tmp_path / "logs", clock)
+        self.core = BotCore(
+            config=make_config(tmp_path),
+            connector=self.connector,
+            stats=StatsStore(db),
+            log=self.log,
+            clock=clock,
+            assets=assets,
+            http=http or FakeHttp(),
+            rng=random.Random(1),
+        )
+
+    async def say(self, line: str) -> None:
+        await self.core.on_message(parse_console_line(line, self.clock, self.ids))
+        await self.core.outbox.flush_ready()
+
+    async def wait(self, seconds: float) -> None:
+        self.clock.advance(seconds)
+        self.core.tick()
+        await self.core.outbox.flush_ready()
+
+    @property
+    def out(self) -> list[str]:
+        return self.connector.sent
+
+    def events(self) -> list[dict]:
+        path = self.log.path_for(self.clock.now().date())
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+@pytest.fixture
+def bot(tmp_path, clock, assets) -> Bot:
+    return Bot(tmp_path, clock, assets)
+
+
+async def test_scramble_round_to_leaderboard(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    assert bot.out[-1].startswith("🔤 Unscramble (animals): ")
+    await bot.say("bob: alligator")  # not bob's game
+    await bot.say("alice: crocodile")
+    await bot.say("alice: alligator")
+    assert bot.out[-1] == "✅ alice got it: ALLIGATOR (+10)"
+    await bot.say("carol: ?leaderboard")
+    assert bot.out[-1] == "🏆 Top 1 overall: 1. alice (10)"
+    await bot.say("alice: ?gamestats")
+    assert bot.out[-1] == "📊 alice: 10 pts, 1 wins, 1 played | scramble 1W/1P 10pts"
+
+
+async def test_two_players_play_at_once(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    await bot.say("bob: ?scramble animals")  # no chat-wide cooldown on starting games
+    assert len(bot.core.games.sessions) == 2
+    await bot.say("bob: alligator")
+    await bot.say("alice: alligator")
+    assert bot.out[-2:] == ["✅ bob got it: ALLIGATOR (+10)", "✅ alice got it: ALLIGATOR (+10)"]
+
+
+async def test_scramble_hint_lowers_points(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    await bot.say("alice: ?hint")
+    assert bot.out[-1] == "💡 Hint: A _ _ _ _ _ _ _ R"
+    await bot.say("alice: alligator")
+    assert bot.out[-1] == "✅ alice got it: ALLIGATOR (+7)"
+
+
+async def test_hangman_win_through_g_and_plain_letters_ignored(bot: Bot):
+    await bot.say("alice: ?hangman animals")
+    answer = bot.core.games.sessions["console-alice"].game.answer
+    assert "guess with ?g <letter> or ?g <answer>" in bot.out[-1]
+    sent_before = len(bot.out)
+    await bot.say("alice: W")
+    assert len(bot.out) == sent_before and bot.core.games.sessions["console-alice"].game.wrong == []
+    await bot.say(f"alice: ?g {answer.lower()}")
+    assert bot.out[-1] == f"🎉 alice solved it: {answer} (+10)"
+
+
+async def test_hangman_loss(bot: Bot):
+    await bot.say("alice: ?hangman animals")
+    game = bot.core.games.sessions["console-alice"].game
+    misses = [c for c in "ZQXJKVWYUBDF" if c not in game.answer][:6]
+    for letter in misses:
+        await bot.say(f"alice: ?g {letter}")
+        bot.clock.advance(2)  # Hangman allows one guess every 2 s
+    assert bot.out[-1] == f"💀 Out of lives! The word was {game.answer}."
+    assert bot.core.games.sessions == {}
+
+
+async def test_skip_ends_your_game(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    await bot.say("alice: ?skip")
+    assert bot.out[-1] == "⏭️ Skipped. It was ALLIGATOR."
+
+
+async def test_game_times_out(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    await bot.wait(45)
+    assert bot.out[-1] == "⏰ Time's up! It was ALLIGATOR."
+
+
+async def test_busy_brake_when_messages_back_up(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets)
+    for i in range(10):
+        bot.core.outbox.enqueue(f"backlog {i}")
+    await bot.core.on_message(parse_console_line("alice: ?scramble", clock, bot.ids))
+    assert bot.core.outbox.pending()[-1] == "Too many games running right now, try again in a moment."
+    assert bot.core.games.sessions == {}
+
+
+async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
+    await bot.say("random: ?bot shutdown")
+    await bot.say("random: ?bot off")
+    assert bot.out == [] and not bot.core.paused
+    await bot.say("alice: ?scramble animals")
+    await bot.say("@mod: ?bot off")
+    assert bot.core.paused
+    assert bot.core.games.sessions == {}
+    assert "Bot paused by mod. ?bot on to resume." in bot.out
+    before = len(bot.out)
+    bot.clock.advance(60)
+    await bot.say("alice: ?scramble animals")
+    await bot.say("alice: ?8ball hi")
+    assert len(bot.out) == before
+    await bot.say("@mod: ?bot status")
+    assert bot.out[-1].startswith("PAUSED · up 1m · games: 0 running · v")
+    await bot.say("@mod: ?bot on")
+    assert bot.out[-1] == "Bot resumed by mod."
+    await bot.say("alice: ?coinflip")
+    assert bot.out[-1] in ("🪙 Heads", "🪙 Tails")
+
+
+async def test_owner_can_control_without_mod_badge(bot: Bot):
+    await bot.say("robert: ?bot off")
+    assert bot.core.paused
+
+
+async def test_stopgame_stops_everyones_games(bot: Bot):
+    await bot.say("@mod: ?stopgame")
+    assert bot.out[-1] == "No games are running."
+    await bot.say("alice: ?scramble animals")
+    await bot.say("bob: ?hangman animals")
+    await bot.say("random: ?stopgame")  # not a mod: ignored
+    assert len(bot.core.games.sessions) == 2
+    await bot.say("@mod: ?stopgame")
+    assert bot.out[-1] == "🛑 Stopped 2 games. No points awarded."
+    assert bot.core.games.sessions == {}
+
+
+async def test_paused_state_survives_restart(tmp_path, clock, assets):
+    db = tmp_path / "data" / "bot.db"
+    first = Bot(tmp_path, clock, assets, db=db)
+    await first.say("@mod: ?bot off")
+    first.core.stats.close()
+    second = Bot(tmp_path, clock, assets, db=db)
+    assert second.core.paused
+    await second.say("alice: ?8ball hi")
+    assert second.out == []
+
+
+async def test_shared_chat_and_own_messages_are_ignored(bot: Bot):
+    await bot.core.on_message(make_msg("?bot off", "othermod", mod=True, source_channel_id="other-channel"))
+    await bot.core.on_message(make_msg("?coinflip", "me", user_id="console-bot"))
+    await bot.core.on_message(make_msg("?coinflip", "local", source_channel_id="console"))
+    await bot.core.outbox.flush_ready()
+    assert not bot.core.paused
+    assert len(bot.out) == 1  # only the message whose source is our own channel
+
+
+async def test_cookie_daily_limit_across_midnight(bot: Bot):
+    await bot.say("alice: ?cookie")
+    assert bot.out[-1] == "🥠 Good things are coming."
+    bot.clock.advance(11)
+    await bot.say("alice: ?cookie")
+    assert bot.out[-1].startswith("You already opened today's cookie. Next one in 11h 59m")
+    await bot.wait(12 * 3600)
+    await bot.say("alice: ?cookie")
+    assert bot.out[-1] == "🥠 Good things are coming."
+
+
+async def test_fact_api_failure_falls_back(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets, http=FakeHttp({}))
+    await bot.say("alice: ?catfact")
+    assert bot.out[-1] == "🐱 fallback catfacts line"
+
+
+async def test_quick_commands_have_user_and_global_cooldowns(bot: Bot):
+    await bot.say("alice: ?coinflip")
+    await bot.say("alice: ?coinflip")
+    await bot.say("bob: ?coinflip")
+    assert len(bot.out) == 1
+    bot.clock.advance(5)
+    await bot.say("bob: ?coinflip")
+    assert len(bot.out) == 2
+
+
+async def test_help_overview_lists_real_commands_under_500_chars(bot: Bot):
+    await bot.say("alice: ?help")
+    text = bot.out[-1]
+    assert text == (
+        "Games: ?scramble ?hangman ?skip | Stats: ?leaderboard ?gamestats | "
+        "Fun: ?8ball ?coinflip ?catfact ?dogfact ?fact ?dadjoke ?cookie · ?help <command> for details"
+    )
+    for cmd in bot.core.registry.all():
+        assert cmd.usage and cmd.description
+        assert len(bot.core.registry.help_for(cmd.name)) <= 500
+    bot.clock.advance(5)  # ?help has a 5 s global cooldown
+    await bot.say("bob: ?help hangman")
+    assert "?g <letter>" in bot.out[-1]
+
+
+async def test_command_logged_and_handler_error_does_not_crash(bot: Bot):
+    async def broken(ctx):
+        raise ValueError("bad handler")
+
+    from bot.commands import Command
+
+    bot.core.registry.add(Command("broken", broken, "{p}broken", "Breaks.", "Fun"))
+    await bot.say("alice: ?broken")
+    await bot.say("alice: ?coinflip")
+    events = bot.events()
+    assert any(e["event"] == "command" and e["command"] == "broken" for e in events)
+    assert any(e["event"] == "error" and e["where"] == "command:broken" for e in events)
+    assert bot.out[-1] in ("🪙 Heads", "🪙 Tails")
+
+
+async def test_run_shutdown_from_chat_exits_zero(tmp_path, clock, assets):
+    lines = ["alice: ?scramble animals", "@mod: ?bot shutdown", "alice: ?coinflip"]
+    bot = Bot(tmp_path, clock, assets, lines=lines)
+    code = await asyncio.wait_for(bot.core.run(), timeout=5)
+    assert code == 0
+    assert bot.out[1:] == ["Shutting down (requested by mod)."]
+    assert not any(t in bot.out for t in ("🪙 Heads", "🪙 Tails"))  # ignored after shutdown
+    assert bot.core.games.sessions == {}
+    events = bot.events()
+    assert events[0]["event"] == "startup" and events[0]["is_mod"] is True
+    assert events[-1] == {**events[-1], "event": "shutdown", "by": "mod", "exit_code": 0}
+
+
+async def test_run_ends_cleanly_when_console_input_ends(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets, lines=["alice: ?coinflip"])
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 0
+    assert bot.out[0] in ("🪙 Heads", "🪙 Tails")
+
+
+class FailingConnector:
+    channel_id = "x"
+
+    def __init__(self, exc: Exception):
+        self.exc = exc
+        self.sent: list[str] = []
+
+    async def run(self, on_message, on_ready):
+        await on_ready(ReadyInfo("x", "x", False))
+        raise self.exc
+
+    async def send(self, text, reply_to=None):
+        self.sent.append(text)
+
+    async def lookup_user(self, login):
+        return None
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.parametrize(
+    "exc, code",
+    [(AuthRequired("token revoked"), 3), (ConfigError("channel not found"), 2), (RuntimeError("socket died"), 1)],
+)
+async def test_run_maps_connector_failures_to_exit_codes(tmp_path, clock, assets, exc, code):
+    bot = Bot(tmp_path, clock, assets, connector=FailingConnector(exc))
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == code
+    assert bot.events()[-1]["exit_code"] == code

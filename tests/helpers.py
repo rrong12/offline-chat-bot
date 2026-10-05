@@ -40,3 +40,30 @@ class FakeHttp:
 
     async def close(self):
         pass
+
+
+def make_config(tmp_path, **overrides):
+    from dataclasses import replace
+
+    from bot.config import Config
+
+    base = Config(
+        client_id="",
+        client_secret="",
+        bot_id="console-bot",
+        owner_ids=frozenset({"console-robert"}),
+        channel="test_channel",
+        prefix="?",
+        user_cooldown=10,
+        global_cooldown=5,
+        enabled_games=("scramble", "hangman"),
+        max_games=25,
+        game_cooldown=10,
+        busy_queue=10,
+        outbox_rate=100,
+        outbox_burst=100,
+        outbox_max_queue=100,
+        log_retention_days=30,
+        data_dir=tmp_path / "data",
+    )
+    return replace(base, **overrides)
