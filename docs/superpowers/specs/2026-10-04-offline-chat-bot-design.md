@@ -171,8 +171,9 @@ never create their own timers, so tests can drive time directly.
 
 Cooldowns, unless noted: each command has a **10 s per-user** cooldown and a **5 s global**
 cooldown. A command on cooldown is silently ignored.
-- Game start commands (`?scramble`, `?hangman`) have only the per-user cooldown, so anyone can
-  start their own game.
+- Game start commands (`?scramble`, `?hangman`) have no command cooldowns. The per-player game
+  cooldown (10 s after your game ends) is the only limit on starting, and the game manager
+  rate-limits its "can't start" and category-list replies to one per 5 s per player.
 - Control commands (`?bot ...`, `?stopgame`), `?skip`, and in-game commands such as `?g` and
   `?hint` have no cooldowns; each game enforces its own limits on its in-game commands. Quick-command answers use Twitch's
 threaded reply (`reply_to`). Game announcements are plain messages.
@@ -211,7 +212,8 @@ line from the matching `content/fallback_*.txt` list (about 50 entries each).
 Starting a game when you already have one gets "You already have a \<game\> game running."
 During your cooldown it gets "Your next game in \<n\>s." At the limit (25 games) or while the
 busy brake is on, it gets "Too many games running right now, try again in a moment." These
-replies are subject to the per-user cooldown.
+replies, the category list, and "Couldn't start that game." are limited to one per 5 s per
+player.
 
 ## 6. Game framework
 
@@ -254,8 +256,8 @@ Randomness comes from an injected `random.Random`, so tests can seed it.
   - With no category, one is chosen at random, and the opening message names it.
   - An unknown category gets the category list and starts nothing.
 - **Category list:** `?<name> categories` replies with the game's categories and starts
-  nothing. It works any time and uses the normal per-user command cooldown. `categories` is
-  reserved and cannot be a category name.
+  nothing. It works any time, subject to the 5 s reply limit. `categories` is reserved and
+  cannot be a category name.
 - **Routing:** a player's plain chat goes to their own game only; everyone else's chat is
   ignored by it. In-game commands (`?g`, `?hint`) go to the sender's game if it declares them,
   and are ignored otherwise.

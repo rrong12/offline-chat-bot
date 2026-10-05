@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (193 tests in total before the content task). Copy the code exactly. If a step's
+  this order (203 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -980,8 +980,8 @@ class StatsStore:
     def record_round(self, rec: RoundRecord) -> int:
         """Write a finished round and its players in one transaction. Returns the round id.
 
-        Players' user rows are upserted here; the starter (`started_by`) must already have a
-        user row (the game manager touches the starter when the game starts).
+        Players' user rows are upserted here, before the round row, so a starter who is also a
+        player (always true for personal games) needs no separate user row.
         """
         with self._conn:
             for p in rec.players:
@@ -2686,13 +2686,13 @@ git commit -m "Add Hangman with ?g guessing"
 
 `ALL_GAMES` maps names to classes; `config.toml` picks which run. `GameManager` runs **personal** games (spec §6, revised): each player has at most one game, keyed by user ID, and many players can play at once.
 
-- **Registration:** one start command per game (per-user cooldown only, no chat-wide cooldown), `?skip`, and each game's in-game commands (`?hint`, `?g`) as hidden, cooldown-free commands that reach only the sender's own game.
+- **Registration:** one start command per game (no command cooldowns: the per-player game cooldown is the only limit, and "can't start" and category-list replies are rate-limited to one per 5 s per player), `?skip`, and each game's in-game commands (`?hint`, `?g`) as hidden, cooldown-free commands that reach only the sender's own game.
 - **Starting:** `?<game> categories`, one game per player, the per-player cooldown (10 s after a game ends), the running limit (25), the busy brake (an `is_busy()` callback the core wires to the outbox backlog), unknown categories, and the random category pick.
 - **Routing:** a player's plain chat goes only to their own game.
-- **Replies:** threaded under the player's latest message, with coalesce keys namespaced per player (`hangman-board:<user_id>`).
-- **Ending:** the tick ends timed-out games. `?skip` ends the sender's game. `stop_all()` ends every game (for `?stopgame`, `?bot off`, and shutdown).
+- **Replies:** threaded under the player's latest message, with coalesce keys unique per round (`hangman-board:<round key>`). The player's current names refresh on every message.
+- **Ending:** the tick ends timed-out games (forcing it if a game's `on_timeout` doesn't finish). `?skip` ends the sender's game. `stop_all()` ends every game (for `?stopgame`, `?bot off`, and shutdown).
 - **Errors:** an exception in game code ends only that player's game, as `stopped` with "Game ended due to an error."
-- **Finishing:** records a one-player round, logs `game_end`, replies, and starts that player's cooldown.
+- **Finishing:** never runs twice for a session. It records a one-player round, logs `game_end`, replies, and starts that player's cooldown (kept in a `Cooldowns`, so it's pruned).
 
 **Files:**
 - Modify: `bot/games/__init__.py` (replace the stub)
@@ -2740,6 +2740,53 @@ class Boom(Game):
         return "nothing"
 
 
+class Stubborn(Boom):
+    """A game whose on_timeout forgets to finish, and whose reveal raises."""
+
+    name = "stubborn"
+
+    def on_message(self, msg, now):
+        return None
+
+    def on_timeout(self) -> Outcome:
+        return Outcome(messages=["still going"])
+
+    def reveal(self) -> str:
+        raise RuntimeError("no answer")
+
+
+class NoResult(Boom):
+    """Times out with finished=True but no result."""
+
+    name = "noresult"
+
+    def on_message(self, msg, now):
+        return None
+
+    def on_timeout(self) -> Outcome:
+        return Outcome(messages=["over"], finished=True)
+
+
+class AnyCommand(Boom):
+    """Answers any in-game command, to prove the manager only routes declared ones."""
+
+    name = "anycommand"
+    commands = {"g": ("{p}g", "Guess.")}
+
+    def on_message(self, msg, now):
+        return None
+
+    def on_command(self, name, args, msg, now):
+        return Outcome(messages=[f"got {name}"])
+
+
+class BrokenStart(Boom):
+    name = "brokenstart"
+
+    def start(self) -> str:
+        raise RuntimeError("cannot start")
+
+
 class Harness:
     def __init__(self, tmp_path, clock: FakeClock, assets, max_games: int = 25):
         self.clock = clock
@@ -2749,7 +2796,8 @@ class Harness:
         self.stats = StatsStore(":memory:")
         self.log = ActivityLog(tmp_path / "logs", clock)
         self.manager = GameManager(
-            games={"scramble": Scramble, "hangman": Hangman, "boom": Boom},
+            games={"scramble": Scramble, "hangman": Hangman, "boom": Boom, "stubborn": Stubborn,
+                   "noresult": NoResult, "anycommand": AnyCommand, "brokenstart": BrokenStart},
             stats=self.stats,
             log=self.log,
             clock=clock,
@@ -2794,9 +2842,11 @@ def h(tmp_path, clock, assets) -> Harness:
 
 def test_register_adds_start_skip_and_hidden_game_commands(h: Harness):
     names = {c.name for c in h.registry.all()}
-    assert names == {"scramble", "hangman", "boom", "skip", "hint", "g"}
+    assert names == {
+        "scramble", "hangman", "boom", "stubborn", "noresult", "anycommand", "brokenstart", "skip", "hint", "g"
+    }
     start = h.registry.get("scramble")
-    assert start.cooldown and not start.global_cooldown  # anyone can start their own game
+    assert not start.cooldown  # the per-player game cooldown is the only limit on starting
     assert not h.registry.get("g").listed and not h.registry.get("g").cooldown
     assert not h.registry.get("skip").cooldown
 
@@ -2838,14 +2888,37 @@ async def test_one_game_per_player_and_per_player_cooldown(h: Harness):
     await h.command("?scramble animals")
     await h.command("?hangman animals")
     assert h.replies[-1] == "You already have a scramble game running."
-    h.chat("alligator")
+    h.chat("alligator")  # alice wins; her 10 s cooldown starts now
+    h.clock.advance(5)
     await h.command("?scramble animals")
-    assert h.replies[-1] == "Your next game in 10s."
+    assert h.replies[-1] == "Your next game in 5s."
     await h.command("?scramble animals", "bob")  # other players aren't blocked
     assert "id-bob" in h.manager.sessions
-    h.clock.advance(10)
+    h.clock.advance(5)
     await h.command("?scramble animals")
     assert "id-alice" in h.manager.sessions
+
+
+async def test_refusal_replies_are_rate_limited_per_player(h: Harness):
+    await h.command("?scramble animals")
+    await h.command("?scramble animals")
+    await h.command("?scramble animals")
+    assert h.replies == ["You already have a scramble game running."]
+    h.clock.advance(5)
+    await h.command("?scramble animals")
+    assert len(h.replies) == 2
+
+
+async def test_category_list_is_rate_limited_too(h: Harness):
+    await h.command("?scramble categories")
+    await h.command("?hangman categories")
+    assert h.replies == ["Scramble categories: animals, food"]
+
+
+async def test_categories_then_pick_works_immediately(h: Harness):
+    await h.command("?scramble categories")
+    await h.command("?scramble food")
+    assert h.texts()[0].startswith("🔤 Unscramble (food)")
 
 
 async def test_max_running_games(tmp_path, clock, assets):
@@ -2884,12 +2957,15 @@ async def test_hint_command_reaches_only_your_game(h: Harness):
     assert h.texts()[-1] == "✅ alice got it: ALLIGATOR (+7)"
 
 
-async def test_hangman_board_updates_coalesce_per_player(h: Harness):
+async def test_hangman_board_updates_coalesce_per_game(h: Harness):
     await h.command("?hangman animals", "alice")
+    await h.command("?hangman animals", "bob")
     await h.command("?g z", "alice")
-    text, kw = h.said[-1]
-    assert "wrong: Z (1/6)" in text
-    assert kw["coalesce_key"] == "hangman-board:id-alice"
+    await h.command("?g z", "bob")
+    (text_a, kw_a), (_, kw_b) = h.said[-2], h.said[-1]
+    assert "wrong: Z (1/6)" in text_a
+    assert kw_a["coalesce_key"] == f"hangman-board:{h.manager.sessions['id-alice'].key}"
+    assert kw_a["coalesce_key"] != kw_b["coalesce_key"]
 
 
 async def test_timeout_ends_the_game(h: Harness):
@@ -2937,10 +3013,74 @@ async def test_stop_all_ends_every_game_without_points(h: Harness):
 async def test_game_error_ends_only_that_players_game(h: Harness):
     await h.command("?boom", "alice")
     await h.command("?scramble animals", "bob")
-    h.chat("anything", "alice")
-    assert h.texts()[-1] == "Game ended due to an error."
+    msg = h.chat("anything", "alice")
+    text, kw = h.said[-1]
+    assert text == "Game ended due to an error." and kw["reply_to"] == msg.id
     assert set(h.manager.sessions) == {"id-bob"}
     assert any(e["event"] == "error" and e["where"] == "game:boom.on_message" for e in h.events())
+    ends = [e for e in h.events() if e["event"] == "game_end"]
+    assert ends == [{**ends[0], "game": "boom", "outcome": "stopped"}]
+
+
+async def test_reveal_error_during_skip_ends_the_game_once(h: Harness):
+    await h.command("?stubborn", "alice")
+    await h.command("?skip", "alice")
+    ends = [e for e in h.events() if e["event"] == "game_end"]
+    assert len(ends) == 1 and ends[0]["outcome"] == "stopped"
+    assert h.manager.sessions == {}
+    assert h.stats._conn.execute("SELECT COUNT(*) FROM rounds").fetchone()[0] == 1
+
+
+async def test_timeout_is_forced_if_the_game_does_not_finish(h: Harness):
+    await h.command("?stubborn", "alice")
+    h.clock.advance(10)
+    h.manager.tick()
+    h.manager.tick()
+    assert h.manager.sessions == {}
+    assert [e["outcome"] for e in h.events() if e["event"] == "game_end"] == ["timeout"]
+
+
+async def test_start_failure_is_reported_once_and_starts_nothing(h: Harness):
+    await h.command("?brokenstart")
+    await h.command("?brokenstart")
+    assert h.replies == ["Couldn't start that game."]
+    assert h.manager.sessions == {}
+
+
+async def test_finished_timeout_without_result_counts_as_timeout(h: Harness):
+    await h.command("?noresult")
+    h.clock.advance(10)
+    h.manager.tick()
+    assert [e["outcome"] for e in h.events() if e["event"] == "game_end"] == ["timeout"]
+
+
+async def test_stats_failure_still_ends_the_game(h: Harness, monkeypatch):
+    def broken(rec):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(h.stats, "record_round", broken)
+    await h.command("?scramble animals")
+    h.chat("alligator")
+    assert h.manager.sessions == {}
+    assert h.texts()[-1] == "✅ alice got it: ALLIGATOR (+10)"
+    assert h.manager.cooldown_remaining("id-alice") == 10
+    assert any(e["event"] == "error" and e["where"] == "stats.record_round" for e in h.events())
+
+
+async def test_in_game_command_for_a_different_game_is_ignored(h: Harness):
+    await h.command("?anycommand", "bob")
+    await h.command("?hint", "bob")  # registered by Scramble; bob's game doesn't declare it
+    assert h.texts() == ["boom started"]
+    await h.command("?g", "bob")  # declared: reaches the game
+    assert h.texts()[-1] == "got g"
+
+
+async def test_finish_records_the_players_current_name(h: Harness):
+    await h.command("?scramble animals")
+    renamed = make_msg("alligator", "alice")
+    renamed = renamed.__class__(**{**renamed.__dict__, "login": "alice_new", "display_name": "Alice_New"})
+    h.manager.on_message(renamed)
+    assert h.stats.find_user("alice_new") is not None
 
 
 async def test_game_messages_get_prefix_substituted(h: Harness):
@@ -2985,14 +3125,17 @@ from datetime import datetime
 from bot.activity_log import ActivityLog
 from bot.assets import Assets
 from bot.clock import Clock
-from bot.commands import Command, CommandContext, CommandRegistry
+from bot.commands import Command, CommandContext, CommandRegistry, Handler
 from bot.connectors.base import ChatMessage
+from bot.cooldowns import Cooldowns
 from bot.games.base import Game, Outcome
 from bot.stats import PlayerResult, RoundRecord, StatsStore
 
 logger = logging.getLogger(__name__)
 
 Say = Callable[..., None]  # say(text, *, reply_to=None, coalesce_key=None, priority=False)
+
+NOTICE_SECONDS = 5.0  # at most one "can't start" or category-list reply per player this often
 
 
 @dataclass
@@ -3036,15 +3179,16 @@ class GameManager:
         self.max_games = max_games
         self._is_busy = is_busy
         self.sessions: dict[str, Session] = {}  # user_id -> that player's running game
-        self._cooldown_until: dict[str, float] = {}  # user_id -> when they may start again
+        self._cooldowns = Cooldowns(clock)  # per-player game cooldowns and notice rate limits
 
     # registration
 
     def register(self, registry: CommandRegistry) -> None:
+        # Start commands have no command cooldowns: the per-player game cooldown is the only limit
+        # on starting, and refusal replies are rate-limited separately (see _notice).
         for cls in self.games.values():
-            registry.add(
-                Command(cls.name, self._start_command, cls.usage, cls.description, "Games", global_cooldown=False)
-            )
+            handler = self._start_handler(cls)
+            registry.add(Command(cls.name, handler, cls.usage, cls.description, "Games", cooldown=False))
         registry.add(Command("skip", self._skip_command, "{p}skip", "End your current game.", "Games", cooldown=False))
         seen: set[str] = set()
         for cls in self.games.values():
@@ -3058,11 +3202,23 @@ class GameManager:
     # helpers
 
     def _reply(self, session: Session, text: str, coalesce_key: str | None = None) -> None:
-        key = f"{coalesce_key}:{session.user_id}" if coalesce_key else None
+        key = f"{coalesce_key}:{session.key}" if coalesce_key else None  # unique per player and round
         self._say(text.replace("{p}", self.prefix), reply_to=session.reply_to, coalesce_key=key)
 
+    def _notice(self, ctx: CommandContext, text: str) -> None:
+        """Reply to a start request we can't fulfil, at most once per NOTICE_SECONDS per player."""
+        if self._cooldowns.check_command("notice", ctx.msg.user_id, NOTICE_SECONDS, 0):
+            ctx.reply(text)
+
     def cooldown_remaining(self, user_id: str) -> float:
-        return max(0.0, self._cooldown_until.get(user_id, 0.0) - self.clock.mono())
+        return self._cooldowns.remaining(("game", user_id))
+
+    @staticmethod
+    def _seen(session: Session, msg: ChatMessage) -> None:
+        """Track the player's latest message (replies thread under it) and current names."""
+        session.reply_to = msg.id
+        session.login = msg.login
+        session.display_name = msg.display_name
 
     def status(self) -> str:
         return f"{len(self.sessions)} running"
@@ -3086,26 +3242,31 @@ class GameManager:
 
     # commands
 
-    async def _start_command(self, ctx: CommandContext) -> None:
-        cls = self.games[ctx.name]
+    def _start_handler(self, cls: type[Game]) -> Handler:
+        async def handler(ctx: CommandContext) -> None:
+            await self._start(cls, ctx)
+
+        return handler
+
+    async def _start(self, cls: type[Game], ctx: CommandContext) -> None:
         arg = ctx.args.strip().lower()
         categories = cls.category_names(self.assets)
         uid = ctx.msg.user_id
         if arg == "categories":
-            ctx.reply(f"{cls.title} categories: {', '.join(categories)}")
+            self._notice(ctx, f"{cls.title} categories: {', '.join(categories)}")
             return
         if uid in self.sessions:
-            ctx.reply(f"You already have a {self.sessions[uid].game.name} game running.")
+            self._notice(ctx, f"You already have a {self.sessions[uid].game.name} game running.")
             return
         remaining = self.cooldown_remaining(uid)
         if remaining > 0:
-            ctx.reply(f"Your next game in {math.ceil(remaining)}s.")
+            self._notice(ctx, f"Your next game in {math.ceil(remaining)}s.")
             return
         if len(self.sessions) >= self.max_games or self._is_busy():
-            ctx.reply("Too many games running right now, try again in a moment.")
+            self._notice(ctx, "Too many games running right now, try again in a moment.")
             return
         if categories and arg and arg not in categories:
-            ctx.reply(f"Unknown category. {cls.title} categories: {', '.join(categories)}")
+            self._notice(ctx, f"Unknown category. {cls.title} categories: {', '.join(categories)}")
             return
         category = (arg or self.rng.choice(categories)) if categories else None
         try:
@@ -3114,9 +3275,8 @@ class GameManager:
         except Exception as exc:
             logger.exception("could not start %s", cls.name)
             self.log.write("error", where=f"game:{cls.name}.start", type=type(exc).__name__, message=str(exc))
-            ctx.reply("Couldn't start that game.")
+            self._notice(ctx, "Couldn't start that game.")
             return
-        self.stats.touch_user(uid, ctx.msg.login, ctx.msg.display_name, self.clock.now())
         session = Session(
             key=uuid.uuid4().hex[:8],
             game=game,
@@ -3136,7 +3296,7 @@ class GameManager:
         session = self.sessions.get(ctx.msg.user_id)
         if session is None:
             return
-        session.reply_to = ctx.msg.id
+        self._seen(session, ctx.msg)
         answer = self._guard(session, f"{session.game.name}.reveal", session.game.reveal)
         if answer is not None:
             self._finish(session, "skipped", [f"⏭️ Skipped. It was {answer}."], {}, set())
@@ -3145,7 +3305,7 @@ class GameManager:
         session = self.sessions.get(ctx.msg.user_id)
         if session is None or ctx.name not in session.game.commands:
             return
-        session.reply_to = ctx.msg.id
+        self._seen(session, ctx.msg)
         now = self.clock.now()
         outcome = self._guard(
             session,
@@ -3160,10 +3320,9 @@ class GameManager:
         session = self.sessions.get(msg.user_id)
         if session is None:
             return
+        self._seen(session, msg)
         now = self.clock.now()
         outcome = self._guard(session, f"{session.game.name}.on_message", lambda: session.game.on_message(msg, now))
-        if outcome is not None:
-            session.reply_to = msg.id  # thread the reply under the answer that produced it
         self._handle(session, outcome)
 
     def tick(self) -> None:
@@ -3174,9 +3333,12 @@ class GameManager:
             game = session.game
             if elapsed >= game.time_limit:
                 outcome = self._guard(session, f"{game.name}.on_timeout", game.on_timeout)
+                self._handle(session, outcome, default_result="timeout")
+                if self.sessions.get(session.user_id) is session:  # the game didn't end itself: force it
+                    self._finish(session, "timeout", [], {}, set())
             else:
                 outcome = self._guard(session, f"{game.name}.on_tick", lambda g=game, e=elapsed: g.on_tick(e))
-            self._handle(session, outcome)
+                self._handle(session, outcome)
 
     def stop_all(self) -> int:
         """End every running game with no points (?stopgame, ?bot off, shutdown). Returns how many."""
@@ -3187,11 +3349,12 @@ class GameManager:
 
     # outcomes
 
-    def _handle(self, session: Session, outcome: Outcome | str | None) -> None:
+    def _handle(self, session: Session, outcome: Outcome | str | None, default_result: str = "won") -> None:
         if not isinstance(outcome, Outcome) or self.sessions.get(session.user_id) is not session:
             return
         if outcome.finished:
-            self._finish(session, outcome.result or "won", outcome.messages, outcome.awards, outcome.winners)
+            result = outcome.result or default_result
+            self._finish(session, result, outcome.messages, outcome.awards, outcome.winners)
         else:
             for text in outcome.messages:
                 self._reply(session, text, outcome.coalesce_key)
@@ -3199,8 +3362,10 @@ class GameManager:
     def _finish(
         self, session: Session, result: str, messages: list[str], awards: dict[str, int], winners: set[str]
     ) -> None:
-        self.sessions.pop(session.user_id, None)
-        self._cooldown_until[session.user_id] = self.clock.mono() + self.cooldown_seconds
+        if self.sessions.get(session.user_id) is not session:  # already finished (or replaced): never twice
+            return
+        del self.sessions[session.user_id]
+        self._cooldowns.trigger(("game", session.user_id), self.cooldown_seconds)
         uid = session.user_id
         player = PlayerResult(uid, session.login, session.display_name, awards.get(uid, 0), uid in winners)
         try:
@@ -3234,7 +3399,7 @@ class GameManager:
 
 Run: `.venv/bin/pytest tests/test_manager.py -q`
 
-Expected: PASS (18 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (28 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 6: Commit**
 
@@ -5831,7 +5996,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 208 tests pass.
+Expected: `15 passed`, then all 218 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -6004,7 +6169,7 @@ Console mode keeps its own database under `data/console/`, separate from the rea
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (208).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (218).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
