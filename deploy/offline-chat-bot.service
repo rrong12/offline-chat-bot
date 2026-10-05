@@ -1,0 +1,20 @@
+[Unit]
+Description=Offline chat bot (Twitch)
+After=network-online.target
+Wants=network-online.target
+# Never give up restarting after a crash: a long Twitch or network outage must not leave the bot
+# stopped for good. Config errors (exit 2) and login problems (exit 3) are excluded below.
+StartLimitIntervalSec=0
+
+[Service]
+User=chatbot
+WorkingDirectory=/opt/offline-chat-bot
+ExecStart=/opt/offline-chat-bot/.venv/bin/python -m bot
+# Restart after a crash, but not after ?bot shutdown (exit 0),
+# a config error (exit 2), or a needed re-login (exit 3).
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=2 3
+
+[Install]
+WantedBy=multi-user.target
