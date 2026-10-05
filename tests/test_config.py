@@ -19,7 +19,7 @@ def test_repo_config_file_is_valid_once_a_channel_is_set(tmp_path):
         load_config(write(tmp_path, shipped), ENV)  # the placeholder must be replaced
     load_config(write(tmp_path, shipped), {}, require_twitch=False)  # console mode works before it's set
     cfg = load_config(write(tmp_path, shipped.replace('"your_channel"', '"real_channel"')), ENV)
-    assert cfg.prefix == "?" and cfg.enabled_games == ("scramble", "hangman")
+    assert cfg.prefix == "?" and cfg.enabled_games == ("scramble", "hangman", "trivia", "riddle", "higherlower")
 
 
 def test_defaults_and_env(tmp_path):

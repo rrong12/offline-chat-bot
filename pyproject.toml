@@ -21,7 +21,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 include = ["bot*"]
 
 [tool.setuptools.package-data]
-bot = ["content/*.txt", "content/words/*.txt"]
+bot = ["content/*.txt", "content/*.json", "content/*.md", "content/words/*.txt"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

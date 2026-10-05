@@ -8,7 +8,7 @@ user_seconds = 10           # per person, per command
 global_seconds = 5          # per command, across the whole chat (not for games, ?cookie, ?gamestats, ?help)
 
 [games]
-enabled = ["scramble", "hangman"]
+enabled = ["scramble", "hangman", "trivia", "riddle", "higherlower"]
 max_running = 25            # personal games running at once, across the whole chat
 cooldown_seconds = 10       # per person, after their game ends
 busy_queue = 10             # refuse new games while this many bot messages are waiting to send

@@ -18,13 +18,13 @@ from tests.helpers import FakeHttp, make_config, make_msg
 
 
 class Bot:
-    def __init__(self, tmp_path, clock, assets, *, db=":memory:", lines=None, connector=None, http=None):
+    def __init__(self, tmp_path, clock, assets, *, db=":memory:", lines=None, connector=None, http=None, **config):
         self.clock = clock
         self.ids = count(1)
         self.connector = connector or ConsoleConnector(clock=clock, lines=lines, out=lambda s: None)
         self.log = ActivityLog(tmp_path / "logs", clock)
         self.core = BotCore(
-            config=make_config(tmp_path),
+            config=make_config(tmp_path, **config),
             connector=self.connector,
             stats=StatsStore(db),
             log=self.log,
@@ -434,3 +434,62 @@ async def test_connector_failure_discards_instead_of_sending(tmp_path, clock, as
     assert await asyncio.wait_for(bot.core.run(), timeout=5) == 1
     assert conn.sent == []
     assert any(e.get("reason") == "connector_failed" for e in bot.events())
+
+
+ALL_GAMES_ON = ("scramble", "hangman", "trivia", "riddle", "higherlower")
+
+
+@pytest.fixture
+def allbot(tmp_path, clock, assets) -> Bot:
+    return Bot(tmp_path, clock, assets, enabled_games=ALL_GAMES_ON)
+
+
+async def test_help_lists_every_game_and_explains_shared_commands(allbot: Bot):
+    await allbot.say("alice: ?help")
+    assert allbot.out[-1].startswith("Games: ?scramble ?hangman ?trivia ?riddle ?higherlower ?skip | ")
+    await allbot.say("bob: ?help g")
+    assert allbot.out[-1] == "?g <guess> · Guess in your current game."
+    await allbot.say("carol: ?help hl")
+    assert allbot.out[-1].startswith("?higherlower · Does the next thing") and allbot.out[-1].endswith("(also ?hl)")
+
+
+async def test_trivia_round_to_gamestats(allbot: Bot):
+    await allbot.say("alice: ?trivia medium science")
+    assert allbot.out[-1] == "❓ (science, medium) Which planet is the largest? · 30s · ?g <answer> · ?hint"
+    await allbot.say("alice: ?hint")
+    assert allbot.out[-1] == "💡 7 letters, starts with J"
+    await allbot.say("alice: ?g jupitr")
+    assert allbot.out[-1] == "✅ alice got it: Jupiter (+7)"
+    await allbot.say("alice: ?gamestats trivia")
+    assert allbot.out[-1] == "📊 alice · trivia: 1 win / 1 played · 7 pts · rank #1"
+
+
+async def test_trivia_unknown_option_is_not_echoed(allbot: Bot):
+    await allbot.say("alice: ?trivia astrology")
+    assert allbot.out[-1] == (
+        "Unknown option. Trivia categories: history, science · difficulties: easy, medium, hard"
+    )
+
+
+async def test_riddle_round(allbot: Bot):
+    await allbot.say("alice: ?riddle")
+    answer = "clock" if "hands" in allbot.out[-1] else "towel"
+    await allbot.say("alice: ?g nope")
+    assert allbot.out[-1] == "❌ Not it, 2 guesses left."
+    await allbot.say(f"alice: ?g is it a {answer}")
+    assert allbot.out[-1] == f"✅ alice got it: {answer} (+10)"
+
+
+async def test_higherlower_streak_then_timeout_keeps_the_points(allbot: Bot):
+    await allbot.say("alice: ?hl")
+    game = allbot.core.games.sessions["console-alice"].game
+    guess = "higher" if game.next["views"] >= game.current["views"] else "lower"
+    await allbot.wait(15)
+    await allbot.say(f"alice: ?g {guess}")
+    assert allbot.out[-1].startswith("✅ ") and "Streak 1." in allbot.out[-1]
+    await allbot.wait(15)  # 30 s since the start, but the right answer restarted the 20 s timer
+    assert "console-alice" in allbot.core.games.sessions
+    await allbot.wait(6)
+    assert allbot.out[-1].startswith("⏰ Time's up! ") and allbot.out[-1].endswith("Streak 1 (+1)")
+    await allbot.say("bob: ?leaderboard higherlower")
+    assert allbot.out[-1] == "🏆 Top 1 higherlower: 1. alice (1)"

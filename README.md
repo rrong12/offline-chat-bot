@@ -1,8 +1,9 @@
 # Offline Chat Bot
 
-A Twitch chat bot for jasontheween's offline chat: personal chat games (Scramble, Hangman),
-quick fun commands, per-game points with leaderboards, mod controls (pause, resume, shut down),
-and a daily activity log. Design: `docs/superpowers/specs/2026-10-04-offline-chat-bot-design.md`.
+A Twitch chat bot for jasontheween's offline chat: personal chat games (Scramble, Hangman,
+Trivia, Riddle, Higher or Lower), quick fun commands, per-game points with leaderboards, mod
+controls (pause, resume, shut down), and a daily activity log. Designs:
+`docs/superpowers/specs/` (Phase 1 core, Phase 2 games).
 
 Games are personal: `?scramble` starts **your** game, only your answers count, and the bot
 answers you in threaded replies. Many people can play at once (25 games by default), each
@@ -16,6 +17,9 @@ bot's outgoing messages are backed up.
 | `?help` / `?commands`, `?help <command>` | anyone | List commands, or explain one |
 | `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer; `?hint` for a hint (10/7/4 points) |
 | `?hangman [category]`, `?hangman categories` | anyone | Your own Hangman; guess with `?g <letter>` or `?g <answer>` |
+| `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`, 10 or 15 points) |
+| `?riddle` | anyone | Your own riddle: `?g <answer>`, 3 guesses, `?hint` for a clue then the letter count (10/7/4 points) |
+| `?higherlower` / `?hl` | anyone | Does the next thing get more monthly Wikipedia views? `?g higher` or `?g lower`; 1 point per right answer, one miss ends the streak |
 | `?skip` | anyone | End your current game (no points) |
 | `?leaderboard [game] [1-10]` | anyone | Top players by points |
 | `?gamestats [game] [username]` | anyone | Wins, games played, points |
@@ -25,7 +29,10 @@ bot's outgoing messages are backed up.
 | `?bot shutdown` | mods, broadcaster, owners | Stop the bot process. Only someone with access to the machine can start it again |
 | `?stopgame` | mods, broadcaster, owners | End all running games with no points |
 
-Categories: animals, countries, food, games, general, streamers.
+Scramble and Hangman categories: animals, countries, food, games, general, streamers. Trivia
+categories: anime, animals, games, general, geography, history, movies, music, science, sports, tv.
+
+A player doesn't get the same trivia question or riddle again within their last 50.
 
 ## Install
 
@@ -146,3 +153,15 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 ```
 .venv/bin/pytest
 ```
+
+## Content
+
+- Trivia questions come from [Open Trivia DB](https://opentdb.com/) (CC BY-SA 4.0; see
+  `bot/content/TRIVIA_CREDITS.md`). `scripts/fetch_trivia.py` rebuilds `bot/content/trivia.json`
+  (it takes several minutes because of the API's rate limit).
+- Riddles (`bot/content/riddles.json`) were written for this bot and checked by a second reviewer.
+- Higher or Lower uses last month's English Wikipedia page views. Edit
+  `scripts/higherlower_terms.txt` and run `scripts/fetch_pageviews.py` to change the terms or
+  refresh the numbers.
+- `tests/test_content.py` checks every content file's rules (lengths, blocked words, clues that
+  don't give the answer away).

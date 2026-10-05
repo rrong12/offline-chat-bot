@@ -40,7 +40,7 @@ def test_console_mode_plays_and_shuts_down(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "Traceback" not in result.stderr
     assert "bot → alice: 🪙" in result.stdout
-    assert "bot → bob: Games: ?scramble ?hangman ?skip" in result.stdout
+    assert "bot → bob: Games: ?scramble ?hangman ?trivia ?riddle ?higherlower ?skip" in result.stdout
     assert "bot → mod: Shutting down (requested by mod)." in result.stdout
     assert (tmp_path / "data" / "console" / "bot.db").exists()
     assert list((tmp_path / "data" / "console" / "logs").glob("activity-*.jsonl"))
