@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (236 tests in total before the content task). Copy the code exactly. If a step's
+  this order (246 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -1101,7 +1101,7 @@ git commit -m "Add the SQLite stats store"
 - sends through a token bucket (the class defaults to 1/s and a burst of 3; the bot configures 2/s);
 - gives up on any send after 10 s (TwitchIO's HTTP client otherwise waits up to 300 s).
 
-`flush_ready()` sends what the bucket allows right now, which makes it testable with `FakeClock`. `run()` is the background loop: it paces by tokens, wakes on new messages, stops promptly, and logs and survives unexpected errors. `drain()` flushes for at most 3 real seconds at shutdown and logs what it had to drop. A lock keeps `run()` and `drain()` from sending at the same time.
+`flush_ready()` sends what the bucket allows right now, which makes it testable with `FakeClock`. `run()` is the background loop: it paces by tokens, wakes on new messages, stops promptly, and logs and survives unexpected errors. `drain()` flushes for at most 3 real seconds at shutdown and logs what it had to drop. A lock keeps `run()` and `drain()` from sending at the same time. `close()` makes later enqueues log as dropped (replies from handlers that finish after shutdown), and `discard()` drops the queue with one log line.
 
 **Files:**
 - Create: `bot/connectors/__init__.py` (empty), `bot/connectors/base.py`, `bot/outbox.py`
@@ -1393,6 +1393,24 @@ async def test_run_paces_to_the_configured_rate(tmp_path):
     gaps = [b - a for a, b in pairwise(times)]
     assert len(times) == 4
     assert all(0.07 < g < 0.15 for g in gaps), gaps
+
+
+async def test_closed_outbox_drops_and_logs_late_messages(clock, log, tmp_path):
+    box = make(clock, log, Recorder())
+    box.close()
+    assert not box.enqueue("reply from a handler that finished late")
+    assert len(box) == 0
+    assert '"reason": "shutdown"' in (tmp_path / "logs" / "activity-2026-10-04.jsonl").read_text()
+
+
+async def test_discard_logs_count_and_clears(clock, log, tmp_path):
+    box = make(clock, log, Recorder())
+    box.enqueue("a")
+    box.enqueue("b")
+    assert box.discard("connector_failed") == 2
+    assert len(box) == 0
+    text = (tmp_path / "logs" / "activity-2026-10-04.jsonl").read_text()
+    assert '"reason": "connector_failed"' in text and '"count": 2' in text
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -1529,6 +1547,7 @@ class Outbox:
         self._last_refill = clock.mono()
         self._wake = asyncio.Event()
         self._flush_lock = asyncio.Lock()  # run() and drain() must never send concurrently
+        self._closed = False
 
     def __len__(self) -> int:
         return len(self._queue)
@@ -1544,8 +1563,11 @@ class Outbox:
         coalesce_key: str | None = None,
         priority: bool = False,
     ) -> bool:
-        """Queue a message. Returns False if it was dropped because the queue is full."""
+        """Queue a message. Returns False if it was dropped (queue full, or the bot is shutting down)."""
         msg = OutMessage(truncate(text), reply_to, coalesce_key, priority)
+        if self._closed:
+            self._log.write("send_dropped", reason="shutdown", text=msg.text[:100])
+            return False
         if coalesce_key is not None:
             for i, queued in enumerate(self._queue):
                 if queued.coalesce_key == coalesce_key:
@@ -1629,6 +1651,18 @@ class Outbox:
                 self._log.write("error", where="outbox.run", type=type(exc).__name__, message=str(exc))
                 await asyncio.sleep(1)
 
+    def close(self) -> None:
+        """Refuse new messages from now on (each one is logged as dropped)."""
+        self._closed = True
+
+    def discard(self, reason: str) -> int:
+        """Drop everything queued, logging how many. Returns the count."""
+        count = len(self._queue)
+        if count:
+            self._log.write("send_dropped", reason=reason, count=count)
+            self._queue.clear()
+        return count
+
     async def drain(self, timeout: float = 3.0) -> None:
         """Send what's left (still rate limited), giving up after `timeout` real seconds."""
         try:
@@ -1639,16 +1673,14 @@ class Outbox:
                         await asyncio.sleep(self._next_delay() or 0.01)
         except TimeoutError:
             pass
-        if self._queue:
-            self._log.write("send_dropped", reason="shutdown", count=len(self._queue))
-            self._queue.clear()
+        self.discard("shutdown")
 ```
 
 - [ ] **Step 6: Run the tests and confirm they pass**
 
 Run: `.venv/bin/pytest tests/test_outbox.py -q`
 
-Expected: PASS (22 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (24 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -4843,7 +4875,13 @@ The heart of the bot. `BotCore.on_message` applies spec §3's filter in order:
 - 3 for `AuthRequired`;
 - 1 for any other connector failure.
 
-Before returning, it lets the send loop finish its current message (no cancel mid-send), drains the outbox, closes the connector, and logs `shutdown`.
+Before returning, it does the following. Every step is guarded, so a cleanup error never turns a deliberate stop into a crash.
+
+1. Lets the send loop finish its current message (no cancel mid-send).
+2. Drains the outbox, or discards it after a connector failure.
+3. Closes the outbox.
+4. Closes the connector, bounded to 5 s.
+5. Logs `shutdown` (in `finally`).
 
 The paused flag is read from the database at startup, so it survives restarts. The full-flow tests are spec §14.2.
 
@@ -4860,13 +4898,14 @@ The paused flag is read from the database at startup, so it survives restarts. T
 import asyncio
 import json
 import random
+import sqlite3
 from itertools import count
 
 import pytest
 
 from bot.activity_log import ActivityLog
 from bot.config import ConfigError
-from bot.connectors.base import AuthRequired, ReadyInfo
+from bot.connectors.base import AuthRequired, ReadyInfo, SendResult
 from bot.connectors.console import ConsoleConnector, parse_console_line
 from bot.core import BotCore
 from bot.stats import StatsStore
@@ -5008,6 +5047,12 @@ async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
     assert bot.out[-1] in ("🪙 Heads", "🪙 Tails")
 
 
+async def test_non_mod_cannot_resume_a_paused_bot(bot: Bot):
+    await bot.say("@mod: ?bot off")
+    await bot.say("random: ?bot on")
+    assert bot.core.paused
+
+
 async def test_owner_can_control_without_mod_badge(bot: Bot):
     await bot.say("robert: ?bot off")
     assert bot.core.paused
@@ -5087,6 +5132,26 @@ async def test_help_overview_lists_real_commands_under_500_chars(bot: Bot):
     assert "?g <letter>" in bot.out[-1]
 
 
+async def test_database_error_recording_a_user_does_not_crash(bot: Bot, monkeypatch):
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(bot.core.stats, "touch_user", locked)
+    await bot.say("alice: ?coinflip")
+    assert any(e["event"] == "error" and e["where"] == "command:coinflip" for e in bot.events())
+
+
+async def test_tick_survives_a_failing_log_rollover(bot: Bot, monkeypatch):
+    def broken():
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(bot.log, "maybe_rollover", broken)
+    await bot.say("alice: ?scramble animals")
+    await bot.wait(45)  # the game still times out even though rollover fails every tick
+    assert bot.out[-1] == "⏰ Time's up! It was ALLIGATOR."
+    assert any(e["event"] == "error" and e["where"] == "log_rollover" for e in bot.events())
+
+
 async def test_command_logged_and_handler_error_does_not_crash(bot: Bot):
     async def broken(ctx):
         raise ValueError("bad handler")
@@ -5134,6 +5199,7 @@ class FailingConnector:
 
     async def send(self, text, reply_to=None):
         self.sent.append(text)
+        return SendResult(True)
 
     async def lookup_user(self, login):
         return None
@@ -5150,6 +5216,80 @@ async def test_run_maps_connector_failures_to_exit_codes(tmp_path, clock, assets
     bot = Bot(tmp_path, clock, assets, connector=FailingConnector(exc))
     assert await asyncio.wait_for(bot.core.run(), timeout=5) == code
     assert bot.events()[-1]["exit_code"] == code
+
+
+class BlockingConnector(FailingConnector):
+    """Runs until close(); records the order of sends and close."""
+
+    def __init__(self, close_error: Exception | None = None):
+        super().__init__(RuntimeError("unused"))
+        self.events: list[tuple[str, str]] = []
+        self.closed = asyncio.Event()
+        self.close_error = close_error
+
+    async def run(self, on_message, on_ready):
+        await on_ready(ReadyInfo("x", "x", True))
+        await self.closed.wait()
+
+    async def send(self, text, reply_to=None):
+        self.events.append(("send", text))
+        return SendResult(True)
+
+    async def close(self):
+        self.events.append(("close", ""))
+        self.closed.set()
+        if self.close_error:
+            raise self.close_error
+
+
+async def test_signal_shutdown_while_connected(tmp_path, clock, assets):
+    conn = BlockingConnector()
+    bot = Bot(tmp_path, clock, assets, connector=conn)
+    asyncio.get_running_loop().call_later(0.05, bot.core.request_shutdown, "signal")
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 0
+    assert bot.events()[-1]["by"] == "signal"
+    assert conn.events[-1] == ("close", "")
+
+
+async def test_shutdown_notice_is_sent_before_the_connector_closes(tmp_path, clock, assets):
+    conn = BlockingConnector()
+    bot = Bot(tmp_path, clock, assets, connector=conn)
+
+    async def mod_shuts_down():
+        await asyncio.sleep(0.05)
+        await bot.core.on_message(parse_console_line("@mod: ?bot shutdown", clock, bot.ids))
+
+    asyncio.get_running_loop().create_task(mod_shuts_down())
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 0
+    assert conn.events == [("send", "Shutting down (requested by mod)."), ("close", "")]
+
+
+async def test_error_while_closing_still_exits_cleanly(tmp_path, clock, assets):
+    conn = BlockingConnector(close_error=OSError("could not save tokens"))
+    http = FakeHttp()
+    closed = []
+
+    async def record_close():
+        closed.append(True)
+
+    http.close = record_close
+    bot = Bot(tmp_path, clock, assets, connector=conn, http=http)
+    asyncio.get_running_loop().call_later(0.05, bot.core.request_shutdown, "signal")
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 0
+    events = bot.events()
+    assert any(e["event"] == "error" and e["where"] == "shutdown:connector.close" for e in events)
+    assert events[-1]["event"] == "shutdown" and events[-1]["exit_code"] == 0
+    assert closed == [True]
+
+
+async def test_connector_failure_discards_instead_of_sending(tmp_path, clock, assets):
+    conn = FailingConnector(RuntimeError("socket died"))
+    bot = Bot(tmp_path, clock, assets, connector=conn)
+    bot.core.outbox._tokens = 0  # rate limit exhausted (the fake clock never refills it): message stays queued
+    bot.core.outbox.enqueue("queued before the crash")
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 1
+    assert conn.sent == []
+    assert any(e.get("reason") == "connector_failed" for e in bot.events())
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -5276,6 +5416,7 @@ import asyncio
 import logging
 import random
 import traceback
+from collections.abc import Awaitable, Callable
 
 from bot import __version__
 from bot.activity_log import ActivityLog
@@ -5425,9 +5566,9 @@ class BotCore:
             cmd.name, msg.user_id, self.config.user_cooldown, global_seconds
         ):
             return
-        self.stats.touch_user(msg.user_id, msg.login, msg.display_name, self.clock.now())
-        self.log.write("command", user_id=msg.user_id, login=msg.login, command=cmd.name, args=args[:100])
         try:
+            self.stats.touch_user(msg.user_id, msg.login, msg.display_name, self.clock.now())
+            self.log.write("command", user_id=msg.user_id, login=msg.login, command=cmd.name, args=args[:100])
             await cmd.handler(self._context(msg, name, args))
         except Exception as exc:
             logger.exception("command %s failed", cmd.name)
@@ -5442,12 +5583,12 @@ class BotCore:
     # background loops
 
     def tick(self) -> None:
-        try:
-            self.games.tick()
-        except Exception as exc:
-            logger.exception("tick failed")
-            self.log.write("error", where="tick", type=type(exc).__name__, message=str(exc))
-        self.log.maybe_rollover()
+        for where, step in (("tick", self.games.tick), ("log_rollover", self.log.maybe_rollover)):
+            try:
+                step()
+            except Exception as exc:  # one failing step must never stop the timer loop
+                logger.exception("%s failed", where)
+                self.log.write("error", where=where, type=type(exc).__name__, message=str(exc))
 
     async def _tick_loop(self) -> None:
         while not self._stop.is_set():
@@ -5460,6 +5601,14 @@ class BotCore:
             logger.warning(
                 "The bot is not a mod in %s: no Chat Bot badge, 1 msg/s, slow mode applies.", info.channel_login
             )
+
+    async def _cleanup_step(self, where: str, make: Callable[[], Awaitable[object]]) -> None:
+        """Run one shutdown step; log any error instead of letting it turn a clean stop into a crash."""
+        try:
+            await make()
+        except Exception as exc:
+            logger.exception("shutdown step %s failed", where)
+            self.log.write("error", where=f"shutdown:{where}", type=type(exc).__name__, message=str(exc))
 
     async def run(self) -> int:
         """Run until shutdown or a fatal connector error. Returns the process exit code."""
@@ -5488,24 +5637,29 @@ class BotCore:
             )
             self.request_shutdown(by="crash", exit_code=EXIT_CRASH)
         finally:
+            if self.shutdown_by is None:  # run() itself was cancelled
+                self.request_shutdown(by="cancelled")
             self._stop.set()
             for task in (tick_task, stop_task):
                 task.cancel()
             await asyncio.gather(tick_task, stop_task, return_exceptions=True)
-            # Let the send loop finish its current message instead of cancelling it mid-send.
-            try:
-                await asyncio.wait_for(outbox_task, 1.0)
-            except (TimeoutError, asyncio.CancelledError):
-                pass
-            except Exception:
-                logger.exception("outbox loop failed")
-            await self.outbox.drain(3.0)
-            await self.connector.close()
+            # Let the send loop finish its current message (each send is bounded by the outbox's
+            # send timeout) instead of cancelling it mid-send.
+            done, _ = await asyncio.wait({outbox_task}, timeout=self.outbox.send_timeout)
+            if not done:
+                outbox_task.cancel()
+            await asyncio.gather(outbox_task, return_exceptions=True)
+            if self.exit_code == EXIT_OK:
+                await self._cleanup_step("drain", lambda: self.outbox.drain(3.0))
+            else:
+                self.outbox.discard("connector_failed")  # nothing can be delivered now
+            self.outbox.close()  # replies from handlers still finishing are logged as dropped
+            await self._cleanup_step("connector.close", lambda: asyncio.wait_for(self.connector.close(), 5.0))
             if not connector_task.done():
                 connector_task.cancel()
             await asyncio.gather(connector_task, return_exceptions=True)
-            await self.http.close()
-        self.log.write("shutdown", by=self.shutdown_by or "signal", exit_code=self.exit_code)
+            await self._cleanup_step("http.close", self.http.close)
+            self.log.write("shutdown", by=self.shutdown_by, exit_code=self.exit_code)
         return self.exit_code
 ```
 
@@ -5513,7 +5667,7 @@ class BotCore:
 
 Run: `.venv/bin/pytest tests/test_flows.py -q`
 
-Expected: PASS (23 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (30 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -5534,6 +5688,7 @@ This follows the TwitchIO 3.3.2 source, which was read while writing the plan.
 - **Connection events:** the first `websocket_welcome` logs `connected` and later ones log `reconnected`. `websocket_closed` logs `disconnected`.
 - **Replies:** when a message is a Twitch reply that starts with "@<parent> ", that mention is stripped, so answering by replying to the bot works ("@bot alligator" reads "alligator").
 - **Revocation:** a revoked subscription is fatal (`AuthRequired`).
+- **Unexpected end:** if the connection ends without `close()` being called, `run()` raises, so systemd restarts the bot.
 - **Token file safety:** tokens are saved on close only if they loaded. A startup failure would otherwise overwrite the token file with nothing and force a needless re-login.
 - **`authorize()`:** runs TwitchIO's built-in web adapter on `localhost:4343`. Its default callback is `http://localhost:4343/oauth/callback`, which must match the app registration.
 
@@ -5614,6 +5769,34 @@ def test_auth_url_requests_all_bot_scopes():
     assert AUTH_URL == (
         "http://localhost:4343/oauth?scopes=user:read:chat%20user:write:chat%20user:bot%20user:read:moderated_channels"
     )
+
+
+async def test_unexpected_end_of_connection_is_an_error(tmp_path, clock: FakeClock, monkeypatch):
+    import bot.connectors.twitch as twitch
+    from bot.activity_log import ActivityLog
+    from tests.helpers import make_config
+
+    class EndsAtOnce:
+        def __init__(self, connector):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def start(self, with_adapter=False):
+            return None  # returned without anyone calling close()
+
+    monkeypatch.setattr(twitch, "_Client", EndsAtOnce)
+    connector = twitch.TwitchConnector(make_config(tmp_path), ActivityLog(tmp_path, clock), clock)
+
+    async def noop(*args):
+        pass
+
+    with pytest.raises(RuntimeError, match="ended unexpectedly"):
+        await connector.run(noop, noop)
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -5739,6 +5922,7 @@ class TwitchConnector:
         self._on_message: OnMessage | None = None
         self._on_ready: OnReady | None = None
         self._fatal: BaseException | None = None
+        self._closing = False
         self._welcomes = 0
 
     async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
@@ -5748,6 +5932,8 @@ class TwitchConnector:
             await self._client.start(with_adapter=False)
         if self._fatal is not None:
             raise self._fatal
+        if not self._closing:  # nobody asked to stop: treat it as a crash so systemd restarts us
+            raise RuntimeError("Twitch connection ended unexpectedly")
 
     async def _setup(self, client: _Client) -> None:
         users = await client.fetch_users(logins=[self.config.channel])
@@ -5807,6 +5993,7 @@ class TwitchConnector:
         return UserRef(str(user.id), user.name or login, user.display_name or user.name or login)
 
     async def close(self) -> None:
+        self._closing = True
         if self._client is not None:
             await self._client.close()
 
@@ -5839,7 +6026,7 @@ async def authorize(config: Config) -> UserRef:
 
 Run: `.venv/bin/pytest tests/test_twitch_mapping.py -q`
 
-Expected: PASS (6 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (7 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Smoke-test the login page wiring (no real credentials needed)**
 
@@ -5875,7 +6062,7 @@ git commit -m "Add the Twitch connector and login flow"
 `python -m bot` runs on Twitch, `python -m bot auth` does the one-time login, and `python -m bot console` plays in the terminal using `data/console/`.
 
 - `.env` is read from next to the config file. Real environment variables win.
-- SIGINT and SIGTERM call `request_shutdown("signal")`, which stops cleanly with exit 0 (spec §13).
+- SIGINT and SIGTERM call `request_shutdown("signal")`, which stops cleanly with exit 0 (spec §13). A second signal during a stuck shutdown exits immediately.
 - A logging filter hides TwitchIO's irrelevant "install starlette" hint.
 - A database written by a newer version of the bot exits with code 2, so systemd doesn't restart-loop.
 - **Certificates:** the python.org macOS installers ship without root certificates, so every HTTPS call (Twitch, the fact APIs) fails until "Install Certificates.command" is run. That was found on Robert's laptop during review. `bot/certs.py` is imported first, before aiohttp builds its SSL contexts. When Python's default CA file is missing, it points `SSL_CERT_FILE` at the `certifi` bundle (a new dependency).
@@ -6111,7 +6298,7 @@ from bot.activity_log import ActivityLog
 from bot.assets import Assets
 from bot.clock import Clock
 from bot.config import Config, ConfigError, load_config
-from bot.core import EXIT_CONFIG, BotCore
+from bot.core import EXIT_CONFIG, EXIT_OK, BotCore
 from bot.http import HttpClient
 from bot.stats import StatsStore
 
@@ -6152,9 +6339,15 @@ async def _serve(config: Config, *, console: bool) -> int:
         http=HttpClient(),
         rng=random.Random(),
     )
+    def on_signal() -> None:
+        if core.shutdown_by is None:
+            core.request_shutdown("signal")
+        else:  # a second Ctrl+C / SIGTERM while shutdown is stuck: leave now
+            os._exit(EXIT_OK)
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, core.request_shutdown, "signal")
+        loop.add_signal_handler(sig, on_signal)
     try:
         return await core.run()
     finally:
@@ -6413,7 +6606,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 251 tests pass.
+Expected: `15 passed`, then all 261 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -6589,7 +6782,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (251).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (261).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
