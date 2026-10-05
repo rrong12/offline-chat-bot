@@ -156,3 +156,10 @@ wolf
 wombat
 yak
 zebra
+baboon
+chipmunk
+flamingo
+giraffe
+iguana
+raccoon
+scorpion

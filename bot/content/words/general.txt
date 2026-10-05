@@ -170,3 +170,5 @@ waterfall
 whistle
 window
 wizard
+computer
+lightning

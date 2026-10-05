@@ -150,3 +150,8 @@ watermelon
 wendy's
 wingstop
 yogurt
+chips
+coconut
+jalapeno
+lasagna
+popcorn

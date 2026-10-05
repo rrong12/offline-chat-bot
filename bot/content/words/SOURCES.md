@@ -72,7 +72,6 @@ Every entry was checked against the linked page on 2026-10-04. Robert reviews th
 | coscu | https://en.wikipedia.org/wiki/Coscu |
 | spreen | https://en.wikipedia.org/wiki/Spreen |
 | illojuan | https://en.wikipedia.org/wiki/IlloJuan |
-| sneaky | https://en.wikipedia.org/wiki/Sneaky_(gamer) |
 | thebausffs | https://en.wikipedia.org/wiki/Thebausffs |
 | captainsparklez | https://en.wikipedia.org/wiki/CaptainSparklez |
 | ali-a | https://en.wikipedia.org/wiki/Ali-A |

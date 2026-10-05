@@ -186,3 +186,5 @@ vietnam
 yemen
 zambia
 zimbabwe
+albania
+monaco

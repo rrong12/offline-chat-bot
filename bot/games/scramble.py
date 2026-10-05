@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import math
 import random
 from datetime import datetime
@@ -10,6 +11,16 @@ from bot.assets import Assets
 from bot.connectors.base import ChatMessage
 from bot.games.base import Game, Outcome
 from bot.text import normalize
+
+MAX_SHUFFLES = 200
+
+
+def _blocked_fragments(assets: Assets) -> tuple[str, ...]:
+    """Words a scramble must never spell by accident (stored ROT13 in content/blocked_rot13.txt)."""
+    try:
+        return tuple(codecs.decode(line, "rot13").upper() for line in assets.lines("blocked_rot13"))
+    except FileNotFoundError:
+        return ()
 
 
 def _valid(entry: str) -> bool:
@@ -36,20 +47,34 @@ class Scramble(Game):
     def __init__(self, category: str | None, rng: random.Random, assets: Assets) -> None:
         super().__init__(category, rng, assets)
         assert category is not None
-        self.word = rng.choice([w for w in assets.words(category) if _valid(w)]).upper()
-        self.scrambled = self._scramble()
+        blocked = _blocked_fragments(assets)
+        candidates = [w.upper() for w in assets.words(category) if _valid(w)]
+        rng.shuffle(candidates)
+        for word in candidates:  # almost always the first word works
+            scrambled = self._scramble(word, blocked)
+            if scrambled is not None:
+                self.word, self.scrambled = word, scrambled
+                break
+        else:
+            raise ValueError(f"no word in {category!r} can be scrambled cleanly")
+        # Any word from this category that uses exactly the same letters is also a right answer
+        # (e.g. UNDERTALE and DELTARUNE), since the scramble fits both.
+        letters = sorted(self.word)
+        self._answers = {w.lower() for w in candidates if sorted(w) == letters}
         self.hints_shown = 0
         middle = list(range(1, len(self.word) - 1))
         rng.shuffle(middle)
         self._reveal_order = middle
 
-    def _scramble(self) -> str:
-        letters = list(self.word)
-        for _ in range(50):
+    def _scramble(self, word: str, blocked: tuple[str, ...]) -> str | None:
+        """A shuffle that differs from the word and spells none of the blocked fragments, or None."""
+        letters = list(word)
+        for _ in range(MAX_SHUFFLES):
             self.rng.shuffle(letters)
-            if "".join(letters) != self.word:
-                break
-        return "".join(letters)
+            candidate = "".join(letters)
+            if candidate != word and not any(fragment in candidate for fragment in blocked):
+                return candidate
+        return None
 
     def start(self) -> str:
         return f"🔤 Unscramble ({self.category}): {self.scrambled} · {self.time_limit}s · {{p}}hint for a hint"
@@ -65,11 +90,11 @@ class Scramble(Game):
         guess = normalize(msg.text)
         if " " in guess or len(guess) != len(self.word):
             return None
-        if guess != self.word.lower():
+        if guess not in self._answers:
             return Outcome()
         points = self.POINTS[self.hints_shown]
         return Outcome(
-            messages=[f"✅ {msg.display_name} got it: {self.word} (+{points})"],
+            messages=[f"✅ {msg.display_name} got it: {guess.upper()} (+{points})"],
             awards={msg.user_id: points},
             winners={msg.user_id},
             finished=True,

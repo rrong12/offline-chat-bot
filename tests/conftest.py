@@ -19,6 +19,7 @@ def content_dir(tmp_path: Path) -> Path:
     (root / "words" / "animals.txt").write_text("# comment\nalligator\ncat\nsea lion\n", encoding="utf-8")
     (root / "words" / "food.txt").write_text("ramen\nhot cheetos\n", encoding="utf-8")
     (root / "8ball.txt").write_text("Yes.\nNo.\n", encoding="utf-8")
+    (root / "blocked_rot13.txt").write_text("# test fragment: 'gat'\ntng\n", encoding="utf-8")
     (root / "fortunes.txt").write_text("Good things are coming.\n", encoding="utf-8")
     for name in ("catfacts", "dogfacts", "facts", "dadjokes"):
         (root / f"fallback_{name}.txt").write_text(f"fallback {name} line\n", encoding="utf-8")

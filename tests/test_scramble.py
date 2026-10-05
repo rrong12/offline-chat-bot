@@ -22,6 +22,41 @@ def test_words_that_cannot_be_scrambled_are_skipped():
     assert _valid("abba")
 
 
+def test_an_anagram_from_the_same_category_also_wins(tmp_path):
+    import random as random_module
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    (root / "words").mkdir(parents=True)
+    (root / "words" / "general.txt").write_text("canoe\nocean\n", encoding="utf-8")
+    game = Scramble("general", random_module.Random(1), Assets(root))
+    other = "ocean" if game.word == "CANOE" else "canoe"
+    out = game.on_message(make_msg(other), None)
+    assert out.finished and out.messages == [f"✅ alice got it: {other.upper()} (+10)"]
+
+
+def test_scrambles_never_spell_a_blocked_fragment(assets):
+    # the test content blocks "GAT"; unfiltered, some shuffles of ALLIGATOR would contain it
+    scrambles = {make(assets, seed=seed).scrambled for seed in range(300)}
+    assert scrambles and not any("GAT" in s for s in scrambles)
+
+
+def test_word_that_cannot_be_scrambled_cleanly_is_skipped(tmp_path, monkeypatch):
+    import random as random_module
+
+    from bot.assets import Assets
+    from bot.games import scramble as scramble_module
+
+    root = tmp_path / "content"
+    (root / "words").mkdir(parents=True)
+    (root / "words" / "only.txt").write_text("abcd\nwxyz\n", encoding="utf-8")
+    (root / "blocked_rot13.txt").write_text("n\n", encoding="utf-8")  # blocks every scramble containing "A"
+    monkeypatch.setattr(scramble_module, "MAX_SHUFFLES", 50)
+    for seed in range(20):
+        assert scramble_module.Scramble("only", random_module.Random(seed), Assets(root)).word == "WXYZ"
+
+
 def test_start_message_shows_scramble_that_differs(assets):
     game = make(assets)
     assert game.scrambled != game.word

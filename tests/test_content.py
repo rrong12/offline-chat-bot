@@ -36,6 +36,14 @@ def test_every_game_and_streamer_has_a_recorded_source(category):
     assert not missing, f"{category}: no source row in words/SOURCES.md for {missing}"
 
 
+def test_blocked_fragment_list_exists():
+    import codecs
+
+    fragments = [codecs.decode(line, "rot13") for line in REAL.lines("blocked_rot13")]
+    assert len(fragments) >= 20
+    assert all(f.isalpha() and f == f.lower() for f in fragments)
+
+
 def test_8ball_has_20_answers():
     assert len(REAL.lines("8ball")) == 20
 
