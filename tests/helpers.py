@@ -27,3 +27,16 @@ def make_msg(
         source_channel_id=source_channel_id,
         received_at=at or datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc),
     )
+
+
+class FakeHttp:
+    def __init__(self, responses: dict[str, object] | None = None):
+        self.responses = responses or {}
+        self.calls: list[tuple[str, dict | None]] = []
+
+    async def get_json(self, url, headers=None):
+        self.calls.append((url, headers))
+        return self.responses.get(url)
+
+    async def close(self):
+        pass
