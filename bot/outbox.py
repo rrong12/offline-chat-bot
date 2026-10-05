@@ -49,6 +49,7 @@ class Outbox:
         self._last_refill = clock.mono()
         self._wake = asyncio.Event()
         self._flush_lock = asyncio.Lock()  # run() and drain() must never send concurrently
+        self._closed = False
 
     def __len__(self) -> int:
         return len(self._queue)
@@ -64,8 +65,11 @@ class Outbox:
         coalesce_key: str | None = None,
         priority: bool = False,
     ) -> bool:
-        """Queue a message. Returns False if it was dropped because the queue is full."""
+        """Queue a message. Returns False if it was dropped (queue full, or the bot is shutting down)."""
         msg = OutMessage(truncate(text), reply_to, coalesce_key, priority)
+        if self._closed:
+            self._log.write("send_dropped", reason="shutdown", text=msg.text[:100])
+            return False
         if coalesce_key is not None:
             for i, queued in enumerate(self._queue):
                 if queued.coalesce_key == coalesce_key:
@@ -149,6 +153,18 @@ class Outbox:
                 self._log.write("error", where="outbox.run", type=type(exc).__name__, message=str(exc))
                 await asyncio.sleep(1)
 
+    def close(self) -> None:
+        """Refuse new messages from now on (each one is logged as dropped)."""
+        self._closed = True
+
+    def discard(self, reason: str) -> int:
+        """Drop everything queued, logging how many. Returns the count."""
+        count = len(self._queue)
+        if count:
+            self._log.write("send_dropped", reason=reason, count=count)
+            self._queue.clear()
+        return count
+
     async def drain(self, timeout: float = 3.0) -> None:
         """Send what's left (still rate limited), giving up after `timeout` real seconds."""
         try:
@@ -159,6 +175,4 @@ class Outbox:
                         await asyncio.sleep(self._next_delay() or 0.01)
         except TimeoutError:
             pass
-        if self._queue:
-            self._log.write("send_dropped", reason="shutdown", count=len(self._queue))
-            self._queue.clear()
+        self.discard("shutdown")

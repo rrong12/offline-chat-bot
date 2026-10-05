@@ -3,13 +3,14 @@
 import asyncio
 import json
 import random
+import sqlite3
 from itertools import count
 
 import pytest
 
 from bot.activity_log import ActivityLog
 from bot.config import ConfigError
-from bot.connectors.base import AuthRequired, ReadyInfo
+from bot.connectors.base import AuthRequired, ReadyInfo, SendResult
 from bot.connectors.console import ConsoleConnector, parse_console_line
 from bot.core import BotCore
 from bot.stats import StatsStore
@@ -151,6 +152,12 @@ async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
     assert bot.out[-1] in ("🪙 Heads", "🪙 Tails")
 
 
+async def test_non_mod_cannot_resume_a_paused_bot(bot: Bot):
+    await bot.say("@mod: ?bot off")
+    await bot.say("random: ?bot on")
+    assert bot.core.paused
+
+
 async def test_owner_can_control_without_mod_badge(bot: Bot):
     await bot.say("robert: ?bot off")
     assert bot.core.paused
@@ -230,6 +237,26 @@ async def test_help_overview_lists_real_commands_under_500_chars(bot: Bot):
     assert "?g <letter>" in bot.out[-1]
 
 
+async def test_database_error_recording_a_user_does_not_crash(bot: Bot, monkeypatch):
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(bot.core.stats, "touch_user", locked)
+    await bot.say("alice: ?coinflip")
+    assert any(e["event"] == "error" and e["where"] == "command:coinflip" for e in bot.events())
+
+
+async def test_tick_survives_a_failing_log_rollover(bot: Bot, monkeypatch):
+    def broken():
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(bot.log, "maybe_rollover", broken)
+    await bot.say("alice: ?scramble animals")
+    await bot.wait(45)  # the game still times out even though rollover fails every tick
+    assert bot.out[-1] == "⏰ Time's up! It was ALLIGATOR."
+    assert any(e["event"] == "error" and e["where"] == "log_rollover" for e in bot.events())
+
+
 async def test_command_logged_and_handler_error_does_not_crash(bot: Bot):
     async def broken(ctx):
         raise ValueError("bad handler")
@@ -277,6 +304,7 @@ class FailingConnector:
 
     async def send(self, text, reply_to=None):
         self.sent.append(text)
+        return SendResult(True)
 
     async def lookup_user(self, login):
         return None
@@ -293,3 +321,77 @@ async def test_run_maps_connector_failures_to_exit_codes(tmp_path, clock, assets
     bot = Bot(tmp_path, clock, assets, connector=FailingConnector(exc))
     assert await asyncio.wait_for(bot.core.run(), timeout=5) == code
     assert bot.events()[-1]["exit_code"] == code
+
+
+class BlockingConnector(FailingConnector):
+    """Runs until close(); records the order of sends and close."""
+
+    def __init__(self, close_error: Exception | None = None):
+        super().__init__(RuntimeError("unused"))
+        self.events: list[tuple[str, str]] = []
+        self.closed = asyncio.Event()
+        self.close_error = close_error
+
+    async def run(self, on_message, on_ready):
+        await on_ready(ReadyInfo("x", "x", True))
+        await self.closed.wait()
+
+    async def send(self, text, reply_to=None):
+        self.events.append(("send", text))
+        return SendResult(True)
+
+    async def close(self):
+        self.events.append(("close", ""))
+        self.closed.set()
+        if self.close_error:
+            raise self.close_error
+
+
+async def test_signal_shutdown_while_connected(tmp_path, clock, assets):
+    conn = BlockingConnector()
+    bot = Bot(tmp_path, clock, assets, connector=conn)
+    asyncio.get_running_loop().call_later(0.05, bot.core.request_shutdown, "signal")
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 0
+    assert bot.events()[-1]["by"] == "signal"
+    assert conn.events[-1] == ("close", "")
+
+
+async def test_shutdown_notice_is_sent_before_the_connector_closes(tmp_path, clock, assets):
+    conn = BlockingConnector()
+    bot = Bot(tmp_path, clock, assets, connector=conn)
+
+    async def mod_shuts_down():
+        await asyncio.sleep(0.05)
+        await bot.core.on_message(parse_console_line("@mod: ?bot shutdown", clock, bot.ids))
+
+    asyncio.get_running_loop().create_task(mod_shuts_down())
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 0
+    assert conn.events == [("send", "Shutting down (requested by mod)."), ("close", "")]
+
+
+async def test_error_while_closing_still_exits_cleanly(tmp_path, clock, assets):
+    conn = BlockingConnector(close_error=OSError("could not save tokens"))
+    http = FakeHttp()
+    closed = []
+
+    async def record_close():
+        closed.append(True)
+
+    http.close = record_close
+    bot = Bot(tmp_path, clock, assets, connector=conn, http=http)
+    asyncio.get_running_loop().call_later(0.05, bot.core.request_shutdown, "signal")
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 0
+    events = bot.events()
+    assert any(e["event"] == "error" and e["where"] == "shutdown:connector.close" for e in events)
+    assert events[-1]["event"] == "shutdown" and events[-1]["exit_code"] == 0
+    assert closed == [True]
+
+
+async def test_connector_failure_discards_instead_of_sending(tmp_path, clock, assets):
+    conn = FailingConnector(RuntimeError("socket died"))
+    bot = Bot(tmp_path, clock, assets, connector=conn)
+    bot.core.outbox._tokens = 0  # rate limit exhausted (the fake clock never refills it): message stays queued
+    bot.core.outbox.enqueue("queued before the crash")
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 1
+    assert conn.sent == []
+    assert any(e.get("reason") == "connector_failed" for e in bot.events())

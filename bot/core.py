@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 import traceback
+from collections.abc import Awaitable, Callable
 
 from bot import __version__
 from bot.activity_log import ActivityLog
@@ -155,9 +156,9 @@ class BotCore:
             cmd.name, msg.user_id, self.config.user_cooldown, global_seconds
         ):
             return
-        self.stats.touch_user(msg.user_id, msg.login, msg.display_name, self.clock.now())
-        self.log.write("command", user_id=msg.user_id, login=msg.login, command=cmd.name, args=args[:100])
         try:
+            self.stats.touch_user(msg.user_id, msg.login, msg.display_name, self.clock.now())
+            self.log.write("command", user_id=msg.user_id, login=msg.login, command=cmd.name, args=args[:100])
             await cmd.handler(self._context(msg, name, args))
         except Exception as exc:
             logger.exception("command %s failed", cmd.name)
@@ -172,12 +173,12 @@ class BotCore:
     # background loops
 
     def tick(self) -> None:
-        try:
-            self.games.tick()
-        except Exception as exc:
-            logger.exception("tick failed")
-            self.log.write("error", where="tick", type=type(exc).__name__, message=str(exc))
-        self.log.maybe_rollover()
+        for where, step in (("tick", self.games.tick), ("log_rollover", self.log.maybe_rollover)):
+            try:
+                step()
+            except Exception as exc:  # one failing step must never stop the timer loop
+                logger.exception("%s failed", where)
+                self.log.write("error", where=where, type=type(exc).__name__, message=str(exc))
 
     async def _tick_loop(self) -> None:
         while not self._stop.is_set():
@@ -190,6 +191,14 @@ class BotCore:
             logger.warning(
                 "The bot is not a mod in %s: no Chat Bot badge, 1 msg/s, slow mode applies.", info.channel_login
             )
+
+    async def _cleanup_step(self, where: str, make: Callable[[], Awaitable[object]]) -> None:
+        """Run one shutdown step; log any error instead of letting it turn a clean stop into a crash."""
+        try:
+            await make()
+        except Exception as exc:
+            logger.exception("shutdown step %s failed", where)
+            self.log.write("error", where=f"shutdown:{where}", type=type(exc).__name__, message=str(exc))
 
     async def run(self) -> int:
         """Run until shutdown or a fatal connector error. Returns the process exit code."""
@@ -218,22 +227,27 @@ class BotCore:
             )
             self.request_shutdown(by="crash", exit_code=EXIT_CRASH)
         finally:
+            if self.shutdown_by is None:  # run() itself was cancelled
+                self.request_shutdown(by="cancelled")
             self._stop.set()
             for task in (tick_task, stop_task):
                 task.cancel()
             await asyncio.gather(tick_task, stop_task, return_exceptions=True)
-            # Let the send loop finish its current message instead of cancelling it mid-send.
-            try:
-                await asyncio.wait_for(outbox_task, 1.0)
-            except (TimeoutError, asyncio.CancelledError):
-                pass
-            except Exception:
-                logger.exception("outbox loop failed")
-            await self.outbox.drain(3.0)
-            await self.connector.close()
+            # Let the send loop finish its current message (each send is bounded by the outbox's
+            # send timeout) instead of cancelling it mid-send.
+            done, _ = await asyncio.wait({outbox_task}, timeout=self.outbox.send_timeout)
+            if not done:
+                outbox_task.cancel()
+            await asyncio.gather(outbox_task, return_exceptions=True)
+            if self.exit_code == EXIT_OK:
+                await self._cleanup_step("drain", lambda: self.outbox.drain(3.0))
+            else:
+                self.outbox.discard("connector_failed")  # nothing can be delivered now
+            self.outbox.close()  # replies from handlers still finishing are logged as dropped
+            await self._cleanup_step("connector.close", lambda: asyncio.wait_for(self.connector.close(), 5.0))
             if not connector_task.done():
                 connector_task.cancel()
             await asyncio.gather(connector_task, return_exceptions=True)
-            await self.http.close()
-        self.log.write("shutdown", by=self.shutdown_by or "signal", exit_code=self.exit_code)
+            await self._cleanup_step("http.close", self.http.close)
+            self.log.write("shutdown", by=self.shutdown_by, exit_code=self.exit_code)
         return self.exit_code

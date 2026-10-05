@@ -281,3 +281,21 @@ async def test_run_paces_to_the_configured_rate(tmp_path):
     gaps = [b - a for a, b in pairwise(times)]
     assert len(times) == 4
     assert all(0.07 < g < 0.15 for g in gaps), gaps
+
+
+async def test_closed_outbox_drops_and_logs_late_messages(clock, log, tmp_path):
+    box = make(clock, log, Recorder())
+    box.close()
+    assert not box.enqueue("reply from a handler that finished late")
+    assert len(box) == 0
+    assert '"reason": "shutdown"' in (tmp_path / "logs" / "activity-2026-10-04.jsonl").read_text()
+
+
+async def test_discard_logs_count_and_clears(clock, log, tmp_path):
+    box = make(clock, log, Recorder())
+    box.enqueue("a")
+    box.enqueue("b")
+    assert box.discard("connector_failed") == 2
+    assert len(box) == 0
+    text = (tmp_path / "logs" / "activity-2026-10-04.jsonl").read_text()
+    assert '"reason": "connector_failed"' in text and '"count": 2' in text
