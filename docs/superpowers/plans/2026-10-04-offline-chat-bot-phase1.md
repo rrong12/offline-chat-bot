@@ -935,6 +935,7 @@ class StatsStore:
         self._conn.execute("PRAGMA foreign_keys = ON")
         if str(path) != ":memory:":
             self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA synchronous = NORMAL")  # safe with WAL; every command commits
         self._migrate()
 
     def _migrate(self) -> None:
@@ -1479,7 +1480,7 @@ class ReadyInfo:
 
 
 OnMessage = Callable[[ChatMessage], Awaitable[None]]
-OnReady = Callable[[ReadyInfo], Awaitable[None]]
+OnReady = Callable[[ReadyInfo], Awaitable[None]]  # once connected, and again if mod status is lost
 
 
 class Connector(Protocol):
@@ -1902,7 +1903,7 @@ git commit -m "Add cooldowns, permissions, and test helpers"
 
 ### Task 7: Command parsing, registry, and help text
 
-`parse_command` strips invisible characters first, so a Chatterino duplicate like `?scramble\U000E0000` still parses, and splits on any whitespace. `add()` rejects duplicate names or aliases, names that aren't lowercase (lookup lowercases, so they'd be unreachable), and unknown groups (they'd silently vanish from `?help`). `usage` and `description` use `{p}` for the prefix, so changing the prefix in `config.toml` updates all help text. `cooldown` turns the per-user cooldown on; `global_cooldown` adds the chat-wide one, which game start commands turn off so anyone can start their own game. `help_overview()` lists the `listed` commands grouped Games, Stats, Fun; control commands and `?help` itself are unlisted.
+`parse_command` strips invisible characters first, so a Chatterino duplicate like `?scramble\U000E0000` still parses, and splits on any whitespace. `add()` rejects duplicate names or aliases, names that aren't lowercase (lookup lowercases, so they'd be unreachable), and unknown groups (they'd silently vanish from `?help`). `usage` and `description` use `{p}` for the prefix, so changing the prefix in `config.toml` updates all help text. `cooldown` turns the per-user cooldown on; `global_cooldown` adds the chat-wide one, which game start commands and personal lookups (`?cookie`, `?gamestats`, `?help`) turn off, so one person's use never blocks another's. `help_overview()` lists the `listed` commands grouped Games, Stats, Fun; control commands and `?help` itself are unlisted.
 
 **Files:**
 - Create: `bot/commands.py`
@@ -2060,7 +2061,7 @@ class Command:
     aliases: tuple[str, ...] = ()
     controller_only: bool = False
     cooldown: bool = True  # per-user cooldown applies
-    global_cooldown: bool = True  # chat-wide cooldown also applies (off for personal game starts)
+    global_cooldown: bool = True  # chat-wide cooldown also applies (off for personal commands like ?cookie)
     listed: bool = True  # shown in the ?help overview
 
 
@@ -2344,7 +2345,7 @@ class Game(ABC):
 - [ ] **Step 5: Write `bot/games/scramble.py`**
 
 ```python
-"""Scramble: unscramble a word. First exact answer wins; hints lower the points."""
+"""Scramble, a personal game: unscramble your word; hints lower the points."""
 
 from __future__ import annotations
 
@@ -2487,6 +2488,7 @@ Spec §7: a personal game with `?g` guessing (Robert's choice; plain chat is ign
 - **Solving:** a wrong solve costs no lives and gets "❌ Not it.". The solve check ignores spaces and punctuation.
 - **Win:** solving it, or revealing the last letter, gives 10 plus the held letter points.
 - **Loss:** after 6 wrong letters or a timeout, nobody gets points.
+- **Board:** wrong letters are listed alphabetically, so guess order can't make the bot spell a word.
 
 The start message contains a literal `{p}`; the manager substitutes the prefix.
 
@@ -2546,6 +2548,13 @@ def test_wrong_letter_costs_a_life(assets):
     game = make(assets)
     out = g(game, "z")
     assert out.messages == ["_ _ _ / _ _ _ _ | wrong: Z (1/6)"]
+
+
+def test_wrong_letters_are_shown_sorted_so_guess_order_cannot_spell_words(assets):
+    game = make(assets, "sea lion")
+    for i, letter in enumerate("zxb"):
+        out = g(game, letter, at=2 * i)
+    assert out.messages == ["_ _ _ / _ _ _ _ | wrong: B X Z (3/6)"]
 
 
 def test_repeated_letter_is_ignored(assets):
@@ -2640,7 +2649,7 @@ Expected: FAIL. `ModuleNotFoundError: No module named 'bot.games.hangman'`
 - [ ] **Step 3: Write `bot/games/hangman.py`**
 
 ```python
-"""Hangman: chat guesses with ?g <letter> or ?g <answer>. Plain chat never counts."""
+"""Hangman, a personal game: guess with ?g <letter> or ?g <answer>. Plain chat never counts."""
 
 from __future__ import annotations
 
@@ -2676,7 +2685,7 @@ class Hangman(Game):
     usage = "{p}hangman [category]"
     description = (
         "Your own hidden word: guess with {p}g <letter> or {p}g <answer>. 6 wrong letters and you lose. "
-        "1 point per correct letter, plus 10 for solving it. {p}hangman categories lists topics. "
+        "Win to score 10 points plus 1 per correct letter. {p}hangman categories lists topics. "
         "{p}skip ends your game."
     )
     time_limit = 120
@@ -2710,7 +2719,7 @@ class Hangman(Game):
         return " ".join(cells)
 
     def status(self) -> str:
-        wrong = " ".join(self.wrong) or "-"
+        wrong = " ".join(sorted(self.wrong)) or "-"  # sorted, so guess order can't spell a word
         return f"{self.board()} | wrong: {wrong} ({len(self.wrong)}/{self.LIVES})"
 
     def _hidden(self) -> set[str]:
@@ -2776,7 +2785,7 @@ class Hangman(Game):
 
 Run: `.venv/bin/pytest tests/test_hangman.py -q`
 
-Expected: PASS (17 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (18 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -2789,7 +2798,7 @@ git commit -m "Add Hangman with ?g guessing"
 
 `ALL_GAMES` maps names to classes; `config.toml` picks which run. `GameManager` runs **personal** games (spec §6, revised): each player has at most one game, keyed by user ID, and many players can play at once.
 
-- **Registration:** one start command per game (no command cooldowns: the per-player game cooldown is the only limit, and "can't start" and category-list replies are rate-limited to one per 5 s per player), `?skip`, and each game's in-game commands (`?hint`, `?g`) as hidden, cooldown-free commands that reach only the sender's own game.
+- **Registration:** one start command per game (no command cooldowns: the per-player game cooldown is the only limit, and "can't start" and category-list replies are rate-limited to one per 5 s per player and game), `?skip`, and each game's in-game commands (`?hint`, `?g`) as hidden, cooldown-free commands that reach only the sender's own game.
 - **Starting:** `?<game> categories`, one game per player, the per-player cooldown (10 s after a game ends), the running limit (25), the busy brake (an `is_busy()` callback the core wires to the outbox backlog), unknown categories, and the random category pick.
 - **Routing:** a player's plain chat goes only to their own game.
 - **Replies:** threaded under the player's latest message, with coalesce keys unique per round (`hangman-board:<round key>`). The player's current names refresh on every message.
@@ -3012,10 +3021,11 @@ async def test_refusal_replies_are_rate_limited_per_player(h: Harness):
     assert len(h.replies) == 2
 
 
-async def test_category_list_is_rate_limited_too(h: Harness):
+async def test_category_list_is_rate_limited_per_game(h: Harness):
+    await h.command("?scramble categories")
     await h.command("?scramble categories")
     await h.command("?hangman categories")
-    assert h.replies == ["Scramble categories: animals, food"]
+    assert h.replies == ["Scramble categories: animals, food", "Hangman categories: animals, food"]
 
 
 async def test_categories_then_pick_works_immediately(h: Harness):
@@ -3309,8 +3319,8 @@ class GameManager:
         self._say(text.replace("{p}", self.prefix), reply_to=session.reply_to, coalesce_key=key)
 
     def _notice(self, ctx: CommandContext, text: str) -> None:
-        """Reply to a start request we can't fulfil, at most once per NOTICE_SECONDS per player."""
-        if self._cooldowns.check_command("notice", ctx.msg.user_id, NOTICE_SECONDS, 0):
+        """Reply to a start request we can't fulfil, at most once per NOTICE_SECONDS per player per game."""
+        if self._cooldowns.check_command(f"notice:{ctx.name}", ctx.msg.user_id, NOTICE_SECONDS, 0):
             ctx.reply(text)
 
     def cooldown_remaining(self, user_id: str) -> float:
@@ -3513,7 +3523,7 @@ git commit -m "Add the game registry and personal-game manager"
 
 ### Task 11: HTTP client and fun commands
 
-`HttpClient.get_json` never raises. On a timeout (3 s), an HTTP error, or bad JSON, it returns `None`, and the command uses a bundled fallback line (spec §5). API text must be a string. It's stripped of invisible and control characters, and anything over 400 characters or containing a link or @mention falls back: the bot as a mod skips Twitch's link filter, so this is the only filter. Response bodies are capped at 64 KB. All four API URLs and response shapes were checked live on 2026-10-04.
+`HttpClient.get_json` never raises. On a timeout (3 s), an HTTP error, or bad JSON, it returns `None`, and the command uses a bundled fallback line (spec §5). API text must be a string. It's NFC-normalized and stripped of invisible and control characters. It falls back if it's over 400 characters, contains a link or @mention, doesn't start with a capital letter, digit, or quote (it looks cut off), or contains a blocked word: the bot as a mod skips Twitch's chat filters, so this is the only filter. `BlockedWords` reads `content/blocked_rot13.txt` (written in Task 18; until then nothing is blocked). Fragments of 3 letters must be a whole word or its plural, so "night" and "Japanese" pass; longer ones match at the start of a word, except a short list of innocent words (analysis, spices, Pakistan, cocktail, ...). Response bodies are capped at 64 KB. All four API URLs and response shapes were checked live on 2026-10-04.
 
 `?cookie` rules:
 
@@ -3763,10 +3773,29 @@ async def test_fact_with_links_mentions_or_wrong_type_falls_back(assets, clock, 
 
 
 async def test_fact_text_keeps_decomposed_accents(assets, clock):
-    text = "e" + chr(0x0301) + "clairs are pastries."
+    text = "E" + chr(0x0301) + "clairs are pastries."
     fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
     await fun.run("?catfact")
-    assert fun.replies == ["🐱 " + chr(0x00E9) + "clairs are pastries."]
+    assert fun.replies == ["🐱 " + chr(0x00C9) + "clairs are pastries."]
+
+
+@pytest.mark.parametrize("text, safe", [
+    ("Some people are gatoring around.", False),  # long fragment "gator" at a word start
+    ("Navigators use the stars.", True),  # a fragment inside a word is fine
+    ("Gat is a short fragment.", False),  # short fragment "gat" as a whole word
+    ("Gats too.", False),  # ... or its plural
+    ("Gather round.", True),  # short fragments never match as prefixes
+    (" was a famous idea.", False),  # cut off at the start
+    ("42 is the answer.", True),
+    ('"Quoted" facts are fine.', True),
+])
+async def test_fact_filter_blocks_bad_words_and_truncated_text(content_dir, clock, text, safe):
+    from bot.assets import Assets
+
+    (content_dir / "blocked_rot13.txt").write_text("tng\ntngbe\n", encoding="utf-8")  # gat, gator
+    fun = Fun(Assets(content_dir), clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
+    await fun.run("?catfact")
+    assert (fun.replies[0] != "🐱 fallback catfacts line") is safe
 
 
 async def test_fact_text_is_stripped_of_invisible_and_control_characters(assets, clock):
@@ -3923,6 +3952,7 @@ class HttpClient:
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import random
 import re
@@ -3955,14 +3985,56 @@ def _get(data: Any, *path: str | int) -> Any:
     return data
 
 
-def _safe_text(value: Any) -> str | None:
-    """API text cleaned for chat, or None if it's missing, too long, or carries links/mentions."""
+# Innocent words that start with a blocked fragment of 4+ letters (checked as prefixes).
+_INNOCENT_PREFIXES = (
+    "analy", "analog", "analges", "spice", "spicy", "cockt", "cockr", "cockp", "cockat", "cocker",
+    "dicken", "rapese", "tardi", "tardy", "retardant", "homog", "homon", "homoph", "pakist",
+    "negroni", "coonh", "pussyc", "pussyw", "booby", "nudib", "heilo",
+)
+
+
+class BlockedWords:
+    """Finds blocked words in prose ("mentally retarded" yes; "night", "Japanese", "mustard" no).
+
+    Fragments of 3 letters must be the whole word (or that word + "s"); longer fragments match at
+    the start of a word unless the word is a known innocent one (analysis, spices, Pakistan, ...).
+    """
+
+    def __init__(self, fragments: list[str]) -> None:
+        self.short = {f for f in fragments if len(f) < 4}
+        self.long = tuple(f for f in fragments if len(f) >= 4)
+
+    @classmethod
+    def load(cls, assets: Assets) -> BlockedWords:
+        try:
+            return cls([codecs.decode(line, "rot13") for line in assets.lines("blocked_rot13")])
+        except FileNotFoundError:
+            return cls([])
+
+    def found_in(self, text: str) -> bool:
+        for word in re.findall(r"[a-z]+", text.lower()):
+            if word in self.short or (word.endswith("s") and word[:-1] in self.short):
+                return True
+            if word == "homo" or word.startswith(_INNOCENT_PREFIXES):  # "Homo sapiens", "analysis"
+                continue
+            if word.startswith(self.long):
+                return True
+        return False
+
+
+def _safe_text(value: Any, blocked: BlockedWords | None = None) -> str | None:
+    """API text cleaned for chat, or None if it's unusable: missing, too long, cut off at the start,
+    or carrying links, @mentions or blocked words (the bot is a mod, so Twitch won't filter it)."""
     if not isinstance(value, str):
         return None
     text = unicodedata.normalize("NFC", value)  # compose accents first so stripping marks keeps them
     text = " ".join(strip_invisible(text).split())  # all whitespace (incl. newlines) becomes one space
     text = "".join(ch for ch in text if ch.isprintable())  # then drop control characters
     if not text or len(text) > MAX_FACT or _UNSAFE.search(text):
+        return None
+    if not (text[0].isupper() or text[0].isdigit() or text[0] in "\"'"):  # looks truncated
+        return None
+    if blocked is not None and blocked.found_in(text):
         return None
     return text
 
@@ -4009,11 +4081,13 @@ def register_fun(
     registry.add(Command("8ball", eightball, "{p}8ball [question]", "Ask the magic 8-ball a question.", "Fun"))
     registry.add(Command("coinflip", coinflip, "{p}coinflip", "Flip a coin.", "Fun"))
 
+    blocked = BlockedWords.load(assets)
+
     def fact_handler(emoji: str, url: str, path: tuple, headers: dict, fallback: str):
         async def handler(ctx: CommandContext) -> None:
             data = await http.get_json(url, headers=headers or None)
             try:
-                text = _safe_text(_get(data, *path)) if data is not None else None
+                text = _safe_text(_get(data, *path), blocked) if data is not None else None
             except (KeyError, IndexError, TypeError):
                 text = None
             ctx.reply(f"{emoji} {text or rng.choice(assets.lines(fallback))}")
@@ -4084,6 +4158,7 @@ def register_fun(
             "{p}cookie | {p}cookie give <username>",
             "Open your daily fortune cookie, or give it to someone. Resets at 00:00 UTC.",
             "Fun",
+            global_cooldown=False,  # personal: one person's cookie shouldn't block another's
         )
     )
 ```
@@ -4092,7 +4167,7 @@ def register_fun(
 
 Run: `.venv/bin/pytest tests/test_http.py tests/test_fun.py -q`
 
-Expected: PASS (23 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (31 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 8: Commit**
 
@@ -4248,6 +4323,10 @@ MAX_LIMIT = 10
 _NUMBER = re.compile(r"-?[0-9]+")  # ASCII only: str.isdigit() accepts "²", which int() rejects
 
 
+def _plural(count: int, word: str) -> str:
+    return word if count == 1 else word + "s"
+
+
 def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: Sequence[str]) -> None:
     games = [g.lower() for g in game_names]
 
@@ -4297,7 +4376,8 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
                 return
             rank = stats.rank(user_id, game)
             rank_text = f" · rank #{rank}" if rank else ""
-            ctx.reply(f"📊 {name} · {game}: {row.wins} wins / {row.played} played · {row.points} pts{rank_text}")
+            wins_text = f"{row.wins} {_plural(row.wins, 'win')}"
+            ctx.reply(f"📊 {name} · {game}: {wins_text} / {row.played} played · {row.points} pts{rank_text}")
             return
         if not per_game:
             ctx.reply(f"No stats for {name} yet.")
@@ -4306,7 +4386,7 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
         wins = sum(g.wins for g in per_game)
         played = sum(g.played for g in per_game)
         parts = " | ".join(f"{g.game} {g.wins}W/{g.played}P {g.points}pts" for g in per_game)
-        ctx.reply(f"📊 {name}: {points} pts, {wins} wins, {played} played | {parts}")
+        ctx.reply(f"📊 {name}: {points} pts, {wins} {_plural(wins, 'win')}, {played} played | {parts}")
 
     registry.add(
         Command(
@@ -4324,6 +4404,7 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
             "{p}gamestats [game] [username]",
             "Wins, games played, and points: yours or someone else's, overall or for one game.",
             "Stats",
+            global_cooldown=False,  # personal lookup: never blocked by someone else's
         )
     )
 ```
@@ -4356,6 +4437,7 @@ def register_help(registry: CommandRegistry) -> None:
             "Info",
             aliases=("commands",),
             listed=False,
+            global_cooldown=False,  # personal: one person's ?help shouldn't block another's
         )
     )
 ```
@@ -4383,7 +4465,9 @@ Mistakes fail loudly rather than silently:
 - non-finite numbers, and a send rate above 3/s (Twitch's mod limit);
 - non-numeric OWNER_IDS on Twitch;
 - a prefix starting with `/` or `.`, which Twitch intercepts;
-- an empty game list. Every invalid value raises `ConfigError` naming the key; the CLI turns that into exit code 2 (spec §12). Console mode passes `require_twitch=False`. `data_dir` is the `data/` folder next to the config file.
+- an empty game list;
+- the placeholder `channel = "your_channel"` from the example config;
+- a `busy_queue` larger than the outbox queue, where the brake could never engage. Every invalid value raises `ConfigError` naming the key; the CLI turns that into exit code 2 (spec §12). Console mode passes `require_twitch=False`. `data_dir` is the `data/` folder next to the config file.
 
 **Files:**
 - Create: `bot/config.py`, `config.toml`, `.env.example`
@@ -4407,8 +4491,11 @@ def write(tmp_path: Path, text: str) -> Path:
     return path
 
 
-def test_repo_config_file_is_valid():
-    cfg = load_config(Path(__file__).parent.parent / "config.toml", ENV)
+def test_repo_config_file_is_valid_once_a_channel_is_set(tmp_path):
+    shipped = (Path(__file__).parent.parent / "config.toml").read_text(encoding="utf-8")
+    with pytest.raises(ConfigError, match="set channel"):
+        load_config(write(tmp_path, shipped), ENV)  # the placeholder must be replaced
+    cfg = load_config(write(tmp_path, shipped.replace('"your_channel"', '"real_channel"')), ENV)
     assert cfg.prefix == "?" and cfg.enabled_games == ("scramble", "hangman")
 
 
@@ -4442,6 +4529,7 @@ def test_defaults_and_env(tmp_path):
         ('channel = "ok_name"\nprefix = ".b"', "can't start with"),
         ('channel = "ok_name"\n[games]\nenabled = []', "at least one game"),
         ("channel = 123", "channel must be a Twitch username"),
+        ('channel = "ok_name"\n[games]\nbusy_queue = 40', "can't be larger than outbox.max_queue"),
     ],
 )
 def test_invalid_values_name_the_key(tmp_path, toml, message):
@@ -4498,6 +4586,7 @@ from bot.games import ALL_GAMES
 
 _CHANNEL = re.compile(r"^[a-z0-9_]{3,25}$")
 MAX_SEND_RATE = 3.0  # messages/s; Twitch allows a mod account about 100 per 30 s
+PLACEHOLDER_CHANNEL = "your_channel"  # the value shipped in config.toml
 
 # Every setting config.toml may contain. Anything else is almost certainly a typo.
 _SCHEMA: dict[str, set[str] | None] = {
@@ -4590,6 +4679,8 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     channel = raw_channel.strip().lower() if isinstance(raw_channel, str) else ""
     if not _CHANNEL.fullmatch(channel):
         raise ConfigError(f"channel must be a Twitch username, got {raw_channel!r}")
+    if channel == PLACEHOLDER_CHANNEL:
+        raise ConfigError("set channel in config.toml to the Twitch channel the bot should join")
 
     prefix = _get(table, "prefix", "?")
     if not isinstance(prefix, str) or not 1 <= len(prefix) <= 3 or any(c.isspace() for c in prefix):
@@ -4623,7 +4714,7 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         if bad:
             raise ConfigError(f"OWNER_IDS must be numeric Twitch user IDs, got {', '.join(bad)}")
 
-    return Config(
+    config = Config(
         client_id=client_id,
         client_secret=client_secret,
         bot_id=bot_id or "console-bot",
@@ -4642,6 +4733,11 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         log_retention_days=_number(table, "logs.retention_days", 30, integer=True, minimum=1),
         data_dir=path.parent / "data",
     )
+    if config.busy_queue > config.outbox_max_queue:
+        raise ConfigError(
+            f"games.busy_queue ({config.busy_queue}) can't be larger than outbox.max_queue ({config.outbox_max_queue})"
+        )
+    return config
 ```
 
 - [ ] **Step 4: Write `config.toml`**
@@ -4687,7 +4783,7 @@ OWNER_IDS=
 
 Run: `.venv/bin/pytest tests/test_config.py -q`
 
-Expected: PASS (23 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (24 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -4937,7 +5033,7 @@ The heart of the bot. `BotCore.on_message` applies spec §3's filter in order:
 4. While paused, accept only `?bot ...` from a controller.
 5. Route commands; anything else goes to the sender's own game, if they have one.
 
-`_dispatch` checks permission, then cooldowns (the chat-wide one only if the command uses it), then touches the user, logs `command`, and runs the handler. Handler exceptions are logged and never crash the bot. The busy brake is wired here: games are refused while the outbox holds `busy_queue` or more messages.
+`_dispatch` checks permission, then cooldowns (the chat-wide one only if the command uses it), then touches the user, logs `command`, and runs the handler. Handler exceptions are logged and never crash the bot. The busy brake is wired here: games are refused while the outbox holds `busy_queue` or more messages. When the connector reports the bot isn't a mod (at startup, or later if mod status is lost), sending slows to 0.6 messages/s with burst 1, under Twitch's non-mod limit of 20 per 30 s; `startup` is logged only once.
 
 `run()` starts the connector, the outbox loop, and the 1 s tick loop. It returns an exit code:
 
@@ -5033,7 +5129,7 @@ async def test_scramble_round_to_leaderboard(bot: Bot):
     await bot.say("carol: ?leaderboard")
     assert bot.out[-1] == "🏆 Top 1 overall: 1. alice (10)"
     await bot.say("alice: ?gamestats")
-    assert bot.out[-1] == "📊 alice: 10 pts, 1 wins, 1 played | scramble 1W/1P 10pts"
+    assert bot.out[-1] == "📊 alice: 10 pts, 1 win, 1 played | scramble 1W/1P 10pts"
 
 
 async def test_two_players_play_at_once(bot: Bot):
@@ -5186,6 +5282,34 @@ async def test_quick_commands_have_user_and_global_cooldowns(bot: Bot):
     bot.clock.advance(5)
     await bot.say("bob: ?coinflip")
     assert len(bot.out) == 2
+
+
+async def test_personal_commands_are_not_blocked_by_someone_elses(bot: Bot):
+    await bot.say("alice: ?gamestats")
+    await bot.say("bob: ?gamestats")
+    await bot.say("carol: ?help")
+    await bot.say("dave: ?help")
+    await bot.say("erin: ?cookie")
+    await bot.say("frank: ?cookie")
+    assert len(bot.out) == 6
+    await bot.say("gina: ?coinflip")
+    await bot.say("hank: ?coinflip")  # public commands keep the chat-wide cooldown
+    assert len(bot.out) == 7
+
+
+async def test_not_being_a_mod_slows_sending_down(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets)
+    await bot.core._on_ready(ReadyInfo("chan", "chan", is_mod=False))
+    assert bot.core.outbox.rate == 0.6 and bot.core.outbox.burst == 1
+
+
+async def test_losing_mod_status_while_running_slows_sending_down(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets)
+    await bot.core._on_ready(ReadyInfo("chan", "chan", is_mod=True))
+    assert bot.core.outbox.rate > 0.6  # unchanged while modded
+    await bot.core._on_ready(ReadyInfo("chan", "chan", is_mod=False))
+    assert bot.core.outbox.rate == 0.6 and bot.core.outbox.burst == 1
+    assert [e["event"] for e in bot.events()].count("startup") == 1
 
 
 async def test_help_overview_lists_real_commands_under_500_chars(bot: Bot):
@@ -5512,6 +5636,7 @@ from bot.text import format_duration
 logger = logging.getLogger(__name__)
 
 EXIT_OK, EXIT_CRASH, EXIT_CONFIG, EXIT_AUTH = 0, 1, 2, 3
+NON_MOD_RATE = 0.6  # messages/s; Twitch's limit for a non-mod account is 20 per 30 s
 
 
 class BotCore:
@@ -5534,6 +5659,7 @@ class BotCore:
         self.clock = clock
         self.http = http
         self.started_mono = clock.mono()
+        self._ready = False
         self.outbox = Outbox(
             connector.send,
             clock,
@@ -5667,10 +5793,17 @@ class BotCore:
             self.tick()
 
     async def _on_ready(self, info: ReadyInfo) -> None:
-        self.log.write("startup", version=__version__, channel=info.channel_login, is_mod=info.is_mod)
+        if not self._ready:  # called again only when mod status is lost while running
+            self._ready = True
+            self.log.write("startup", version=__version__, channel=info.channel_login, is_mod=info.is_mod)
         if not info.is_mod:
+            # Twitch allows a non-mod 20 messages per 30 s; stay under it.
+            self.outbox.rate = min(self.outbox.rate, NON_MOD_RATE)
+            self.outbox.burst = 1
             logger.warning(
-                "The bot is not a mod in %s: no Chat Bot badge, 1 msg/s, slow mode applies.", info.channel_login
+                "The bot is not a mod in %s: no Chat Bot badge, slow mode applies, sending slowed to %.1f/s.",
+                info.channel_login,
+                self.outbox.rate,
             )
 
     async def _cleanup_step(self, where: str, make: Callable[[], Awaitable[object]]) -> None:
@@ -5738,7 +5871,7 @@ class BotCore:
 
 Run: `.venv/bin/pytest tests/test_flows.py -q`
 
-Expected: PASS (30 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (33 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -5755,7 +5888,7 @@ This follows the TwitchIO 3.3.2 source, which was read while writing the plan.
   1. The `_Client` subclass loads only the bot's token from `data/.tio.tokens.json`. A missing token, or one Twitch rejects (400/401/403), raises `AuthRequired`, which becomes exit 3. A 5xx or 429 while validating is a plain error, so systemd retries.
   2. In `setup_hook` it resolves the channel and checks `fetch_moderated_channels`. A channel that doesn't exist raises `ConfigError` (exit 2, so systemd doesn't restart-loop). A failed mod check logs a warning and continues.
   3. It subscribes to `channel.chat.message` over WebSocket with the bot token (`as_bot=True`).
-- **Sending:** through Helix with the **app token** (`token_for=None`) when the bot is a mod, which gives it the Chat Bot badge. Without mod status it uses the bot's user token, since Twitch refuses app-token sends then. `MessageRejectedError` and HTTP errors become `SendResult(False, ...)`.
+- **Sending:** through Helix with the **app token** (`token_for=None`) when the bot is a mod, which gives it the Chat Bot badge. Without mod status it uses the bot's user token, since Twitch refuses app-token sends then. If mod status is removed while running, the first HTTP 403 switches to the user token, logs `LostModStatus`, retries once, and calls `on_ready` again so the core slows down. `MessageRejectedError` and HTTP errors become `SendResult(False, ...)`.
 - **Tokens:** TwitchIO's own save is a no-op when tokens are loaded this way, so the connector writes the bot token itself. The write is atomic with mode 0600, on close and on every `token_refreshed` event.
 - **Watchdog:** TwitchIO can lose the login or the chat subscription without ending. Every 30 s it checks both, and fails (exit 3, or a crash that systemd restarts) if the login was dropped or there has been no subscription for 4 minutes.
 - **Connection events:** the first `websocket_welcome` logs `connected` and later ones log `reconnected`. `websocket_closed` logs `disconnected`.
@@ -5989,6 +6122,35 @@ async def test_send_uses_app_token_when_modded_and_bot_token_otherwise(tmp_path,
     conn.is_mod = False
     await conn.send("hi")
     assert client.sent == [("hi", None), ("hi", "123")]
+
+
+async def test_send_falls_back_to_bot_token_when_mod_status_is_lost(tmp_path, clock):
+    class ForbiddenForAppToken(FakeClient):
+        def create_partialuser(self, user_id):
+            client = self
+
+            class Channel:
+                async def send_message(self, text, sender, token_for=None, reply_to_message_id=None):
+                    if token_for is None:
+                        exc = twitchio.HTTPException.__new__(twitchio.HTTPException)
+                        exc.status = 403
+                        raise exc
+                    client.sent.append((text, token_for))
+
+            return Channel()
+
+    client = ForbiddenForAppToken()
+    conn = connector_for(tmp_path, clock, client)
+    conn.channel_id, conn.is_mod = "999", True
+    ready = []
+
+    async def on_ready(info):
+        ready.append(info)
+
+    conn._on_ready = on_ready
+    result = await conn.send("hi")
+    assert result.sent and not conn.is_mod and client.sent == [("hi", "123")]
+    assert [r.is_mod for r in ready] == [False]  # the core slows sending down
 
 
 async def test_send_maps_http_errors_to_a_drop(tmp_path, clock):
@@ -6313,6 +6475,12 @@ class TwitchConnector:
         except twitchio.MessageRejectedError as exc:
             return SendResult(False, exc.code, exc.message)
         except twitchio.HTTPException as exc:
+            if exc.status == 403 and self.is_mod:  # mod status was removed while running
+                self.is_mod = False
+                self.log.write("error", where="twitch.send", type="LostModStatus", message="sending as the bot now")
+                if self._on_ready is not None:
+                    await self._on_ready(ReadyInfo(self.config.channel, self.channel_id, False))
+                return await self.send(text, reply_to)
             return SendResult(False, f"http_{exc.status}", str(exc))
         return SendResult(True)
 
@@ -6386,7 +6554,7 @@ async def authorize(config: Config) -> UserRef:
 
 Run: `.venv/bin/pytest tests/test_twitch_mapping.py -q`
 
-Expected: PASS (18 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (19 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Smoke-test the login page wiring (no real credentials needed)**
 
@@ -6934,6 +7102,7 @@ import re
 import pytest
 
 from bot.assets import Assets
+from bot.fun import BlockedWords
 from bot.games.hangman import _valid as hangman_valid
 from bot.games.scramble import _valid as scramble_valid
 
@@ -6971,6 +7140,17 @@ def test_blocked_fragment_list_exists():
     fragments = [codecs.decode(line, "rot13") for line in REAL.lines("blocked_rot13")]
     assert len(fragments) >= 20
     assert all(f.isalpha() and f == f.lower() for f in fragments)
+
+
+def test_blocked_list_catches_bad_words_in_prose_but_not_common_words():
+    blocked = BlockedWords.load(REAL)
+    assert blocked.found_in("His parents thought he was mentally retarded.")
+    for fine in (
+        "The night sky over Japan is beautiful.", "Japanese analysts studied spices from Pakistan.",
+        "Mustard is a condiment.", "Charles Dickens wrote fast.", "Homo sapiens evolved in Africa.",
+        "The title of the book.", "Cumulative rainfall rose.", "A cocktail party.", "Tardigrades survive space.",
+    ):
+        assert not blocked.found_in(fine), fine
 
 
 def test_8ball_has_20_answers():
@@ -7021,7 +7201,7 @@ Outlook not so good.
 Very doubtful.
 ```
 
-- [ ] **Step 4: Write `bot/content/blocked_rot13.txt`**: the fragments a Scramble puzzle must never show, ROT13-encoded (Task 8 decodes them). Copy exactly:
+- [ ] **Step 4: Write `bot/content/blocked_rot13.txt`**: the fragments a Scramble puzzle must never show and fact text must never contain, ROT13-encoded (Tasks 8 and 11 decode them). Copy exactly:
 
 ```text
 # Fragments a Scramble puzzle must never show, ROT13-encoded so this file doesn't display them.
@@ -7154,7 +7334,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 8: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `16 passed`, then all 281 tests pass.
+Expected: `17 passed`, then all 296 tests pass.
 
 - [ ] **Step 9: Play every game by hand in console mode**
 
@@ -7286,8 +7466,9 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
    The login is saved in `data/.tio.tokens.json`. Never share or commit that file.
 6. **Channel:** set `channel` in `config.toml` to the channel the bot should join.
 7. **Mod the bot** in that channel (`/mod <botaccount>` in its chat). Without mod status the bot
-   still runs, but it can only send 1 message per second, slow mode applies, and it won't show
-   the Chat Bot badge. The startup log says `is_mod` either way.
+   still runs, but it sends more slowly (0.6 messages per second, under Twitch's non-mod limit),
+   slow mode applies, and it won't show the Chat Bot badge. The startup log says `is_mod` either
+   way. If a mod unmods the bot while it runs, it switches to the slower mode by itself.
 
 ## Run
 
@@ -7364,7 +7545,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (281).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (296).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
@@ -7433,8 +7614,9 @@ can create accounts and approve logins. The agent walks him through it and recor
     mobile**.
   - **Wi-Fi off for about 60 s:** chat resumes on its own, and the log shows `disconnected`
     then `reconnected`.
-  - **Wi-Fi off for 5+ minutes:** the bot exits with a non-zero code, which systemd would
-    restart.
+  - **Wi-Fi off for 5+ minutes:** after Wi-Fi returns, chat works again within a few minutes,
+    either on its own or through a watchdog exit (code 1) that systemd would restart. A bot
+    that stays deaf without exiting is a failure.
   - **Token file:** after a run of a few hours, `data/.tio.tokens.json` is updated on
     `?bot shutdown` (its mtime changes, and it's readable only by Robert, mode 0600).
   - **Failure exits:**
@@ -7578,3 +7760,11 @@ The code blocks above are the final, reviewed versions; the entries below say wh
   - Process note: one research request from the coordinator (4 calls) and one from the reviewer sent Robert's email in a User-Agent header to Wikimedia/Wikipedia. Disclosed to Robert; generic User-Agents only from then on.
 - **Task 18 second follow-up** (after the re-review): 14 fragments added to the blocked list (a self-harm abbreviation, Nazi-salute words, two slurs that could form from 'Pakistan' and 'Japan', and a few sexual and anatomical terms), for 53 in total. Re-verified: no scramble contains a blocked fragment and every word stays scramblable. Scramble logs a warning if the blocked list is missing.
 - **Task 19** (`2246c63` + fix): the review found no wrong claims, but five gaps: (1) `?bot off` didn't mention that it ends all games and ignores everything else while paused; (2) the install step was buried in the optional console section; (3) OWNER_IDS needs a numeric ID and nothing explained how to find it; (4) there was no way to re-run auth on a headless server; (5) secrets copied to the server could stay world-readable. Fix: a separate Install section, a curl lookup for the numeric ID, a server re-auth recipe (copy the token or use an SSH tunnel), `chmod 600` for the secrets, plus the minors (exit 130, 2FA note, "refused" wording, the systemctl restart). The systemd unit gains `TimeoutStopSec=30` and `PYTHONUNBUFFERED=1`.
+- **Final whole-implementation review** (Opus, after Task 19; fixes in `0fa6194`): two critical, two important, and several minor findings.
+  - **Critical, fact text was unfiltered for words:** API facts and jokes were checked for links and mentions but not for slurs, and text cut off mid-sentence could post. Fix: a `BlockedWords` check over `content/blocked_rot13.txt` (3-letter fragments as whole words or plurals, longer ones at a word start, with a short list of innocent words such as analysis and Pakistan), and text that doesn't start with a capital letter, digit, or quote falls back.
+  - **Critical, Hangman could spell words:** wrong letters were listed in guess order, so a player could make the bot write a slur. Fix: wrong letters are sorted.
+  - **Important, personal commands blocked everyone:** `?cookie`, `?gamestats`, and `?help` shared the 5 s chat-wide cooldown. Fix: per-user cooldown only.
+  - **Important, non-mod sending:** a non-mod bot still sent at 2/s burst 3, over Twitch's 20 per 30 s, and losing mod status mid-run made every app-token send fail with 403. Fix: 0.6/s with burst 1 when not a mod; on a 403 while modded the connector switches to the bot token, logs `LostModStatus`, retries once, and calls `on_ready` again so the core slows down (`startup` is still logged once).
+  - Minors: refusal notices keyed per game; config rejects the placeholder channel and a `busy_queue` above the outbox queue; SQLite `synchronous=NORMAL`; "1 win"; help texts, comments, README, and spec (§3, §4 `Connector.run`, §5 cooldowns and threading, facts filter, Hangman board, §13) brought up to date; the Task 20 Wi-Fi check now expects recovery (on its own or via a watchdog exit and restart) instead of a guaranteed exit. Family Feud is marked dropped in the spec.
+  - Kept as designed: 25 games at once (Robert's choice).
+  - Tests: 281 → 296.

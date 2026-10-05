@@ -71,8 +71,9 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
    The login is saved in `data/.tio.tokens.json`. Never share or commit that file.
 6. **Channel:** set `channel` in `config.toml` to the channel the bot should join.
 7. **Mod the bot** in that channel (`/mod <botaccount>` in its chat). Without mod status the bot
-   still runs, but it can only send 1 message per second, slow mode applies, and it won't show
-   the Chat Bot badge. The startup log says `is_mod` either way.
+   still runs, but it sends more slowly (0.6 messages per second, under Twitch's non-mod limit),
+   slow mode applies, and it won't show the Chat Bot badge. The startup log says `is_mod` either
+   way. If a mod unmods the bot while it runs, it switches to the slower mode by itself.
 
 ## Run
 

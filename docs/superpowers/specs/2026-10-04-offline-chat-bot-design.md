@@ -17,7 +17,7 @@ them. Each later phase gets its own short spec.
 | Phase | Contents |
 |---|---|
 | **1 (this spec)** | Core (Twitch connection, admin controls, activity log, outbox, stats database, game manager), `?help` / `?commands`, `?leaderboard`, `?gamestats`, `?scramble` (+ `?hint`), `?hangman` (+ `?g`), `?skip`, `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke`, `?cookie` |
-| 2 | `?trivia` (+ `?hint`), `?riddle`, `?familyfeud` / `?feud` / `?ffskip`, `?higherlower` |
+| 2 | `?trivia` (+ `?hint`), `?riddle`, `?higherlower` (Family Feud was dropped, 2026-10-04) |
 | 3 | `?rng` (own badge rules) |
 | 4 | `?ascii`, `?chatsummary` / `?cs continue` |
 
@@ -40,10 +40,10 @@ Not built: the `casino` option of `?leaderboard`. The bot has no gambling or cur
 | Logs | Bot activity only, JSONL, one file per UTC day, 30-day retention | No full chat archive. |
 | Where it runs | Robert's laptop for development and testing in his own channel. Later, an always-on Linux server under systemd | Moving to the server is a copy plus a service file. |
 | Shared chat | Only messages from the bot's own channel count | Partner channels' mods cannot control the bot, and games are not flooded. |
-| Game mode | **Personal**: `?scramble` starts your own game, only your answers count, and replies are threaded to you. Phase 2's Family Feud and lobby-style games will be chat-wide. | People play whenever they want instead of waiting for one shared game. Chosen by Robert. |
+| Game mode | **Personal**: `?scramble` starts your own game, only your answers count, and replies are threaded to you. Every planned game is personal. | People play whenever they want instead of waiting for one shared game. Chosen by Robert. |
 | Private replies | Not possible at scale; threaded replies instead | Twitch caps bot whispers at 40 unique recipients per day, many users block whispers from strangers, and whispers can be dropped silently. Using extra accounts to get around the cap violates Twitch's developer agreement. |
 | Game limits | One game per person; up to 25 running at once; a 10 s per-person cooldown after a game; new games are refused while 10+ bot messages are waiting to send (busy brake) | Keeps the bot from flooding a busy chat while letting many people play. All adjustable in `config.toml`. |
-| Send rate | 2 messages/s sustained, burst 3 | About 60% of Twitch's mod limit (100 per 30 s). |
+| Send rate | 2 messages/s sustained, burst 3; 0.6/s with burst 1 when the bot is not a mod | About 60% of Twitch's mod limit (100 per 30 s), and under the non-mod limit (20 per 30 s). |
 | Hangman guessing | Explicit `?g <letter>` or `?g <answer>`; plain chat is ignored | "W" and "L" are constant reactions in Jason's chat and would otherwise count as guesses. |
 | Scramble hints | On request with `?hint` (10, 7, or 4 points), never automatic | Keeps each personal game to a few messages. |
 | Word categories | `animals`, `countries`, `food`, `games`, `general`, `streamers` | Chosen by Robert from a pitch. Emotes, slang, Twitch terms, and memes were declined. |
@@ -68,8 +68,10 @@ Not built: the `casino` option of `?leaderboard`. The bot has no gambling or cur
    from the token file.
 3. Resolve the configured channel login to a broadcaster ID (Helix Get Users).
 4. Check the bot's moderated channels. If the channel is missing, log a warning ("not a mod:
-   no Chat Bot badge, 1 msg/s, slow mode applies") and continue. This lets the bot run in a
-   test channel before it is modded.
+   no Chat Bot badge, slow mode applies, sending slowed to 0.6/s"), send with the bot's own
+   user token (Twitch refuses app-token sends from a non-mod), and continue. This lets the bot
+   run in a test channel before it is modded. If mod status is removed while running, the
+   first refused send (HTTP 403) switches to the same non-mod mode and logs `LostModStatus`.
 5. Subscribe over WebSocket to `ChatMessageSubscription(broadcaster_user_id=<channel>,
    user_id=<bot>)` using the bot token. This must happen within 10 s of the socket's welcome
    message; TwitchIO handles the timing.
@@ -146,7 +148,9 @@ class ChatMessage:
     received_at: datetime  # UTC
 
 class Connector(Protocol):
-    async def run(self, on_message: Callable[[ChatMessage], Awaitable[None]]) -> None: ...
+    # on_ready(ReadyInfo(channel_login, channel_id, is_mod)) runs once connected, and again
+    # if mod status is lost while running.
+    async def run(self, on_message: OnMessage, on_ready: OnReady) -> None: ...
     async def send(self, text: str, reply_to: str | None = None) -> SendResult: ...
     async def lookup_user(self, login: str) -> UserRef | None: ...   # Helix Get Users
     async def close(self) -> None: ...
@@ -171,12 +175,14 @@ never create their own timers, so tests can drive time directly.
 
 Cooldowns, unless noted: each command has a **10 s per-user** cooldown and a **5 s global**
 cooldown. A command on cooldown is silently ignored.
+- Personal lookups (`?cookie`, `?gamestats`, `?help`) have only the per-user cooldown, so one
+  person's use never blocks another's.
 - Game start commands (`?scramble`, `?hangman`) have no command cooldowns. The per-player game
   cooldown (10 s after your game ends) is the only limit on starting, and the game manager
   rate-limits its "can't start" and category-list replies to one per 5 s per player.
 - Control commands (`?bot ...`, `?stopgame`), `?skip`, and in-game commands such as `?g` and
   `?hint` have no cooldowns; each game enforces its own limits on its in-game commands. Quick-command answers use Twitch's
-threaded reply (`reply_to`). Game announcements are plain messages.
+threaded reply (`reply_to`). Game messages are threaded under the player's latest message.
 
 | Command | Who | Behavior |
 |---|---|---|
@@ -206,8 +212,16 @@ threaded reply (`reply_to`). Game announcements are plain messages.
 | `?cookie give <username>` | anyone | Uses the giver's daily cookie on someone else: "@a gave @b a fortune cookie: …". The username must match `^[A-Za-z0-9_]{3,25}$` and exist (`lookup_user`). Giving to yourself is not allowed. Counts as the giver's cookie for the day; the recipient's own cookie is unaffected. |
 
 **Facts and jokes:** all four APIs were verified working on 2026-10-04. Each call has a
-3-second timeout. On failure, or if the result is over 400 characters, the bot uses a random
-line from the matching `content/fallback_*.txt` list (about 50 entries each).
+3-second timeout. On failure, the bot uses a random line from the matching
+`content/fallback_*.txt` list (about 50 entries each). API text is cleaned and checked first,
+since the modded bot's messages skip Twitch's chat filters:
+- it must be a string; it is NFC-normalized, invisible and control characters are removed, and
+  whitespace is collapsed;
+- it is rejected (fallback used) if it is empty or over 400 characters, contains a link (`://`
+  or `www.`) or an `@mention`, doesn't start with a capital letter, digit, or quote (it looks cut
+  off), or contains a blocked word from `content/blocked_rot13.txt`. Fragments of 3 letters
+  must be a whole word (or its plural); longer ones match at the start of a word, except known
+  innocent words (analysis, Pakistan, cocktail, ...). Text is never truncated.
 
 Starting a game when you already have one gets "You already have a \<game\> game running."
 During your cooldown it gets "Your next game in \<n\>s." At the limit (25 games) or while the
@@ -275,8 +289,8 @@ Randomness comes from an injected `random.Random`, so tests can seed it.
   which `?help <game>` shows.
 - **Registration:** games are listed in `config.toml` under `[games] enabled = [...]`. Adding
   a game takes one module plus one config entry.
-- **Phase 2:** chat-wide games (Family Feud, lobby games) will add a chat-wide mode next to
-  personal sessions.
+- **Chat-wide games:** none are planned (Family Feud was dropped), so there is no chat-wide
+  mode.
 
 ### Answer normalization (`text.normalize`)
 1. Unicode NFKC.
@@ -308,7 +322,8 @@ Substrings do not count, which avoids false positives in a busy chat.
 - **Answer:** a random entry from `content/words/<category>.txt`. It may be a short phrase;
   spaces and punctuation are shown, and only letters are hidden.
 - **Start:** "🪢 Hangman (animals): _ _ _ _ _ _ _ _ _ · guess with ?g <letter> or ?g <answer> · 6 lives, 120s".
-- **Board:** `_ A _ _ M A N | wrong: E T R (3/6)`. Sent with `coalesce_key="hangman-board"`, so
+- **Board:** `_ A _ _ M A N | wrong: E R T (3/6)`. Wrong letters are listed alphabetically,
+  so guess order can't spell a word. Sent with `coalesce_key="hangman-board"`, so
   bursts of guesses produce one up-to-date board instead of a backlog.
 - **Guessing:** only through the player's own `?g`. Plain chat messages are ignored, so "W"
   and "L" reactions never count.
@@ -480,7 +495,8 @@ retention_days = 30
 ```
 
 The config is validated at startup. An invalid value exits with code 2 and a message naming
-the bad key.
+the bad key. This includes the placeholder `channel = "your_channel"` and a `busy_queue` larger
+than the outbox queue (the brake could never engage).
 
 ## 13. Error handling
 
@@ -489,7 +505,8 @@ the bad key.
 | WebSocket drop or reconnect | TwitchIO reconnects, honoring Twitch's reconnect message and the keepalive timeout. The bot logs `disconnected` and `reconnected`. Game timers keep running. Sending uses HTTP (Helix), not the socket, so a timeout message still goes out during the outage. |
 | Token refresh fails or token revoked | Log "re-run `python -m bot auth`", exit with code 3. The server's service does not restart on code 3. |
 | Channel not found | Exit code 2 with a message. |
-| Bot not a mod | Warning only (section 3). |
+| Bot not a mod | Warning, bot-token sends at 0.6/s (section 3). |
+| Mod status removed while running | The refused send is retried with the bot token; sending slows to 0.6/s (section 3). |
 | Exception in a command handler | Logged with a traceback. The user gets no reply. The bot continues. |
 | Exception in game code | Section 6. |
 | External API slow or failing | 3 s timeout, then the fallback list. |
@@ -584,17 +601,16 @@ cp .env.example .env            # fill in client id and secret
 
 ## 17. Later phases: captured requirements
 
-These are not designed here. They are listed so Phase 1 does not block them.
+These are not designed here. They are listed so Phase 1 does not block them. Phases 2-4 now
+have their own design specs (`2026-10-04-offline-chat-bot-phase2-design.md`, `-phase3-`, and
+`-phase4-`), which supersede these notes.
 
 - **`?trivia [category] [difficulty]`, `?hint`, `?skip`:** personal. Open Trivia DB supplies
   categories and difficulties. Easy questions are multiple choice and medium/hard are typed
   answers (Robert, 2026-10-04). `?hint` uses the in-game command support built in Phase 1.
 - **`?riddle`:** personal. A bundled riddle list with forgiving answer matching. Only the keyword, or
   typo tolerance.
-- **`?familyfeud` / `?feud`, `?ffskip` (3 votes):** chat-wide; adds a chat-wide game mode next to
-  personal sessions. Needs a survey dataset of answers with
-  counts. Several answers per round, with points scaled by popularity. Sourcing the data is
-  the main work.
+- **`?familyfeud`:** dropped by Robert (2026-10-04).
 - **`?higherlower`:** personal streak game. Needs search-popularity numbers for pairs of terms,
   as a bundled dataset.
 - **`?rng`, `?rng today|top|me|<user>`:** one roll from 0 to 1,000,000 per user per UTC day,
