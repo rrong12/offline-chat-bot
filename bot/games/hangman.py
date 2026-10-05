@@ -96,7 +96,7 @@ class Hangman(Game):
         self._last_guess[msg.user_id] = now
         if _compact(guess) == _compact(self.answer):
             return self._win(msg)
-        return Outcome()  # a wrong solve attempt costs nothing
+        return Outcome(messages=["❌ Not it."])  # a wrong solve attempt costs no lives
 
     def _guess_letter(self, letter: str, msg: ChatMessage) -> Outcome:
         if letter in self.answer:

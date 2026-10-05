@@ -66,11 +66,31 @@ def test_guess_cooldown(assets):
     assert g(game, "e", at=2) is not None
 
 
-def test_wrong_solve_attempt_is_free_attempt(assets):
+def test_wrong_solve_attempt_costs_no_lives(assets):
     game = make(assets)
     out = g(game, "walrus")
-    assert out is not None and not out.finished and out.messages == []
+    assert out is not None and not out.finished and out.messages == ["❌ Not it."]
     assert game.wrong == []
+
+
+def test_extra_words_after_g_are_a_solve_attempt(assets):
+    game = make(assets)
+    out = g(game, "e please")
+    assert out.messages == ["❌ Not it."] and game.guessed == set()
+
+
+def test_repeated_letters_reveal_together_for_one_point(assets):
+    game = make(assets, "lollipop")
+    out = g(game, "l")
+    assert game.board() == "L _ L L _ _ _ _"
+    assert game.held == {"id-alice": 1}
+    assert not out.finished
+
+
+def test_punctuation_is_shown_and_optional_when_solving(assets):
+    game = make(assets, "x-ray")
+    assert game.board() == "_ - _ _ _"
+    assert g(game, "xray").result == "won"
 
 
 def test_full_solve_wins_with_held_points(assets):
