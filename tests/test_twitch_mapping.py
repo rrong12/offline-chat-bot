@@ -253,3 +253,29 @@ async def test_disconnect_is_not_logged_during_a_deliberate_close(tmp_path, cloc
     conn._closing = True
     await client.event_websocket_closed(None)
     assert not list((tmp_path / "logs").glob("*.jsonl"))
+
+
+async def test_rejected_app_credentials_are_a_setup_error(tmp_path, clock, monkeypatch):
+    class RejectsLogin:
+        def __init__(self, connector):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def start(self, with_adapter=False):
+            exc = twitchio.HTTPException.__new__(twitchio.HTTPException)
+            exc.status = 403
+            raise exc
+
+    monkeypatch.setattr(twitch, "_Client", RejectsLogin)
+    conn = twitch.TwitchConnector(make_config(tmp_path), ActivityLog(tmp_path, clock), clock)
+
+    async def noop(*args):
+        pass
+
+    with pytest.raises(ConfigError, match="TWITCH_CLIENT_SECRET"):
+        await conn.run(noop, noop)

@@ -30,6 +30,9 @@ AUTH_URL = f"http://localhost:{AUTH_PORT}/oauth?scopes=" + "%20".join(BOT_SCOPES
 WATCHDOG_SECONDS = 30  # how often to check that the bot is still logged in and subscribed
 NO_SUBSCRIPTION_GRACE = 240  # seconds without a chat subscription before giving up (systemd restarts us)
 AUTH_FAILURE_STATUSES = {400, 401, 403}  # Twitch rejected the token itself; anything else may be transient
+_CREDENTIALS_REJECTED = (
+    "Twitch rejected the app login (HTTP {status}): check TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET in .env"
+)
 
 
 def strip_reply_mention(text: str, reply: Any) -> str:
@@ -154,6 +157,10 @@ class TwitchConnector:
         try:
             async with self._client:
                 await self._client.start(with_adapter=False)
+        except twitchio.HTTPException as exc:
+            if not self.channel_id and exc.status in AUTH_FAILURE_STATUSES:  # failed before setup finished
+                raise ConfigError(_CREDENTIALS_REJECTED.format(status=exc.status)) from exc
+            raise
         finally:
             if self._watchdog is not None:
                 self._watchdog.cancel()
@@ -295,7 +302,10 @@ async def authorize(config: Config) -> UserRef:
 
     client = AuthClient(client_id=config.client_id, client_secret=config.client_secret, fetch_client_user=False)
     async with client:
-        await client.login(load_tokens=False, save_tokens=False)
+        try:
+            await client.login(load_tokens=False, save_tokens=False)
+        except twitchio.HTTPException as exc:
+            raise ConfigError(_CREDENTIALS_REJECTED.format(status=exc.status)) from exc
         await client.adapter.run()
         print(f"Open this URL in a browser where you're logged in as the BOT account:\n\n  {AUTH_URL}\n")
         user = await done

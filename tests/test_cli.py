@@ -13,10 +13,12 @@ def write_config(tmp_path: Path) -> Path:
     return path
 
 
-def run_bot(*args: str, stdin: str = "", env_file: str | None = None, tmp_path: Path) -> subprocess.CompletedProcess:
+def run_bot(
+    *args: str, stdin: str = "", env_file: str | None = None, tmp_path: Path, extra_env: dict | None = None
+) -> subprocess.CompletedProcess:
     if env_file is not None:
         (tmp_path / ".env").write_text(env_file, encoding="utf-8")
-    clean_env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    clean_env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), **(extra_env or {})}
     return subprocess.run(
         [sys.executable, "-m", "bot", *args],
         input=stdin,
@@ -67,6 +69,51 @@ def test_database_newer_than_code_exits_2(tmp_path):
     result = run_bot("console", "--config", str(write_config(tmp_path)), tmp_path=tmp_path)
     assert result.returncode == 2
     assert "newer than this code" in result.stderr
+
+
+SECRETS = "TWITCH_CLIENT_ID=cid\nTWITCH_CLIENT_SECRET=secret\nBOT_ID=123\n"
+
+
+def test_env_file_is_read_and_real_environment_wins(tmp_path):
+    config = str(write_config(tmp_path))
+    from_file = run_bot("--config", config, env_file=SECRETS + "OWNER_IDS=notnum\n", tmp_path=tmp_path)
+    assert from_file.returncode == 2 and "got notnum" in from_file.stderr
+    from_env = run_bot("--config", config, tmp_path=tmp_path, extra_env={"OWNER_IDS": "fromenv"})
+    assert from_env.returncode == 2 and "got fromenv" in from_env.stderr
+    empty_env = run_bot("--config", config, tmp_path=tmp_path, extra_env={"OWNER_IDS": ""})
+    assert "got notnum" in empty_env.stderr  # an empty variable doesn't override .env
+
+
+def test_corrupt_database_exits_2(tmp_path):
+    db = tmp_path / "data" / "console" / "bot.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(b"this is not a sqlite database" * 100)
+    result = run_bot("console", "--config", str(write_config(tmp_path)), tmp_path=tmp_path)
+    assert result.returncode == 2
+    assert "Setup error" in result.stderr
+
+
+def test_sigterm_stops_cleanly(tmp_path):
+    import json
+    import signal
+    import time
+
+    config = write_config(tmp_path)
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "-m", "bot", "console", "--config", str(config)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+    )
+    try:
+        assert proc.stdout.readline().startswith("Console mode.")  # banner: the bot is running
+        time.sleep(0.2)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=10) == 0
+    finally:
+        proc.kill()
+    logs = list((tmp_path / "data" / "console" / "logs").glob("activity-*.jsonl"))
+    last = json.loads(logs[0].read_text().splitlines()[-1])
+    assert last["event"] == "shutdown" and last["by"] == "signal"
 
 
 def test_bad_config_exits_2(tmp_path):

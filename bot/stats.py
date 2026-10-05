@@ -52,6 +52,10 @@ MIGRATIONS: list[str] = [
 ]
 
 
+class DatabaseTooNew(RuntimeError):
+    """The database was written by a newer version of the bot."""
+
+
 @dataclass(frozen=True)
 class UserRow:
     user_id: str
@@ -118,7 +122,8 @@ class StatsStore:
                 self._conn.execute("INSERT INTO schema_version (version) VALUES (0)")
         version = self.schema_version()
         if version > len(MIGRATIONS):
-            raise RuntimeError(
+            self._conn.close()
+            raise DatabaseTooNew(
                 f"database schema is version {version}, newer than this code (version {len(MIGRATIONS)})"
             )
         for number, sql in enumerate(MIGRATIONS[version:], start=version + 1):
