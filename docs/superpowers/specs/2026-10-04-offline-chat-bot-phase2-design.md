@@ -1,7 +1,7 @@
 # Offline Chat Bot: Phase 2 Design (Trivia, Riddle, Higher or Lower)
 
 Date: 2026-10-04
-Status: draft for Robert's review. The decisions come from the design conversation on 2026-10-04.
+Status: approved by Robert on 2026-10-05 (from a high-level summary). The decisions come from the design conversation on 2026-10-04.
 Builds on: `2026-10-04-offline-chat-bot-design.md` (Phase 1: personal games, GameManager, stats).
 
 ## 1. Scope

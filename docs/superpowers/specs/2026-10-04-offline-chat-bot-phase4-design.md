@@ -1,7 +1,7 @@
 # Offline Chat Bot: Phase 4 Design (?ascii, ?chatsummary)
 
 Date: 2026-10-04
-Status: draft for Robert's review. The decisions come from the design conversation on 2026-10-04.
+Status: approved by Robert on 2026-10-05 (from a high-level summary). The decisions come from the design conversation on 2026-10-04.
 
 ## 1. `?ascii <emote>`
 
