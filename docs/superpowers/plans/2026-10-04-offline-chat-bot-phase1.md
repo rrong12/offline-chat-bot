@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (262 tests in total before the content task). Copy the code exactly. If a step's
+  this order (265 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -417,6 +417,7 @@ def content_dir(tmp_path: Path) -> Path:
     (root / "words" / "animals.txt").write_text("# comment\nalligator\ncat\nsea lion\n", encoding="utf-8")
     (root / "words" / "food.txt").write_text("ramen\nhot cheetos\n", encoding="utf-8")
     (root / "8ball.txt").write_text("Yes.\nNo.\n", encoding="utf-8")
+    (root / "blocked_rot13.txt").write_text("# test fragment: 'gat'\ntng\n", encoding="utf-8")
     (root / "fortunes.txt").write_text("Good things are coming.\n", encoding="utf-8")
     for name in ("catfacts", "dogfacts", "facts", "dadjokes"):
         (root / f"fallback_{name}.txt").write_text(f"fallback {name} line\n", encoding="utf-8")
@@ -2130,9 +2131,10 @@ git commit -m "Add command parsing, registry, and help text"
 Scramble (spec §7) is a personal game:
 
 - **Words:** single words of 4 to 10 ASCII letters with at least two distinct letters.
-- **Scramble:** reshuffled until it differs from the word.
+- **Scramble:** reshuffled until it differs from the word and spells none of the blocked fragments in `content/blocked_rot13.txt` (stored ROT13 so the file doesn't display them). Random letter orders can otherwise spell slurs: "giraffe" does about 5% of the time. A word that can't be scrambled cleanly is skipped.
 - **Hints only on request:** the first `?hint` shows the first and last letters. The second shows about half the letters (first, last, and `max(1, ceil(n/2) - 2)` random middle letters). Further `?hint`s are ignored.
 - **Points:** 10, 7, or 4 by hints taken.
+- **Anagrams:** any word from the same category with exactly the same letters also wins (UNDERTALE or DELTARUNE), since the scramble fits both.
 - **Attempt:** a single word with the same letter count as the answer.
 
 `bot/games/__init__.py` starts as a docstring stub; Task 10 fills it in.
@@ -2166,6 +2168,41 @@ def test_words_that_cannot_be_scrambled_are_skipped():
 
     assert not _valid("aaaa") and not _valid("AaAa")
     assert _valid("abba")
+
+
+def test_an_anagram_from_the_same_category_also_wins(tmp_path):
+    import random as random_module
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    (root / "words").mkdir(parents=True)
+    (root / "words" / "general.txt").write_text("canoe\nocean\n", encoding="utf-8")
+    game = Scramble("general", random_module.Random(1), Assets(root))
+    other = "ocean" if game.word == "CANOE" else "canoe"
+    out = game.on_message(make_msg(other), None)
+    assert out.finished and out.messages == [f"✅ alice got it: {other.upper()} (+10)"]
+
+
+def test_scrambles_never_spell_a_blocked_fragment(assets):
+    # the test content blocks "GAT"; unfiltered, some shuffles of ALLIGATOR would contain it
+    scrambles = {make(assets, seed=seed).scrambled for seed in range(300)}
+    assert scrambles and not any("GAT" in s for s in scrambles)
+
+
+def test_word_that_cannot_be_scrambled_cleanly_is_skipped(tmp_path, monkeypatch):
+    import random as random_module
+
+    from bot.assets import Assets
+    from bot.games import scramble as scramble_module
+
+    root = tmp_path / "content"
+    (root / "words").mkdir(parents=True)
+    (root / "words" / "only.txt").write_text("abcd\nwxyz\n", encoding="utf-8")
+    (root / "blocked_rot13.txt").write_text("n\n", encoding="utf-8")  # blocks every scramble containing "A"
+    monkeypatch.setattr(scramble_module, "MAX_SHUFFLES", 50)
+    for seed in range(20):
+        assert scramble_module.Scramble("only", random_module.Random(seed), Assets(root)).word == "WXYZ"
 
 
 def test_start_message_shows_scramble_that_differs(assets):
@@ -2311,6 +2348,8 @@ class Game(ABC):
 
 from __future__ import annotations
 
+import codecs
+import logging
 import math
 import random
 from datetime import datetime
@@ -2319,6 +2358,19 @@ from bot.assets import Assets
 from bot.connectors.base import ChatMessage
 from bot.games.base import Game, Outcome
 from bot.text import normalize
+
+logger = logging.getLogger(__name__)
+
+MAX_SHUFFLES = 200
+
+
+def _blocked_fragments(assets: Assets) -> tuple[str, ...]:
+    """Words a scramble must never spell by accident (stored ROT13 in content/blocked_rot13.txt)."""
+    try:
+        return tuple(codecs.decode(line, "rot13").upper() for line in assets.lines("blocked_rot13"))
+    except FileNotFoundError:
+        logger.warning("content/blocked_rot13.txt is missing: scrambles are not being filtered")
+        return ()
 
 
 def _valid(entry: str) -> bool:
@@ -2345,20 +2397,34 @@ class Scramble(Game):
     def __init__(self, category: str | None, rng: random.Random, assets: Assets) -> None:
         super().__init__(category, rng, assets)
         assert category is not None
-        self.word = rng.choice([w for w in assets.words(category) if _valid(w)]).upper()
-        self.scrambled = self._scramble()
+        blocked = _blocked_fragments(assets)
+        candidates = [w.upper() for w in assets.words(category) if _valid(w)]
+        rng.shuffle(candidates)
+        for word in candidates:  # almost always the first word works
+            scrambled = self._scramble(word, blocked)
+            if scrambled is not None:
+                self.word, self.scrambled = word, scrambled
+                break
+        else:
+            raise ValueError(f"no word in {category!r} can be scrambled cleanly")
+        # Any word from this category that uses exactly the same letters is also a right answer
+        # (e.g. UNDERTALE and DELTARUNE), since the scramble fits both.
+        letters = sorted(self.word)
+        self._answers = {w.lower() for w in candidates if sorted(w) == letters}
         self.hints_shown = 0
         middle = list(range(1, len(self.word) - 1))
         rng.shuffle(middle)
         self._reveal_order = middle
 
-    def _scramble(self) -> str:
-        letters = list(self.word)
-        for _ in range(50):
+    def _scramble(self, word: str, blocked: tuple[str, ...]) -> str | None:
+        """A shuffle that differs from the word and spells none of the blocked fragments, or None."""
+        letters = list(word)
+        for _ in range(MAX_SHUFFLES):
             self.rng.shuffle(letters)
-            if "".join(letters) != self.word:
-                break
-        return "".join(letters)
+            candidate = "".join(letters)
+            if candidate != word and not any(fragment in candidate for fragment in blocked):
+                return candidate
+        return None
 
     def start(self) -> str:
         return f"🔤 Unscramble ({self.category}): {self.scrambled} · {self.time_limit}s · {{p}}hint for a hint"
@@ -2374,11 +2440,11 @@ class Scramble(Game):
         guess = normalize(msg.text)
         if " " in guess or len(guess) != len(self.word):
             return None
-        if guess != self.word.lower():
+        if guess not in self._answers:
             return Outcome()
         points = self.POINTS[self.hints_shown]
         return Outcome(
-            messages=[f"✅ {msg.display_name} got it: {self.word} (+{points})"],
+            messages=[f"✅ {msg.display_name} got it: {guess.upper()} (+{points})"],
             awards={msg.user_id: points},
             winners={msg.user_id},
             finished=True,
@@ -2402,7 +2468,7 @@ class Scramble(Game):
 
 Run: `.venv/bin/pytest tests/test_scramble.py -q`
 
-Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (12 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -6899,6 +6965,14 @@ def test_every_game_and_streamer_has_a_recorded_source(category):
     assert not missing, f"{category}: no source row in words/SOURCES.md for {missing}"
 
 
+def test_blocked_fragment_list_exists():
+    import codecs
+
+    fragments = [codecs.decode(line, "rot13") for line in REAL.lines("blocked_rot13")]
+    assert len(fragments) >= 20
+    assert all(f.isalpha() and f == f.lower() for f in fragments)
+
+
 def test_8ball_has_20_answers():
     assert len(REAL.lines("8ball")) == 20
 
@@ -6947,7 +7021,67 @@ Outlook not so good.
 Very doubtful.
 ```
 
-- [ ] **Step 4: Write the four general word lists**
+- [ ] **Step 4: Write `bot/content/blocked_rot13.txt`**: the fragments a Scramble puzzle must never show, ROT13-encoded (Task 8 decodes them). Copy exactly:
+
+```text
+# Fragments a Scramble puzzle must never show, ROT13-encoded so this file doesn't display them.
+# Decode one with: python3 -c "import codecs; print(codecs.decode('fybg', 'rot13'))"  (prints 'slot')
+nany
+nahf
+ovgpu
+obbo
+puvax
+pyvg
+pbpx
+pbba
+phz
+phag
+qvpx
+qvyqb
+qlxr
+snt
+shpx
+tbbx
+urvy
+uvgyre
+ubzb
+wnc
+wvmm
+xvxr
+xxx
+xlf
+zvys
+anmv
+arteb
+avt
+avtn
+avtt
+avte
+ahqr
+cnxv
+cravf
+cvff
+cbea
+chff
+encr
+ergneq
+frzra
+frk
+fuvg
+fvrt
+fyhg
+fcvp
+gneq
+gvg
+genaal
+gjng
+intva
+jnax
+jrgonpx
+juber
+```
+
+- [ ] **Step 5: Write the four general word lists**
 
 Write `animals.txt`, `countries.txt`, `food.txt`, and `general.txt` in `bot/content/words/`,
 with one entry per line.
@@ -6970,7 +7104,7 @@ with one entry per line.
 - No duplicates.
 - Nothing sexual, no slurs, nothing that's an insult when scrambled or revealed.
 
-- [ ] **Step 5: Research and write `streamers.txt`, `games.txt`, and `SOURCES.md`**
+- [ ] **Step 6: Research and write `streamers.txt`, `games.txt`, and `SOURCES.md`**
 
 Follow the same rules as Step 4, plus these:
 
@@ -7009,7 +7143,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 | minecraft | https://en.wikipedia.org/wiki/Minecraft |
 ```
 
-- [ ] **Step 6: Write `fortunes.txt` and the four fallback files**
+- [ ] **Step 7: Write `fortunes.txt` and the four fallback files**
 
 | File | Contents |
 |---|---|
@@ -7017,19 +7151,19 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 | `fallback_catfacts.txt`, `fallback_dogfacts.txt`, `fallback_facts.txt` | 50+ well-established facts each, one per line, under 400 characters, no links. These are the backups for when an API is down. Only use facts you're confident are true; if unsure, leave it out. |
 | `fallback_dadjokes.txt` | 50+ clean dad jokes, one per line, setup and punchline on the same line. |
 
-- [ ] **Step 7: Run the content test and the full suite**
+- [ ] **Step 8: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 277 tests pass.
+Expected: `16 passed`, then all 281 tests pass.
 
-- [ ] **Step 8: Play every game by hand in console mode**
+- [ ] **Step 9: Play every game by hand in console mode**
 
 Run: `.venv/bin/python -m bot console`, then play `?scramble`, `?scramble categories`,
 `?hangman streamers` (guess with `?g`), `?hint`, `?skip`, two names playing at once, `?cookie`,
 and `?leaderboard`. Expected: words come from the new lists, and the bot never reveals a blank or
 garbled word.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add bot/content tests/test_content.py
@@ -7202,7 +7336,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (277).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (281).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
