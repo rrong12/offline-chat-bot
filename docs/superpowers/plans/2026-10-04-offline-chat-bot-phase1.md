@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (233 tests in total before the content task). Copy the code exactly. If a step's
+  this order (236 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -4595,7 +4595,7 @@ git commit -m "Add configuration loading and validation"
 
 ### Task 14: Console connector
 
-Lines look like `alice: ?scramble`, and a leading `@` marks a moderator. Users get IDs like `console-alice`, so `OWNER_IDS=console-robert` makes `robert` an owner in console mode. A scripted `lines=` list drives tests. Interactive mode reads stdin on a daemon thread, so `?bot shutdown` exits immediately instead of waiting for another Enter.
+Lines look like `alice: ?scramble`, and a leading `@` marks a moderator. Users get IDs like `console-alice`, so `OWNER_IDS=console-robert` makes `robert` an owner in console mode. A scripted `lines=` list drives tests. Interactive mode reads stdin on a daemon thread (`pump_lines`), so `?bot shutdown` exits immediately instead of waiting for another Enter. A line typed after shutdown is dropped quietly instead of raising on the closed event loop.
 
 **Files:**
 - Create: `bot/connectors/console.py`
@@ -4604,10 +4604,12 @@ Lines look like `alice: ?scramble`, and a leading `@` marks a moderator. Users g
 - [ ] **Step 1: Write the failing test `tests/test_console.py`**
 
 ```python
+import asyncio
+import io
 from itertools import count
 
 from bot.clock import FakeClock
-from bot.connectors.console import ConsoleConnector, parse_console_line
+from bot.connectors.console import ConsoleConnector, parse_console_line, pump_lines
 
 
 def test_parse_console_line_user_and_mod(clock: FakeClock):
@@ -4645,6 +4647,35 @@ async def test_console_send_marks_replies(clock: FakeClock):
     assert conn.sent == ["hello", "plain"]
 
 
+async def test_close_before_run_returns_immediately(clock: FakeClock):
+    conn = ConsoleConnector(clock=clock, lines=["alice: hi"])
+    seen = []
+
+    async def on_message(msg):
+        seen.append(msg)
+
+    async def on_ready(info):
+        pass
+
+    await conn.close()
+    await conn.run(on_message, on_ready)
+    assert seen == []
+
+
+def test_stdin_pump_stops_quietly_after_the_loop_closes():
+    loop = asyncio.new_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    loop.close()
+    pump_lines(io.StringIO("typed after shutdown\n"), loop, queue)  # must not raise
+
+
+async def test_stdin_pump_delivers_lines_then_end_marker():
+    queue: asyncio.Queue = asyncio.Queue()
+    pump_lines(io.StringIO("a: hi\nb: yo\n"), asyncio.get_running_loop(), queue)
+    await asyncio.sleep(0)
+    assert [queue.get_nowait() for _ in range(3)] == ["a: hi\n", "b: yo\n", None]
+
+
 async def test_console_lookup_user(clock: FakeClock):
     conn = ConsoleConnector(clock=clock, lines=[])
     assert (await conn.lookup_user("@Bob")).login == "bob"
@@ -4669,6 +4700,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterable, Iterator
 from itertools import count
+from typing import TextIO
 
 from bot.clock import Clock
 from bot.connectors.base import ChatMessage, OnMessage, OnReady, ReadyInfo, SendResult, UserRef
@@ -4701,6 +4733,19 @@ def parse_console_line(line: str, clock: Clock, ids: Iterator[int]) -> ChatMessa
     )
 
 
+def pump_lines(stream: TextIO, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[str | None]) -> None:
+    """Feed lines from a blocking stream into an asyncio queue (runs on a daemon thread).
+
+    Stops quietly if the event loop has already closed, e.g. a line typed after ?bot shutdown.
+    """
+    try:
+        for raw in stream:
+            loop.call_soon_threadsafe(queue.put_nowait, raw)
+        loop.call_soon_threadsafe(queue.put_nowait, None)
+    except RuntimeError:  # "Event loop is closed"
+        return
+
+
 class ConsoleConnector:
     channel_id = "console"
 
@@ -4728,6 +4773,8 @@ class ConsoleConnector:
 
     async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
         await on_ready(ReadyInfo("console", self.channel_id, True))
+        if self._closed:
+            return
         if self._lines is not None:
             for line in self._lines:
                 if self._closed:
@@ -4740,12 +4787,8 @@ class ConsoleConnector:
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._queue = queue
 
-        def read_stdin() -> None:  # daemon thread, so a blocked read never keeps the process alive
-            for raw in sys.stdin:
-                loop.call_soon_threadsafe(queue.put_nowait, raw)
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-        threading.Thread(target=read_stdin, daemon=True).start()
+        # Daemon thread, so a blocked read never keeps the process alive after shutdown.
+        threading.Thread(target=pump_lines, args=(sys.stdin, loop, queue), daemon=True).start()
         while not self._closed:
             line = await queue.get()
             if line is None:
@@ -4772,7 +4815,7 @@ class ConsoleConnector:
 
 Run: `.venv/bin/pytest tests/test_console.py -q`
 
-Expected: PASS (4 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (7 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -5917,10 +5960,11 @@ def test_console_mode_plays_and_shuts_down(tmp_path):
     config = write_config(tmp_path)
     result = run_bot(
         "console", "--config", str(config),
-        stdin="alice: ?coinflip\nbob: ?help\n@mod: ?bot shutdown\n",
+        stdin="alice: ?coinflip\nbob: ?help\n@mod: ?bot shutdown\nalice: typed after shutdown\n",
         tmp_path=tmp_path,
     )
     assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
     assert "bot → alice: 🪙" in result.stdout
     assert "bot → bob: Games: ?scramble ?hangman ?skip" in result.stdout
     assert "bot → mod: Shutting down (requested by mod)." in result.stdout
@@ -6369,7 +6413,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 248 tests pass.
+Expected: `15 passed`, then all 251 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -6545,7 +6589,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (248).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (251).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
