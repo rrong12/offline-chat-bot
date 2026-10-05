@@ -215,6 +215,35 @@ async def test_send_uses_app_token_when_modded_and_bot_token_otherwise(tmp_path,
     assert client.sent == [("hi", None), ("hi", "123")]
 
 
+async def test_send_falls_back_to_bot_token_when_mod_status_is_lost(tmp_path, clock):
+    class ForbiddenForAppToken(FakeClient):
+        def create_partialuser(self, user_id):
+            client = self
+
+            class Channel:
+                async def send_message(self, text, sender, token_for=None, reply_to_message_id=None):
+                    if token_for is None:
+                        exc = twitchio.HTTPException.__new__(twitchio.HTTPException)
+                        exc.status = 403
+                        raise exc
+                    client.sent.append((text, token_for))
+
+            return Channel()
+
+    client = ForbiddenForAppToken()
+    conn = connector_for(tmp_path, clock, client)
+    conn.channel_id, conn.is_mod = "999", True
+    ready = []
+
+    async def on_ready(info):
+        ready.append(info)
+
+    conn._on_ready = on_ready
+    result = await conn.send("hi")
+    assert result.sent and not conn.is_mod and client.sent == [("hi", "123")]
+    assert [r.is_mod for r in ready] == [False]  # the core slows sending down
+
+
 async def test_send_maps_http_errors_to_a_drop(tmp_path, clock):
     class Forbidden(FakeClient):
         def create_partialuser(self, user_id):

@@ -14,6 +14,10 @@ MAX_LIMIT = 10
 _NUMBER = re.compile(r"-?[0-9]+")  # ASCII only: str.isdigit() accepts "²", which int() rejects
 
 
+def _plural(count: int, word: str) -> str:
+    return word if count == 1 else word + "s"
+
+
 def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: Sequence[str]) -> None:
     games = [g.lower() for g in game_names]
 
@@ -63,7 +67,8 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
                 return
             rank = stats.rank(user_id, game)
             rank_text = f" · rank #{rank}" if rank else ""
-            ctx.reply(f"📊 {name} · {game}: {row.wins} wins / {row.played} played · {row.points} pts{rank_text}")
+            wins_text = f"{row.wins} {_plural(row.wins, 'win')}"
+            ctx.reply(f"📊 {name} · {game}: {wins_text} / {row.played} played · {row.points} pts{rank_text}")
             return
         if not per_game:
             ctx.reply(f"No stats for {name} yet.")
@@ -72,7 +77,7 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
         wins = sum(g.wins for g in per_game)
         played = sum(g.played for g in per_game)
         parts = " | ".join(f"{g.game} {g.wins}W/{g.played}P {g.points}pts" for g in per_game)
-        ctx.reply(f"📊 {name}: {points} pts, {wins} wins, {played} played | {parts}")
+        ctx.reply(f"📊 {name}: {points} pts, {wins} {_plural(wins, 'win')}, {played} played | {parts}")
 
     registry.add(
         Command(
@@ -90,5 +95,6 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
             "{p}gamestats [game] [username]",
             "Wins, games played, and points: yours or someone else's, overall or for one game.",
             "Stats",
+            global_cooldown=False,  # personal lookup: never blocked by someone else's
         )
     )

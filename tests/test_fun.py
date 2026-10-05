@@ -101,10 +101,29 @@ async def test_fact_with_links_mentions_or_wrong_type_falls_back(assets, clock, 
 
 
 async def test_fact_text_keeps_decomposed_accents(assets, clock):
-    text = "e" + chr(0x0301) + "clairs are pastries."
+    text = "E" + chr(0x0301) + "clairs are pastries."
     fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
     await fun.run("?catfact")
-    assert fun.replies == ["🐱 " + chr(0x00E9) + "clairs are pastries."]
+    assert fun.replies == ["🐱 " + chr(0x00C9) + "clairs are pastries."]
+
+
+@pytest.mark.parametrize("text, safe", [
+    ("Some people are gatoring around.", False),  # long fragment "gator" at a word start
+    ("Navigators use the stars.", True),  # a fragment inside a word is fine
+    ("Gat is a short fragment.", False),  # short fragment "gat" as a whole word
+    ("Gats too.", False),  # ... or its plural
+    ("Gather round.", True),  # short fragments never match as prefixes
+    (" was a famous idea.", False),  # cut off at the start
+    ("42 is the answer.", True),
+    ('"Quoted" facts are fine.', True),
+])
+async def test_fact_filter_blocks_bad_words_and_truncated_text(content_dir, clock, text, safe):
+    from bot.assets import Assets
+
+    (content_dir / "blocked_rot13.txt").write_text("tng\ntngbe\n", encoding="utf-8")  # gat, gator
+    fun = Fun(Assets(content_dir), clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
+    await fun.run("?catfact")
+    assert (fun.replies[0] != "🐱 fallback catfacts line") is safe
 
 
 async def test_fact_text_is_stripped_of_invisible_and_control_characters(assets, clock):

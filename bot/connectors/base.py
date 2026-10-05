@@ -43,7 +43,7 @@ class ReadyInfo:
 
 
 OnMessage = Callable[[ChatMessage], Awaitable[None]]
-OnReady = Callable[[ReadyInfo], Awaitable[None]]
+OnReady = Callable[[ReadyInfo], Awaitable[None]]  # once connected, and again if mod status is lost
 
 
 class Connector(Protocol):

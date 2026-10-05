@@ -14,6 +14,7 @@ from bot.games import ALL_GAMES
 
 _CHANNEL = re.compile(r"^[a-z0-9_]{3,25}$")
 MAX_SEND_RATE = 3.0  # messages/s; Twitch allows a mod account about 100 per 30 s
+PLACEHOLDER_CHANNEL = "your_channel"  # the value shipped in config.toml
 
 # Every setting config.toml may contain. Anything else is almost certainly a typo.
 _SCHEMA: dict[str, set[str] | None] = {
@@ -106,6 +107,8 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     channel = raw_channel.strip().lower() if isinstance(raw_channel, str) else ""
     if not _CHANNEL.fullmatch(channel):
         raise ConfigError(f"channel must be a Twitch username, got {raw_channel!r}")
+    if channel == PLACEHOLDER_CHANNEL:
+        raise ConfigError("set channel in config.toml to the Twitch channel the bot should join")
 
     prefix = _get(table, "prefix", "?")
     if not isinstance(prefix, str) or not 1 <= len(prefix) <= 3 or any(c.isspace() for c in prefix):
@@ -139,7 +142,7 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         if bad:
             raise ConfigError(f"OWNER_IDS must be numeric Twitch user IDs, got {', '.join(bad)}")
 
-    return Config(
+    config = Config(
         client_id=client_id,
         client_secret=client_secret,
         bot_id=bot_id or "console-bot",
@@ -158,3 +161,8 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         log_retention_days=_number(table, "logs.retention_days", 30, integer=True, minimum=1),
         data_dir=path.parent / "data",
     )
+    if config.busy_queue > config.outbox_max_queue:
+        raise ConfigError(
+            f"games.busy_queue ({config.busy_queue}) can't be larger than outbox.max_queue ({config.outbox_max_queue})"
+        )
+    return config

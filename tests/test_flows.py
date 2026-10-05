@@ -67,7 +67,7 @@ async def test_scramble_round_to_leaderboard(bot: Bot):
     await bot.say("carol: ?leaderboard")
     assert bot.out[-1] == "🏆 Top 1 overall: 1. alice (10)"
     await bot.say("alice: ?gamestats")
-    assert bot.out[-1] == "📊 alice: 10 pts, 1 wins, 1 played | scramble 1W/1P 10pts"
+    assert bot.out[-1] == "📊 alice: 10 pts, 1 win, 1 played | scramble 1W/1P 10pts"
 
 
 async def test_two_players_play_at_once(bot: Bot):
@@ -220,6 +220,34 @@ async def test_quick_commands_have_user_and_global_cooldowns(bot: Bot):
     bot.clock.advance(5)
     await bot.say("bob: ?coinflip")
     assert len(bot.out) == 2
+
+
+async def test_personal_commands_are_not_blocked_by_someone_elses(bot: Bot):
+    await bot.say("alice: ?gamestats")
+    await bot.say("bob: ?gamestats")
+    await bot.say("carol: ?help")
+    await bot.say("dave: ?help")
+    await bot.say("erin: ?cookie")
+    await bot.say("frank: ?cookie")
+    assert len(bot.out) == 6
+    await bot.say("gina: ?coinflip")
+    await bot.say("hank: ?coinflip")  # public commands keep the chat-wide cooldown
+    assert len(bot.out) == 7
+
+
+async def test_not_being_a_mod_slows_sending_down(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets)
+    await bot.core._on_ready(ReadyInfo("chan", "chan", is_mod=False))
+    assert bot.core.outbox.rate == 0.6 and bot.core.outbox.burst == 1
+
+
+async def test_losing_mod_status_while_running_slows_sending_down(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets)
+    await bot.core._on_ready(ReadyInfo("chan", "chan", is_mod=True))
+    assert bot.core.outbox.rate > 0.6  # unchanged while modded
+    await bot.core._on_ready(ReadyInfo("chan", "chan", is_mod=False))
+    assert bot.core.outbox.rate == 0.6 and bot.core.outbox.burst == 1
+    assert [e["event"] for e in bot.events()].count("startup") == 1
 
 
 async def test_help_overview_lists_real_commands_under_500_chars(bot: Bot):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import random
 import re
@@ -35,14 +36,56 @@ def _get(data: Any, *path: str | int) -> Any:
     return data
 
 
-def _safe_text(value: Any) -> str | None:
-    """API text cleaned for chat, or None if it's missing, too long, or carries links/mentions."""
+# Innocent words that start with a blocked fragment of 4+ letters (checked as prefixes).
+_INNOCENT_PREFIXES = (
+    "analy", "analog", "analges", "spice", "spicy", "cockt", "cockr", "cockp", "cockat", "cocker",
+    "dicken", "rapese", "tardi", "tardy", "retardant", "homog", "homon", "homoph", "pakist",
+    "negroni", "coonh", "pussyc", "pussyw", "booby", "nudib", "heilo",
+)
+
+
+class BlockedWords:
+    """Finds blocked words in prose ("mentally retarded" yes; "night", "Japanese", "mustard" no).
+
+    Fragments of 3 letters must be the whole word (or that word + "s"); longer fragments match at
+    the start of a word unless the word is a known innocent one (analysis, spices, Pakistan, ...).
+    """
+
+    def __init__(self, fragments: list[str]) -> None:
+        self.short = {f for f in fragments if len(f) < 4}
+        self.long = tuple(f for f in fragments if len(f) >= 4)
+
+    @classmethod
+    def load(cls, assets: Assets) -> BlockedWords:
+        try:
+            return cls([codecs.decode(line, "rot13") for line in assets.lines("blocked_rot13")])
+        except FileNotFoundError:
+            return cls([])
+
+    def found_in(self, text: str) -> bool:
+        for word in re.findall(r"[a-z]+", text.lower()):
+            if word in self.short or (word.endswith("s") and word[:-1] in self.short):
+                return True
+            if word == "homo" or word.startswith(_INNOCENT_PREFIXES):  # "Homo sapiens", "analysis"
+                continue
+            if word.startswith(self.long):
+                return True
+        return False
+
+
+def _safe_text(value: Any, blocked: BlockedWords | None = None) -> str | None:
+    """API text cleaned for chat, or None if it's unusable: missing, too long, cut off at the start,
+    or carrying links, @mentions or blocked words (the bot is a mod, so Twitch won't filter it)."""
     if not isinstance(value, str):
         return None
     text = unicodedata.normalize("NFC", value)  # compose accents first so stripping marks keeps them
     text = " ".join(strip_invisible(text).split())  # all whitespace (incl. newlines) becomes one space
     text = "".join(ch for ch in text if ch.isprintable())  # then drop control characters
     if not text or len(text) > MAX_FACT or _UNSAFE.search(text):
+        return None
+    if not (text[0].isupper() or text[0].isdigit() or text[0] in "\"'"):  # looks truncated
+        return None
+    if blocked is not None and blocked.found_in(text):
         return None
     return text
 
@@ -89,11 +132,13 @@ def register_fun(
     registry.add(Command("8ball", eightball, "{p}8ball [question]", "Ask the magic 8-ball a question.", "Fun"))
     registry.add(Command("coinflip", coinflip, "{p}coinflip", "Flip a coin.", "Fun"))
 
+    blocked = BlockedWords.load(assets)
+
     def fact_handler(emoji: str, url: str, path: tuple, headers: dict, fallback: str):
         async def handler(ctx: CommandContext) -> None:
             data = await http.get_json(url, headers=headers or None)
             try:
-                text = _safe_text(_get(data, *path)) if data is not None else None
+                text = _safe_text(_get(data, *path), blocked) if data is not None else None
             except (KeyError, IndexError, TypeError):
                 text = None
             ctx.reply(f"{emoji} {text or rng.choice(assets.lines(fallback))}")
@@ -164,5 +209,6 @@ def register_fun(
             "{p}cookie | {p}cookie give <username>",
             "Open your daily fortune cookie, or give it to someone. Resets at 00:00 UTC.",
             "Fun",
+            global_cooldown=False,  # personal: one person's cookie shouldn't block another's
         )
     )

@@ -205,10 +205,11 @@ async def test_refusal_replies_are_rate_limited_per_player(h: Harness):
     assert len(h.replies) == 2
 
 
-async def test_category_list_is_rate_limited_too(h: Harness):
+async def test_category_list_is_rate_limited_per_game(h: Harness):
+    await h.command("?scramble categories")
     await h.command("?scramble categories")
     await h.command("?hangman categories")
-    assert h.replies == ["Scramble categories: animals, food"]
+    assert h.replies == ["Scramble categories: animals, food", "Hangman categories: animals, food"]
 
 
 async def test_categories_then_pick_works_immediately(h: Harness):

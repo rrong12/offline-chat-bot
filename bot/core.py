@@ -31,6 +31,7 @@ from bot.text import format_duration
 logger = logging.getLogger(__name__)
 
 EXIT_OK, EXIT_CRASH, EXIT_CONFIG, EXIT_AUTH = 0, 1, 2, 3
+NON_MOD_RATE = 0.6  # messages/s; Twitch's limit for a non-mod account is 20 per 30 s
 
 
 class BotCore:
@@ -53,6 +54,7 @@ class BotCore:
         self.clock = clock
         self.http = http
         self.started_mono = clock.mono()
+        self._ready = False
         self.outbox = Outbox(
             connector.send,
             clock,
@@ -186,10 +188,17 @@ class BotCore:
             self.tick()
 
     async def _on_ready(self, info: ReadyInfo) -> None:
-        self.log.write("startup", version=__version__, channel=info.channel_login, is_mod=info.is_mod)
+        if not self._ready:  # called again only when mod status is lost while running
+            self._ready = True
+            self.log.write("startup", version=__version__, channel=info.channel_login, is_mod=info.is_mod)
         if not info.is_mod:
+            # Twitch allows a non-mod 20 messages per 30 s; stay under it.
+            self.outbox.rate = min(self.outbox.rate, NON_MOD_RATE)
+            self.outbox.burst = 1
             logger.warning(
-                "The bot is not a mod in %s: no Chat Bot badge, 1 msg/s, slow mode applies.", info.channel_login
+                "The bot is not a mod in %s: no Chat Bot badge, slow mode applies, sending slowed to %.1f/s.",
+                info.channel_login,
+                self.outbox.rate,
             )
 
     async def _cleanup_step(self, where: str, make: Callable[[], Awaitable[object]]) -> None:

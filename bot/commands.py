@@ -51,7 +51,7 @@ class Command:
     aliases: tuple[str, ...] = ()
     controller_only: bool = False
     cooldown: bool = True  # per-user cooldown applies
-    global_cooldown: bool = True  # chat-wide cooldown also applies (off for personal game starts)
+    global_cooldown: bool = True  # chat-wide cooldown also applies (off for personal commands like ?cookie)
     listed: bool = True  # shown in the ?help overview
 
 

@@ -5,6 +5,7 @@ import re
 import pytest
 
 from bot.assets import Assets
+from bot.fun import BlockedWords
 from bot.games.hangman import _valid as hangman_valid
 from bot.games.scramble import _valid as scramble_valid
 
@@ -42,6 +43,17 @@ def test_blocked_fragment_list_exists():
     fragments = [codecs.decode(line, "rot13") for line in REAL.lines("blocked_rot13")]
     assert len(fragments) >= 20
     assert all(f.isalpha() and f == f.lower() for f in fragments)
+
+
+def test_blocked_list_catches_bad_words_in_prose_but_not_common_words():
+    blocked = BlockedWords.load(REAL)
+    assert blocked.found_in("His parents thought he was mentally retarded.")
+    for fine in (
+        "The night sky over Japan is beautiful.", "Japanese analysts studied spices from Pakistan.",
+        "Mustard is a condiment.", "Charles Dickens wrote fast.", "Homo sapiens evolved in Africa.",
+        "The title of the book.", "Cumulative rainfall rose.", "A cocktail party.", "Tardigrades survive space.",
+    ):
+        assert not blocked.found_in(fine), fine
 
 
 def test_8ball_has_20_answers():

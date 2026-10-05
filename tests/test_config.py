@@ -13,8 +13,11 @@ def write(tmp_path: Path, text: str) -> Path:
     return path
 
 
-def test_repo_config_file_is_valid():
-    cfg = load_config(Path(__file__).parent.parent / "config.toml", ENV)
+def test_repo_config_file_is_valid_once_a_channel_is_set(tmp_path):
+    shipped = (Path(__file__).parent.parent / "config.toml").read_text(encoding="utf-8")
+    with pytest.raises(ConfigError, match="set channel"):
+        load_config(write(tmp_path, shipped), ENV)  # the placeholder must be replaced
+    cfg = load_config(write(tmp_path, shipped.replace('"your_channel"', '"real_channel"')), ENV)
     assert cfg.prefix == "?" and cfg.enabled_games == ("scramble", "hangman")
 
 
@@ -48,6 +51,7 @@ def test_defaults_and_env(tmp_path):
         ('channel = "ok_name"\nprefix = ".b"', "can't start with"),
         ('channel = "ok_name"\n[games]\nenabled = []', "at least one game"),
         ("channel = 123", "channel must be a Twitch username"),
+        ('channel = "ok_name"\n[games]\nbusy_queue = 40', "can't be larger than outbox.max_queue"),
     ],
 )
 def test_invalid_values_name_the_key(tmp_path, toml, message):

@@ -1,4 +1,4 @@
-"""Hangman: chat guesses with ?g <letter> or ?g <answer>. Plain chat never counts."""
+"""Hangman, a personal game: guess with ?g <letter> or ?g <answer>. Plain chat never counts."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class Hangman(Game):
     usage = "{p}hangman [category]"
     description = (
         "Your own hidden word: guess with {p}g <letter> or {p}g <answer>. 6 wrong letters and you lose. "
-        "1 point per correct letter, plus 10 for solving it. {p}hangman categories lists topics. "
+        "Win to score 10 points plus 1 per correct letter. {p}hangman categories lists topics. "
         "{p}skip ends your game."
     )
     time_limit = 120
@@ -68,7 +68,7 @@ class Hangman(Game):
         return " ".join(cells)
 
     def status(self) -> str:
-        wrong = " ".join(self.wrong) or "-"
+        wrong = " ".join(sorted(self.wrong)) or "-"  # sorted, so guess order can't spell a word
         return f"{self.board()} | wrong: {wrong} ({len(self.wrong)}/{self.LIVES})"
 
     def _hidden(self) -> set[str]:

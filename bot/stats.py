@@ -113,6 +113,7 @@ class StatsStore:
         self._conn.execute("PRAGMA foreign_keys = ON")
         if str(path) != ":memory:":
             self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA synchronous = NORMAL")  # safe with WAL; every command commits
         self._migrate()
 
     def _migrate(self) -> None:

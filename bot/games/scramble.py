@@ -1,4 +1,4 @@
-"""Scramble: unscramble a word. First exact answer wins; hints lower the points."""
+"""Scramble, a personal game: unscramble your word; hints lower the points."""
 
 from __future__ import annotations
 

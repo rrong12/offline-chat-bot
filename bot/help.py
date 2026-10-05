@@ -23,5 +23,6 @@ def register_help(registry: CommandRegistry) -> None:
             "Info",
             aliases=("commands",),
             listed=False,
+            global_cooldown=False,  # personal: one person's ?help shouldn't block another's
         )
     )

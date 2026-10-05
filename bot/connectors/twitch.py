@@ -245,6 +245,12 @@ class TwitchConnector:
         except twitchio.MessageRejectedError as exc:
             return SendResult(False, exc.code, exc.message)
         except twitchio.HTTPException as exc:
+            if exc.status == 403 and self.is_mod:  # mod status was removed while running
+                self.is_mod = False
+                self.log.write("error", where="twitch.send", type="LostModStatus", message="sending as the bot now")
+                if self._on_ready is not None:
+                    await self._on_ready(ReadyInfo(self.config.channel, self.channel_id, False))
+                return await self.send(text, reply_to)
             return SendResult(False, f"http_{exc.status}", str(exc))
         return SendResult(True)
 

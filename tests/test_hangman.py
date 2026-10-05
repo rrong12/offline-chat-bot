@@ -49,6 +49,13 @@ def test_wrong_letter_costs_a_life(assets):
     assert out.messages == ["_ _ _ / _ _ _ _ | wrong: Z (1/6)"]
 
 
+def test_wrong_letters_are_shown_sorted_so_guess_order_cannot_spell_words(assets):
+    game = make(assets, "sea lion")
+    for i, letter in enumerate("zxb"):
+        out = g(game, letter, at=2 * i)
+    assert out.messages == ["_ _ _ / _ _ _ _ | wrong: B X Z (3/6)"]
+
+
 def test_repeated_letter_is_ignored(assets):
     game = make(assets)
     g(game, "a", "alice")

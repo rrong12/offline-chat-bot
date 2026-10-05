@@ -95,8 +95,8 @@ class GameManager:
         self._say(text.replace("{p}", self.prefix), reply_to=session.reply_to, coalesce_key=key)
 
     def _notice(self, ctx: CommandContext, text: str) -> None:
-        """Reply to a start request we can't fulfil, at most once per NOTICE_SECONDS per player."""
-        if self._cooldowns.check_command("notice", ctx.msg.user_id, NOTICE_SECONDS, 0):
+        """Reply to a start request we can't fulfil, at most once per NOTICE_SECONDS per player per game."""
+        if self._cooldowns.check_command(f"notice:{ctx.name}", ctx.msg.user_id, NOTICE_SECONDS, 0):
             ctx.reply(text)
 
     def cooldown_remaining(self, user_id: str) -> float:
