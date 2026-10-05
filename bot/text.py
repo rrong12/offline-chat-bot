@@ -7,14 +7,21 @@ import unicodedata
 
 MAX_MESSAGE = 500
 
-# Zero-width characters, word joiners, BOM, combining grapheme joiner, Mongolian vowel
-# separator, and the Unicode tag block (Chatterino/7TV append U+E0000 to repeated messages).
-_INVISIBLE = re.compile("[͏᠎​-‏⁠-⁤﻿\U000e0000-\U000e007f]")
+# Removed outright rather than turned into spaces, so a word stays one word:
+# - format characters (category Cf): zero-width spaces and joiners, BOM, soft hyphen,
+#   directional marks;
+# - combining marks (Mn, Me): strikethrough and "fancy text" overlays, variation selectors;
+# - the Unicode tag block U+E0000-E007F. Chatterino and 7TV append U+E0000 to repeated
+#   messages, and it is unassigned (category Cn), so the category check alone misses it.
+_DROP_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+_TAG_BLOCK = range(0xE0000, 0xE0080)
 _USERNAME = re.compile(r"^[A-Za-z0-9_]{3,25}$")
 
 
 def strip_invisible(text: str) -> str:
-    return _INVISIBLE.sub("", text)
+    return "".join(
+        ch for ch in text if unicodedata.category(ch) not in _DROP_CATEGORIES and ord(ch) not in _TAG_BLOCK
+    )
 
 
 def normalize(text: str) -> str:

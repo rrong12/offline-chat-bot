@@ -14,7 +14,21 @@ def test_normalize_drops_chatterino_duplicate_tag():
 
 
 def test_normalize_drops_zero_width_characters():
-    assert normalize("alli​gator") == "alligator"
+    assert normalize("alli" + chr(0x200B) + "gator") == "alligator"
+
+
+def test_normalize_removes_combining_marks_instead_of_splitting_words():
+    stroke = chr(0x0336)  # combining long stroke overlay: strikethrough "fancy text"
+    assert normalize(f"h{stroke}e{stroke}l{stroke}l{stroke}o{stroke}") == "hello"
+
+
+def test_normalize_removes_format_characters_mid_word():
+    for invisible in (chr(0x00AD), chr(0x2066), chr(0xFE0F)):  # soft hyphen, directional isolate, variation selector
+        assert normalize(f"alli{invisible}gator") == "alligator"
+
+
+def test_normalize_keeps_accented_letters():
+    assert normalize("Cafe" + chr(0x0301)) == "caf" + chr(0x00E9)  # NFKC composes the accent before marks are dropped
 
 
 def test_normalize_applies_nfkc():
@@ -44,6 +58,11 @@ def test_truncate_hard_cuts_one_long_word():
 
 def test_clean_username_accepts_valid_names():
     assert clean_username("@Some_User") == "some_user"
+
+
+def test_clean_username_accepts_boundary_lengths():
+    assert clean_username("abc") == "abc"
+    assert clean_username("x" * 25) == "x" * 25
 
 
 def test_clean_username_rejects_bad_names():
