@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import socket
+import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +23,12 @@ from bot.connectors.base import AuthRequired, ChatMessage, OnMessage, OnReady, R
 logger = logging.getLogger(__name__)
 
 BOT_SCOPES = ("user:read:chat", "user:write:chat", "user:bot", "user:read:moderated_channels")
-REDIRECT_URI = "http://localhost:4343/oauth/callback"  # register this exact URL on the Twitch app
-AUTH_URL = "http://localhost:4343/oauth?scopes=" + "%20".join(BOT_SCOPES)
+AUTH_PORT = 4343  # the Twitch app's OAuth redirect must be exactly http://localhost:4343/oauth/callback
+# force_verify makes Twitch show which account is approving, so the wrong account can't slip through.
+AUTH_URL = f"http://localhost:{AUTH_PORT}/oauth?scopes=" + "%20".join(BOT_SCOPES) + "&force_verify=true"
+WATCHDOG_SECONDS = 30  # how often to check that the bot is still logged in and subscribed
+NO_SUBSCRIPTION_GRACE = 240  # seconds without a chat subscription before giving up (systemd restarts us)
+AUTH_FAILURE_STATUSES = {400, 401, 403}  # Twitch rejected the token itself; anything else may be transient
 
 
 def strip_reply_mention(text: str, reply: Any) -> str:
@@ -51,39 +60,55 @@ def to_chat_message(payload: Any, clock: Clock) -> ChatMessage:
 
 
 def read_bot_token(path: Path, bot_id: str) -> tuple[str, str]:
-    """Return (access token, refresh token) for the bot from TwitchIO's token file."""
+    """Return (access token, refresh token) for the bot from the token file."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        entry = data.get(bot_id) if isinstance(data, dict) else None
+        if not entry:
+            raise AuthRequired(f"no token for bot user {bot_id} in {path}")
+        return entry["token"], entry["refresh"]
     except FileNotFoundError:
         raise AuthRequired(f"no token file at {path}") from None
     except json.JSONDecodeError:
         raise AuthRequired(f"token file {path} is corrupt") from None
-    entry = data.get(bot_id)
-    if not entry:
-        raise AuthRequired(f"no token for bot user {bot_id} in {path}")
-    return entry["token"], entry["refresh"]
+    except (KeyError, TypeError):
+        raise AuthRequired(f"token file {path} has no usable entry for bot user {bot_id}") from None
+
+
+def write_token_file(path: Path, tokens: Mapping[str, Any]) -> None:
+    """Atomically write tokens as JSON, readable only by this user (0600)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tokens-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            json.dump({uid: dict(entry) for uid, entry in tokens.items()}, fp)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 class _Client(twitchio.Client):
     def __init__(self, connector: TwitchConnector) -> None:
         cfg = connector.config
-        super().__init__(client_id=cfg.client_id, client_secret=cfg.client_secret, bot_id=cfg.bot_id)
+        super().__init__(
+            client_id=cfg.client_id, client_secret=cfg.client_secret, bot_id=cfg.bot_id, fetch_client_user=False
+        )
         self.connector = connector
-        self._tokens_loaded = False
 
     async def load_tokens(self, path: str | None = None) -> None:
         token, refresh = read_bot_token(self.connector.token_path, self.connector.config.bot_id)
         try:
             await self.add_token(token, refresh)
         except twitchio.InvalidTokenException as exc:
-            raise AuthRequired("the saved bot token is invalid and could not be refreshed") from exc
-        self._tokens_loaded = True
+            if exc.status in AUTH_FAILURE_STATUSES:
+                raise AuthRequired("the saved bot token is invalid and could not be refreshed") from exc
+            # 5xx or 429 while validating: probably a Twitch hiccup, so crash and let systemd retry.
+            raise RuntimeError(f"Twitch login check failed (HTTP {exc.status}); will retry") from exc
 
     async def save_tokens(self, path: str | None = None) -> None:
-        # TwitchIO saves on close. If startup failed before the token loaded, saving would
-        # overwrite the token file with nothing and force a needless re-login.
-        if self._tokens_loaded:
-            await super().save_tokens(str(self.connector.token_path))
+        self.connector.save_bot_token()  # never raises; TwitchIO's own save would be a no-op here
 
     async def setup_hook(self) -> None:
         await self.connector._setup(self)
@@ -91,14 +116,19 @@ class _Client(twitchio.Client):
     async def event_message(self, payload: twitchio.ChatMessage) -> None:
         await self.connector._incoming(payload)
 
+    async def event_token_refreshed(self, payload: Any) -> None:
+        self.connector.save_bot_token()  # persist right away, so a hard kill doesn't lose the refresh
+
     async def event_websocket_welcome(self, payload: Any) -> None:
         self.connector._welcomed()
 
     async def event_websocket_closed(self, payload: Any) -> None:
-        self.connector.log.write("disconnected")
+        if not self.connector._closing:
+            self.connector.log.write("disconnected")
 
     async def event_subscription_revoked(self, payload: Any) -> None:
-        await self.connector._fail(AuthRequired(f"chat subscription revoked: {getattr(payload, 'reason', '?')}"))
+        reason = getattr(getattr(payload, "reason", None), "value", None) or "unknown"
+        await self.connector._fail(AuthRequired(f"Twitch revoked the chat subscription ({reason})"))
 
 
 class TwitchConnector:
@@ -108,12 +138,14 @@ class TwitchConnector:
         self.clock = clock
         self.token_path = config.data_dir / ".tio.tokens.json"
         self.channel_id = ""
+        self.is_mod = False
         self._client: _Client | None = None
         self._on_message: OnMessage | None = None
         self._on_ready: OnReady | None = None
         self._fatal: BaseException | None = None
         self._closing = False
         self._welcomes = 0
+        self._watchdog: asyncio.Task[None] | None = None
 
     async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
         self._on_message, self._on_ready = on_message, on_ready
@@ -129,15 +161,14 @@ class TwitchConnector:
         users = await client.fetch_users(logins=[self.config.channel])
         if not users:
             raise ConfigError(f"Twitch channel {self.config.channel!r} not found")
-        channel = users[0]
-        self.channel_id = str(channel.id)
-        is_mod = self.channel_id == self.config.bot_id
-        if not is_mod:
+        self.channel_id = str(users[0].id)
+        self.is_mod = self.channel_id == self.config.bot_id
+        if not self.is_mod:
             try:
                 bot = client.create_partialuser(user_id=self.config.bot_id)
                 async for ch in bot.fetch_moderated_channels(first=100, token_for=self.config.bot_id):
                     if str(ch.id) == self.channel_id:
-                        is_mod = True
+                        self.is_mod = True
                         break
             except twitchio.HTTPException as exc:
                 logger.warning("could not check moderator status: %s", exc)
@@ -145,8 +176,37 @@ class TwitchConnector:
             eventsub.ChatMessageSubscription(broadcaster_user_id=self.channel_id, user_id=self.config.bot_id),
             as_bot=True,
         )
+        self._watchdog = asyncio.create_task(self._watch(client))
         assert self._on_ready is not None
-        await self._on_ready(ReadyInfo(self.config.channel, self.channel_id, is_mod))
+        await self._on_ready(ReadyInfo(self.config.channel, self.channel_id, self.is_mod))
+
+    async def _watch(self, client: _Client) -> None:
+        """TwitchIO can lose the login or the chat subscription without ending; detect that and fail loudly."""
+        loop = asyncio.get_running_loop()
+        empty_since: float | None = None
+        while not self._closing:
+            await asyncio.sleep(WATCHDOG_SECONDS)
+            if self.config.bot_id not in client.tokens:  # a runtime refresh failed and TwitchIO dropped it
+                await self._fail(AuthRequired("the bot's Twitch login expired and could not be refreshed"))
+                return
+            if client.websocket_subscriptions():
+                empty_since = None
+            elif empty_since is None:
+                empty_since = loop.time()
+            elif loop.time() - empty_since >= NO_SUBSCRIPTION_GRACE:
+                await self._fail(RuntimeError("lost the chat connection and could not get it back"))
+                return
+
+    def save_bot_token(self) -> None:
+        """Write the bot's current (possibly refreshed) token to disk. Never raises."""
+        client = self._client
+        if client is None or self.config.bot_id not in client.tokens:
+            return
+        try:
+            write_token_file(self.token_path, {self.config.bot_id: client.tokens[self.config.bot_id]})
+        except OSError as exc:
+            logger.exception("could not save the Twitch token")
+            self.log.write("error", where="twitch.save_token", type=type(exc).__name__, message=str(exc))
 
     def _welcomed(self) -> None:
         self._welcomes += 1
@@ -163,12 +223,17 @@ class TwitchConnector:
     async def send(self, text: str, reply_to: str | None = None) -> SendResult:
         assert self._client is not None
         channel = self._client.create_partialuser(user_id=self.channel_id)
+        # The app token gives a modded bot the Chat Bot badge; without mod status Twitch only accepts
+        # the bot's own user token.
+        token_for = None if self.is_mod else self.config.bot_id
         try:
             await channel.send_message(
-                text, sender=self.config.bot_id, token_for=None, reply_to_message_id=reply_to
+                text, sender=self.config.bot_id, token_for=token_for, reply_to_message_id=reply_to
             )
         except twitchio.MessageRejectedError as exc:
             return SendResult(False, exc.code, exc.message)
+        except twitchio.HTTPException as exc:
+            return SendResult(False, f"http_{exc.status}", str(exc))
         return SendResult(True)
 
     async def lookup_user(self, login: str) -> UserRef | None:
@@ -184,26 +249,39 @@ class TwitchConnector:
 
     async def close(self) -> None:
         self._closing = True
+        if self._watchdog is not None and self._watchdog is not asyncio.current_task():
+            self._watchdog.cancel()
         if self._client is not None:
             await self._client.close()
 
 
+def _check_port_free(port: int) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("localhost", port))
+        except OSError:
+            raise ConfigError(f"port {port} is in use; close whatever is using it and run auth again") from None
+
+
 async def authorize(config: Config) -> UserRef:
     """One-time login: serve http://localhost:4343, wait for the bot account to approve, save the token."""
-    import asyncio
-
+    _check_port_free(AUTH_PORT)
     done: asyncio.Future[UserRef] = asyncio.get_running_loop().create_future()
     token_path = config.data_dir / ".tio.tokens.json"
-    token_path.parent.mkdir(parents=True, exist_ok=True)
 
     class AuthClient(twitchio.Client):
         async def event_oauth_authorized(self, payload: Any) -> None:
-            valid = await self.add_token(payload.access_token, payload.refresh_token)
-            await self.save_tokens(str(token_path))
+            try:
+                valid = await self.add_token(payload.access_token, payload.refresh_token)
+                write_token_file(token_path, {str(valid.user_id): self.tokens[str(valid.user_id)]})
+            except Exception as exc:
+                if not done.done():
+                    done.set_exception(exc)
+                return
             if not done.done():
                 done.set_result(UserRef(str(valid.user_id), valid.login or "", valid.login or ""))
 
-    client = AuthClient(client_id=config.client_id, client_secret=config.client_secret)
+    client = AuthClient(client_id=config.client_id, client_secret=config.client_secret, fetch_client_user=False)
     async with client:
         await client.login(load_tokens=False, save_tokens=False)
         await client.adapter.run()

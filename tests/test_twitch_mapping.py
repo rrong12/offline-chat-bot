@@ -1,11 +1,19 @@
+import asyncio
 import json
+import os
+import socket
 from types import SimpleNamespace
 
 import pytest
+import twitchio
 
+import bot.connectors.twitch as twitch
+from bot.activity_log import ActivityLog
 from bot.clock import FakeClock
+from bot.config import ConfigError
 from bot.connectors.base import AuthRequired
 from bot.connectors.twitch import AUTH_URL, read_bot_token, to_chat_message
+from tests.helpers import make_config
 
 
 def fake_payload(source=None, text="?scramble", reply=None, **chatter):
@@ -58,13 +66,20 @@ def test_read_bot_token(tmp_path):
     path.write_text(json.dumps({"999": {"token": "t", "refresh": "r"}}))
     with pytest.raises(AuthRequired, match="no token for bot user 123"):
         read_bot_token(path, "123")
+    path.write_text(json.dumps({"123": {"user_id": "123", "token": "t"}}))  # no refresh token
+    with pytest.raises(AuthRequired, match="no usable entry"):
+        read_bot_token(path, "123")
+    path.write_text(json.dumps(["not", "an", "object"]))
+    with pytest.raises(AuthRequired, match="no token for bot user 123"):
+        read_bot_token(path, "123")
     path.write_text(json.dumps({"123": {"user_id": "123", "token": "t", "refresh": "r"}}))
     assert read_bot_token(path, "123") == ("t", "r")
 
 
-def test_auth_url_requests_all_bot_scopes():
+def test_auth_url_requests_all_bot_scopes_and_forces_account_check():
     assert AUTH_URL == (
         "http://localhost:4343/oauth?scopes=user:read:chat%20user:write:chat%20user:bot%20user:read:moderated_channels"
+        "&force_verify=true"
     )
 
 
@@ -94,3 +109,140 @@ async def test_unexpected_end_of_connection_is_an_error(tmp_path, clock: FakeClo
 
     with pytest.raises(RuntimeError, match="ended unexpectedly"):
         await connector.run(noop, noop)
+
+
+# ---- connector behavior with fake TwitchIO pieces (no network) ----
+
+
+class FakeClient:
+    def __init__(self, tokens=None, subscriptions=None):
+        self.tokens = tokens if tokens is not None else {}
+        self.subscriptions = subscriptions if subscriptions is not None else {}
+        self.closed = False
+        self.sent = []
+
+    def websocket_subscriptions(self):
+        return self.subscriptions
+
+    async def close(self):
+        self.closed = True
+
+    def create_partialuser(self, user_id):
+        client = self
+
+        class Channel:
+            async def send_message(self, text, sender, token_for=None, reply_to_message_id=None):
+                client.sent.append((text, token_for))
+
+        return Channel()
+
+
+def connector_for(tmp_path, clock, client=None):
+    cfg = make_config(tmp_path, bot_id="123")
+    conn = twitch.TwitchConnector(cfg, ActivityLog(tmp_path / "logs", clock), clock)
+    conn._client = client
+    return conn
+
+
+def test_save_bot_token_writes_the_current_token_atomically_and_privately(tmp_path, clock):
+    client = FakeClient(tokens={"123": {"user_id": "123", "token": "NEW", "refresh": "R2"}})
+    conn = connector_for(tmp_path, clock, client)
+    conn.token_path.parent.mkdir(parents=True)
+    conn.token_path.write_text(json.dumps({"123": {"user_id": "123", "token": "OLD", "refresh": "R1"}}))
+    conn.save_bot_token()
+    assert json.loads(conn.token_path.read_text())["123"]["token"] == "NEW"
+    assert oct(os.stat(conn.token_path).st_mode & 0o777) == "0o600"
+    assert not list(conn.token_path.parent.glob(".tokens-*"))  # no temp files left behind
+
+
+def test_save_bot_token_never_raises_and_skips_without_a_token(tmp_path, clock):
+    conn = connector_for(tmp_path, clock, FakeClient(tokens={}))
+    conn.save_bot_token()
+    assert not conn.token_path.exists()
+    conn = connector_for(tmp_path, clock, FakeClient(tokens={"123": {"token": "t", "refresh": "r"}}))
+    conn.token_path = tmp_path / "missing-dir" / "file" / "x"
+    conn.token_path.parent.parent.write_text("a file where a folder should be")
+    conn.save_bot_token()  # OSError is logged, not raised
+
+
+def invalid_token(status):
+    exc = twitchio.InvalidTokenException.__new__(twitchio.InvalidTokenException)
+    exc.status = status
+    return exc
+
+
+async def test_startup_login_check_tells_outages_from_bad_tokens(tmp_path, clock, monkeypatch):
+    conn = connector_for(tmp_path, clock)
+    conn.token_path.parent.mkdir(parents=True)
+    conn.token_path.write_text(json.dumps({"123": {"user_id": "123", "token": "t", "refresh": "r"}}))
+    client = twitch._Client(conn)
+
+    for status, expected in ((401, AuthRequired), (400, AuthRequired), (500, RuntimeError), (429, RuntimeError)):
+        async def failing(token, refresh, status=status):
+            raise invalid_token(status)
+
+        monkeypatch.setattr(client, "add_token", failing)
+        with pytest.raises(expected) as info:
+            await client.load_tokens()
+        assert type(info.value) is expected
+
+
+async def test_watchdog_fails_when_the_login_is_dropped(tmp_path, clock, monkeypatch):
+    monkeypatch.setattr(twitch, "WATCHDOG_SECONDS", 0.01)
+    client = FakeClient(tokens={}, subscriptions={"s": object()})
+    conn = connector_for(tmp_path, clock, client)
+    await asyncio.wait_for(conn._watch(client), timeout=2)
+    assert isinstance(conn._fatal, AuthRequired) and client.closed
+
+
+async def test_watchdog_fails_after_losing_the_subscription_for_too_long(tmp_path, clock, monkeypatch):
+    monkeypatch.setattr(twitch, "WATCHDOG_SECONDS", 0.01)
+    monkeypatch.setattr(twitch, "NO_SUBSCRIPTION_GRACE", 0.05)
+    client = FakeClient(tokens={"123": {}}, subscriptions={})
+    conn = connector_for(tmp_path, clock, client)
+    await asyncio.wait_for(conn._watch(client), timeout=2)
+    assert isinstance(conn._fatal, RuntimeError) and "chat connection" in str(conn._fatal)
+
+
+async def test_send_uses_app_token_when_modded_and_bot_token_otherwise(tmp_path, clock):
+    client = FakeClient()
+    conn = connector_for(tmp_path, clock, client)
+    conn.channel_id = "999"
+    conn.is_mod = True
+    await conn.send("hi")
+    conn.is_mod = False
+    await conn.send("hi")
+    assert client.sent == [("hi", None), ("hi", "123")]
+
+
+async def test_send_maps_http_errors_to_a_drop(tmp_path, clock):
+    class Forbidden(FakeClient):
+        def create_partialuser(self, user_id):
+            class Channel:
+                async def send_message(self, *args, **kwargs):
+                    exc = twitchio.HTTPException.__new__(twitchio.HTTPException)
+                    exc.status = 403
+                    raise exc
+
+            return Channel()
+
+    conn = connector_for(tmp_path, clock, Forbidden())
+    result = await conn.send("hi")
+    assert (result.sent, result.drop_code) == (False, "http_403")
+
+
+def test_auth_refuses_a_busy_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("localhost", 0))
+        sock.listen()
+        port = sock.getsockname()[1]
+        with pytest.raises(ConfigError, match="in use"):
+            twitch._check_port_free(port)
+
+
+async def test_disconnect_is_not_logged_during_a_deliberate_close(tmp_path, clock):
+    conn = connector_for(tmp_path, clock, FakeClient())
+    client = twitch._Client(conn)
+    conn._closing = True
+    await client.event_websocket_closed(None)
+    assert not list((tmp_path / "logs").glob("*.jsonl"))
