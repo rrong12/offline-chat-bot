@@ -1,0 +1,464 @@
+# Higher or Lower term list for the Twitch chat game.
+# Format: Display name|Exact English Wikipedia article title|category
+# Categories: games, streamers, celebrities, food, brands, animals, countries, movies, tv, sports
+# A later script fetches each title's English Wikipedia monthly page views. Do not reorder
+# fields. Keep display names short (<=30 chars) and free of disambiguation text.
+
+# --- games (60) ---
+Minecraft|Minecraft|games
+Fortnite|Fortnite|games
+Roblox|Roblox|games
+League of Legends|League of Legends|games
+Valorant|Valorant|games
+Among Us|Among Us|games
+Grand Theft Auto V|Grand Theft Auto V|games
+Apex Legends|Apex Legends|games
+Overwatch 2|Overwatch 2|games
+Counter-Strike|Counter-Strike 2|games
+Rainbow Six Siege|Tom Clancy's Rainbow Six Siege|games
+Super Mario Bros.|Super Mario Bros.|games
+The Legend of Zelda|The Legend of Zelda|games
+Pokemon|Pokémon|games
+Animal Crossing|Animal Crossing|games
+Super Smash Bros.|Super Smash Bros.|games
+Mario Kart|Mario Kart|games
+Tetris|Tetris|games
+Candy Crush Saga|Candy Crush Saga|games
+Genshin Impact|Genshin Impact|games
+World of Warcraft|World of Warcraft|games
+Dota 2|Dota 2|games
+Hearthstone|Hearthstone|games
+Overcooked|Overcooked|games
+Stardew Valley|Stardew Valley|games
+Terraria|Terraria|games
+Cyberpunk 2077|Cyberpunk 2077|games
+Breath of the Wild|The Legend of Zelda: Breath of the Wild|games
+The Witcher 3|The Witcher 3: Wild Hunt|games
+Red Dead Redemption 2|Red Dead Redemption 2|games
+Elden Ring|Elden Ring|games
+Dark Souls|Dark Souls|games
+Super Mario 64|Super Mario 64|games
+Halo|Halo (franchise)|games
+Halo Infinite|Halo Infinite|games
+Fall Guys|Fall Guys|games
+Rocket League|Rocket League|games
+Battlefield|Battlefield (video game series)|games
+Destiny 2|Destiny 2|games
+Final Fantasy VII|Final Fantasy VII|games
+Final Fantasy|Final Fantasy|games
+Kingdom Hearts|Kingdom Hearts|games
+Sonic the Hedgehog|Sonic the Hedgehog (franchise)|games
+Pac-Man|Pac-Man|games
+Donkey Kong|Donkey Kong|games
+Street Fighter|Street Fighter|games
+Mortal Kombat|Mortal Kombat|games
+FIFA|FIFA (video game series)|games
+NBA 2K|NBA 2K|games
+Madden NFL|Madden NFL|games
+Splatoon|Splatoon|games
+Metroid|Metroid|games
+Resident Evil|Resident Evil|games
+Five Nights at Freddy's|Five Nights at Freddy's|games
+Geometry Dash|Geometry Dash|games
+Subway Surfers|Subway Surfers|games
+Clash of Clans|Clash of Clans|games
+Clash Royale|Clash Royale|games
+Brawl Stars|Brawl Stars|games
+Angry Birds|Angry Birds|games
+
+# --- streamers (40) ---
+Kai Cenat|Kai Cenat|streamers
+xQc|xQc|streamers
+Pokimane|Pokimane|streamers
+Ninja|Ninja (Internet personality)|streamers
+Dream|Dream (YouTuber)|streamers
+Technoblade|Technoblade|streamers
+Shroud|Shroud (streamer)|streamers
+Sodapoppin|Sodapoppin|streamers
+Asmongold|Asmongold|streamers
+Tyler1|Tyler1|streamers
+Ludwig Ahgren|Ludwig Ahgren|streamers
+Valkyrae|Valkyrae|streamers
+TimTheTatman|TimTheTatman|streamers
+Moistcr1tikal|Moistcr1tikal|streamers
+Northernlion|Northernlion|streamers
+Ironmouse|Ironmouse|streamers
+Sykkuno|Sykkuno|streamers
+IShowSpeed|IShowSpeed|streamers
+Wilbur Soot|Wilbur Soot|streamers
+Quackity|Quackity|streamers
+TommyInnit|TommyInnit|streamers
+Summit1g|Summit1g|streamers
+LIRIK|LIRIK|streamers
+Forsen|Forsen|streamers
+Nadeshot|Nadeshot|streamers
+FaZe Rug|FaZe Rug|streamers
+VanossGaming|VanossGaming|streamers
+Markiplier|Markiplier|streamers
+Jacksepticeye|Jacksepticeye|streamers
+DanTDM|DanTDM|streamers
+Jacksfilms|Jacksfilms|streamers
+Corpse Husband|Corpse Husband|streamers
+CaptainSparklez|CaptainSparklez|streamers
+Disguised Toast|Disguised Toast|streamers
+Imaqtpie|Imaqtpie|streamers
+DrLupo|DrLupo|streamers
+Bugha|Bugha|streamers
+Tfue|Tfue|streamers
+Jerma985|Jerma985|streamers
+
+# --- celebrities: musicians, actors, athletes, internet personalities (60) ---
+Taylor Swift|Taylor Swift|celebrities
+Drake|Drake (musician)|celebrities
+Ariana Grande|Ariana Grande|celebrities
+Beyonce|Beyoncé|celebrities
+Ed Sheeran|Ed Sheeran|celebrities
+Billie Eilish|Billie Eilish|celebrities
+The Weeknd|The Weeknd|celebrities
+Rihanna|Rihanna|celebrities
+Justin Bieber|Justin Bieber|celebrities
+Bruno Mars|Bruno Mars|celebrities
+Dua Lipa|Dua Lipa|celebrities
+Olivia Rodrigo|Olivia Rodrigo|celebrities
+Post Malone|Post Malone|celebrities
+Kendrick Lamar|Kendrick Lamar|celebrities
+Travis Scott|Travis Scott|celebrities
+Doja Cat|Doja Cat|celebrities
+Lady Gaga|Lady Gaga|celebrities
+Adele|Adele|celebrities
+Harry Styles|Harry Styles|celebrities
+BTS|BTS|celebrities
+Tom Hanks|Tom Hanks|celebrities
+Leonardo DiCaprio|Leonardo DiCaprio|celebrities
+Dwayne Johnson|Dwayne Johnson|celebrities
+Will Smith|Will Smith|celebrities
+Zendaya|Zendaya|celebrities
+Tom Holland|Tom Holland|celebrities
+Robert Downey Jr.|Robert Downey Jr.|celebrities
+Scarlett Johansson|Scarlett Johansson|celebrities
+Chris Hemsworth|Chris Hemsworth|celebrities
+Ryan Reynolds|Ryan Reynolds|celebrities
+Keanu Reeves|Keanu Reeves|celebrities
+Margot Robbie|Margot Robbie|celebrities
+Emma Watson|Emma Watson|celebrities
+Jennifer Lawrence|Jennifer Lawrence|celebrities
+Tom Cruise|Tom Cruise|celebrities
+LeBron James|LeBron James|celebrities
+Cristiano Ronaldo|Cristiano Ronaldo|celebrities
+Lionel Messi|Lionel Messi|celebrities
+Serena Williams|Serena Williams|celebrities
+Stephen Curry|Stephen Curry|celebrities
+Kevin Durant|Kevin Durant|celebrities
+Tom Brady|Tom Brady|celebrities
+Simone Biles|Simone Biles|celebrities
+Usain Bolt|Usain Bolt|celebrities
+Michael Jordan|Michael Jordan|celebrities
+Shohei Ohtani|Shohei Ohtani|celebrities
+Patrick Mahomes|Patrick Mahomes|celebrities
+Novak Djokovic|Novak Djokovic|celebrities
+Rafael Nadal|Rafael Nadal|celebrities
+Caitlin Clark|Caitlin Clark|celebrities
+MrBeast|MrBeast|celebrities
+PewDiePie|PewDiePie|celebrities
+KSI|KSI|celebrities
+Emma Chamberlain|Emma Chamberlain|celebrities
+iJustine|iJustine|celebrities
+Charli D'Amelio|Charli D'Amelio|celebrities
+Khaby Lame|Khaby Lame|celebrities
+Addison Rae|Addison Rae|celebrities
+Zach King|Zach King|celebrities
+Liza Koshy|Liza Koshy|celebrities
+
+# --- food (50) ---
+Pizza|Pizza|food
+Sushi|Sushi|food
+Hamburger|Hamburger|food
+Hot Dog|Hot dog|food
+Taco|Taco|food
+Burrito|Burrito|food
+Ramen|Ramen|food
+Pasta|Pasta|food
+Spaghetti|Spaghetti|food
+Pancake|Pancake|food
+Waffle|Waffle|food
+Ice Cream|Ice cream|food
+Chocolate|Chocolate|food
+Cake|Cake|food
+Cookie|Cookie|food
+Doughnut|Doughnut|food
+Bagel|Bagel|food
+Sandwich|Sandwich|food
+French Fries|French fries|food
+Fried Chicken|Fried chicken|food
+Popcorn|Popcorn|food
+Nachos|Nachos|food
+Guacamole|Guacamole|food
+Pretzel|Pretzel|food
+Churro|Churro|food
+Dumpling|Dumpling|food
+Curry|Curry|food
+Pho|Pho|food
+Pad Thai|Pad thai|food
+Lasagne|Lasagne|food
+Falafel|Falafel|food
+Hummus|Hummus|food
+Kebab|Kebab|food
+Croissant|Croissant|food
+Cheesecake|Cheesecake|food
+Brownie|Chocolate brownie|food
+Muffin|Muffin|food
+Oatmeal|Oatmeal|food
+Egg|Egg as food|food
+Bacon|Bacon|food
+Cheese|Cheese|food
+Honey|Honey|food
+Avocado|Avocado|food
+Mango|Mango|food
+Watermelon|Watermelon|food
+Strawberry|Strawberry|food
+Banana|Banana|food
+Apple|Apple|food
+Pineapple|Pineapple|food
+Peanut Butter|Peanut butter|food
+
+# --- brands (50) ---
+YouTube|YouTube|brands
+Google|Google|brands
+Amazon|Amazon (company)|brands
+Netflix|Netflix|brands
+Disney|The Walt Disney Company|brands
+Nike|Nike, Inc.|brands
+Adidas|Adidas|brands
+Coca-Cola|Coca-Cola|brands
+Pepsi|Pepsi|brands
+McDonald's|McDonald's|brands
+Starbucks|Starbucks|brands
+Walmart|Walmart|brands
+Target|Target Corporation|brands
+Lego|Lego|brands
+Nintendo|Nintendo|brands
+Sony|Sony|brands
+Microsoft|Microsoft|brands
+Apple Inc.|Apple Inc.|brands
+Samsung|Samsung Electronics|brands
+Tesla|Tesla, Inc.|brands
+SpaceX|SpaceX|brands
+Instagram|Instagram|brands
+TikTok|TikTok|brands
+Snapchat|Snapchat|brands
+Facebook|Facebook|brands
+Twitter|X (social network)|brands
+Discord|Discord|brands
+Spotify|Spotify|brands
+Twitch|Twitch (service)|brands
+Red Bull|Red Bull|brands
+Oreo|Oreo|brands
+Doritos|Doritos|brands
+Lay's|Lay's|brands
+Pringles|Pringles|brands
+Hershey's|The Hershey Company|brands
+M&M's|M&M's|brands
+Skittles|Skittles (confectionery)|brands
+Reese's|Reese's Peanut Butter Cups|brands
+Kit Kat|Kit Kat|brands
+Gatorade|Gatorade|brands
+Monster Energy|Monster Energy|brands
+Chick-fil-A|Chick-fil-A|brands
+Subway|Subway (restaurant)|brands
+Domino's Pizza|Domino's Pizza|brands
+Pizza Hut|Pizza Hut|brands
+Burger King|Burger King|brands
+KFC|KFC|brands
+Taco Bell|Taco Bell|brands
+Wendy's|Wendy's|brands
+Dunkin'|Dunkin'|brands
+
+# --- animals (50) ---
+Dog|Dog|animals
+Cat|Cat|animals
+Lion|Lion|animals
+Tiger|Tiger|animals
+Elephant|Elephant|animals
+Giraffe|Giraffe|animals
+Zebra|Zebra|animals
+Gorilla|Gorilla|animals
+Chimpanzee|Chimpanzee|animals
+Panda|Giant panda|animals
+Koala|Koala|animals
+Kangaroo|Kangaroo|animals
+Platypus|Platypus|animals
+Axolotl|Axolotl|animals
+Capybara|Capybara|animals
+Sloth|Sloth|animals
+Red Panda|Red panda|animals
+Penguin|Penguin|animals
+Polar Bear|Polar bear|animals
+Brown Bear|Brown bear|animals
+Wolf|Wolf|animals
+Fox|Fox|animals
+Rabbit|Rabbit|animals
+Squirrel|Squirrel|animals
+Hedgehog|Hedgehog|animals
+Raccoon|Raccoon|animals
+Otter|Otter|animals
+Beaver|Beaver|animals
+Deer|Deer|animals
+Moose|Moose|animals
+Bison|Bison|animals
+Horse|Horse|animals
+Cow|Cattle|animals
+Pig|Pig|animals
+Sheep|Sheep|animals
+Goat|Goat|animals
+Chicken|Chicken|animals
+Duck|Duck|animals
+Owl|Owl|animals
+Eagle|Eagle|animals
+Parrot|Parrot|animals
+Flamingo|Flamingo|animals
+Peacock|Peacock|animals
+Shark|Shark|animals
+Dolphin|Dolphin|animals
+Octopus|Octopus|animals
+Jellyfish|Jellyfish|animals
+Crab|Crab|animals
+Turtle|Turtle|animals
+Snake|Snake|animals
+
+# --- countries (40) ---
+United States|United States|countries
+Canada|Canada|countries
+Mexico|Mexico|countries
+Brazil|Brazil|countries
+United Kingdom|United Kingdom|countries
+France|France|countries
+Germany|Germany|countries
+Italy|Italy|countries
+Spain|Spain|countries
+Russia|Russia|countries
+China|China|countries
+Japan|Japan|countries
+South Korea|South Korea|countries
+India|India|countries
+Australia|Australia|countries
+Egypt|Egypt|countries
+South Africa|South Africa|countries
+Nigeria|Nigeria|countries
+Kenya|Kenya|countries
+Saudi Arabia|Saudi Arabia|countries
+Turkey|Turkey|countries
+Greece|Greece|countries
+Netherlands|Netherlands|countries
+Sweden|Sweden|countries
+Norway|Norway|countries
+Switzerland|Switzerland|countries
+Portugal|Portugal|countries
+Ireland|Ireland|countries
+Iceland|Iceland|countries
+New Zealand|New Zealand|countries
+Argentina|Argentina|countries
+Chile|Chile|countries
+Colombia|Colombia|countries
+Peru|Peru|countries
+Thailand|Thailand|countries
+Vietnam|Vietnam|countries
+Philippines|Philippines|countries
+Indonesia|Indonesia|countries
+Jamaica|Jamaica|countries
+Cuba|Cuba|countries
+
+# --- movies (40) ---
+Titanic|Titanic (1997 film)|movies
+The Avengers|The Avengers (2012 film)|movies
+Avengers: Endgame|Avengers: Endgame|movies
+Spider-Man: No Way Home|Spider-Man: No Way Home|movies
+Star Wars|Star Wars (film)|movies
+The Lion King|The Lion King (1994 film)|movies
+Frozen|Frozen (2013 film)|movies
+Shrek|Shrek|movies
+The Dark Knight|The Dark Knight|movies
+Jurassic Park|Jurassic Park (film)|movies
+Harry Potter|Harry Potter and the Philosopher's Stone (film)|movies
+Toy Story|Toy Story|movies
+Finding Nemo|Finding Nemo|movies
+The Matrix|The Matrix|movies
+Inception|Inception|movies
+Deadpool|Deadpool (film)|movies
+Barbie|Barbie (film)|movies
+Oppenheimer|Oppenheimer (film)|movies
+Minions|Minions (film)|movies
+Despicable Me|Despicable Me|movies
+Encanto|Encanto|movies
+Moana|Moana|movies
+Coco|Coco (2017 film)|movies
+Up|Up (2009 film)|movies
+The Incredibles|The Incredibles|movies
+Cars|Cars (film)|movies
+Ratatouille|Ratatouille|movies
+WALL-E|WALL-E|movies
+Inside Out|Inside Out (2015 film)|movies
+Guardians of the Galaxy|Guardians of the Galaxy (film)|movies
+Black Panther|Black Panther (film)|movies
+Iron Man|Iron Man (film)|movies
+Joker|Joker (2019 film)|movies
+It|It (2017 film)|movies
+Venom|Venom (film)|movies
+The Super Mario Bros. Movie|The Super Mario Bros. Movie|movies
+Jaws|Jaws (film)|movies
+E.T. the Extra-Terrestrial|E.T. the Extra-Terrestrial|movies
+Home Alone|Home Alone|movies
+Night at the Museum|Night at the Museum|movies
+
+# --- tv (30, incl. anime) ---
+The Office|The Office (American TV series)|tv
+Friends|Friends|tv
+Breaking Bad|Breaking Bad|tv
+Stranger Things|Stranger Things|tv
+Game of Thrones|Game of Thrones|tv
+The Simpsons|The Simpsons|tv
+SpongeBob SquarePants|SpongeBob SquarePants|tv
+Naruto|Naruto|tv
+One Piece|One Piece|tv
+Attack on Titan|Attack on Titan|tv
+Dragon Ball Z|Dragon Ball Z|tv
+My Hero Academia|My Hero Academia|tv
+Demon Slayer|Demon Slayer: Kimetsu no Yaiba|tv
+Death Note|Death Note|tv
+Avatar: The Last Airbender|Avatar: The Last Airbender|tv
+Rick and Morty|Rick and Morty|tv
+South Park|South Park|tv
+Family Guy|Family Guy|tv
+The Big Bang Theory|The Big Bang Theory|tv
+How I Met Your Mother|How I Met Your Mother|tv
+Brooklyn Nine-Nine|Brooklyn Nine-Nine|tv
+Grey's Anatomy|Grey's Anatomy|tv
+The Mandalorian|The Mandalorian|tv
+Wednesday|Wednesday (TV series)|tv
+Squid Game|Squid Game|tv
+The Boys|The Boys (TV series)|tv
+Doctor Who|Doctor Who|tv
+The Walking Dead|The Walking Dead (TV series)|tv
+Cobra Kai|Cobra Kai|tv
+Suits|Suits (American TV series)|tv
+
+# --- sports (20, sports/leagues/events, not people) ---
+Basketball|Basketball|sports
+Soccer|Association football|sports
+American Football|American football|sports
+Baseball|Baseball|sports
+Tennis|Tennis|sports
+Golf|Golf|sports
+Boxing|Boxing|sports
+Volleyball|Volleyball|sports
+Ice Hockey|Ice hockey|sports
+Swimming|Swimming (sport)|sports
+Cricket|Cricket|sports
+Rugby|Rugby union|sports
+Table Tennis|Table tennis|sports
+Badminton|Badminton|sports
+Skateboarding|Skateboarding|sports
+Gymnastics|Gymnastics|sports
+Olympic Games|Olympic Games|sports
+FIFA World Cup|FIFA World Cup|sports
+Super Bowl|Super Bowl|sports
+Formula One|Formula One|sports

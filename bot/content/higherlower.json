@@ -1,0 +1,2628 @@
+{
+"source": "English Wikipedia page views (Wikimedia REST API), user agents only",
+"month": "2026-09",
+"terms": [
+{
+"name": "Minecraft",
+"article": "Minecraft",
+"category": "games",
+"views": 175717
+},
+{
+"name": "Fortnite",
+"article": "Fortnite",
+"category": "games",
+"views": 77361
+},
+{
+"name": "Roblox",
+"article": "Roblox",
+"category": "games",
+"views": 612229
+},
+{
+"name": "League of Legends",
+"article": "League of Legends",
+"category": "games",
+"views": 42679
+},
+{
+"name": "Valorant",
+"article": "Valorant",
+"category": "games",
+"views": 23999
+},
+{
+"name": "Among Us",
+"article": "Among Us",
+"category": "games",
+"views": 39087
+},
+{
+"name": "Grand Theft Auto V",
+"article": "Grand Theft Auto V",
+"category": "games",
+"views": 279037
+},
+{
+"name": "Apex Legends",
+"article": "Apex Legends",
+"category": "games",
+"views": 14427
+},
+{
+"name": "Overwatch 2",
+"article": "Overwatch (2023 video game)",
+"category": "games",
+"views": 9034
+},
+{
+"name": "Counter-Strike",
+"article": "Counter-Strike 2",
+"category": "games",
+"views": 30479
+},
+{
+"name": "Rainbow Six Siege",
+"article": "Tom Clancy's Rainbow Six Siege",
+"category": "games",
+"views": 31257
+},
+{
+"name": "Super Mario Bros.",
+"article": "Super Mario Bros.",
+"category": "games",
+"views": 41174
+},
+{
+"name": "The Legend of Zelda",
+"article": "The Legend of Zelda",
+"category": "games",
+"views": 160695
+},
+{
+"name": "Pokemon",
+"article": "Pokémon",
+"category": "games",
+"views": 115662
+},
+{
+"name": "Animal Crossing",
+"article": "Animal Crossing",
+"category": "games",
+"views": 22780
+},
+{
+"name": "Super Smash Bros.",
+"article": "Super Smash Bros.",
+"category": "games",
+"views": 32078
+},
+{
+"name": "Mario Kart",
+"article": "Mario Kart",
+"category": "games",
+"views": 19475
+},
+{
+"name": "Tetris",
+"article": "Tetris",
+"category": "games",
+"views": 54275
+},
+{
+"name": "Candy Crush Saga",
+"article": "Candy Crush Saga",
+"category": "games",
+"views": 14150
+},
+{
+"name": "Genshin Impact",
+"article": "Genshin Impact",
+"category": "games",
+"views": 87229
+},
+{
+"name": "World of Warcraft",
+"article": "World of Warcraft",
+"category": "games",
+"views": 91444
+},
+{
+"name": "Dota 2",
+"article": "Dota 2",
+"category": "games",
+"views": 20838
+},
+{
+"name": "Hearthstone",
+"article": "Hearthstone",
+"category": "games",
+"views": 9269
+},
+{
+"name": "Overcooked",
+"article": "Overcooked",
+"category": "games",
+"views": 8259
+},
+{
+"name": "Stardew Valley",
+"article": "Stardew Valley",
+"category": "games",
+"views": 33491
+},
+{
+"name": "Terraria",
+"article": "Terraria",
+"category": "games",
+"views": 24835
+},
+{
+"name": "Cyberpunk 2077",
+"article": "Cyberpunk 2077",
+"category": "games",
+"views": 87235
+},
+{
+"name": "Breath of the Wild",
+"article": "The Legend of Zelda: Breath of the Wild",
+"category": "games",
+"views": 46784
+},
+{
+"name": "The Witcher 3",
+"article": "The Witcher 3: Wild Hunt",
+"category": "games",
+"views": 70769
+},
+{
+"name": "Red Dead Redemption 2",
+"article": "Red Dead Redemption 2",
+"category": "games",
+"views": 113655
+},
+{
+"name": "Elden Ring",
+"article": "Elden Ring",
+"category": "games",
+"views": 82135
+},
+{
+"name": "Dark Souls",
+"article": "Dark Souls",
+"category": "games",
+"views": 35411
+},
+{
+"name": "Super Mario 64",
+"article": "Super Mario 64",
+"category": "games",
+"views": 26649
+},
+{
+"name": "Halo",
+"article": "Halo (franchise)",
+"category": "games",
+"views": 73246
+},
+{
+"name": "Halo Infinite",
+"article": "Halo Infinite",
+"category": "games",
+"views": 25051
+},
+{
+"name": "Fall Guys",
+"article": "Fall Guys",
+"category": "games",
+"views": 7736
+},
+{
+"name": "Rocket League",
+"article": "Rocket League",
+"category": "games",
+"views": 18727
+},
+{
+"name": "Battlefield",
+"article": "Battlefield (video game series)",
+"category": "games",
+"views": 25560
+},
+{
+"name": "Destiny 2",
+"article": "Destiny 2",
+"category": "games",
+"views": 24355
+},
+{
+"name": "Final Fantasy VII",
+"article": "Final Fantasy VII",
+"category": "games",
+"views": 62730
+},
+{
+"name": "Final Fantasy",
+"article": "Final Fantasy",
+"category": "games",
+"views": 58732
+},
+{
+"name": "Kingdom Hearts",
+"article": "Kingdom Hearts",
+"category": "games",
+"views": 80614
+},
+{
+"name": "Sonic the Hedgehog",
+"article": "Sonic the Hedgehog",
+"category": "games",
+"views": 67069
+},
+{
+"name": "Pac-Man",
+"article": "Pac-Man",
+"category": "games",
+"views": 47943
+},
+{
+"name": "Donkey Kong",
+"article": "Donkey Kong",
+"category": "games",
+"views": 16205
+},
+{
+"name": "Street Fighter",
+"article": "Street Fighter",
+"category": "games",
+"views": 72744
+},
+{
+"name": "Mortal Kombat",
+"article": "Mortal Kombat",
+"category": "games",
+"views": 51101
+},
+{
+"name": "FIFA",
+"article": "FIFA (video game series)",
+"category": "games",
+"views": 22714
+},
+{
+"name": "NBA 2K",
+"article": "NBA 2K",
+"category": "games",
+"views": 11301
+},
+{
+"name": "Madden NFL",
+"article": "Madden NFL",
+"category": "games",
+"views": 26510
+},
+{
+"name": "Splatoon",
+"article": "Splatoon",
+"category": "games",
+"views": 12985
+},
+{
+"name": "Metroid",
+"article": "Metroid",
+"category": "games",
+"views": 66231
+},
+{
+"name": "Resident Evil",
+"article": "Resident Evil",
+"category": "games",
+"views": 553979
+},
+{
+"name": "Five Nights at Freddy's",
+"article": "Five Nights at Freddy's",
+"category": "games",
+"views": 62614
+},
+{
+"name": "Geometry Dash",
+"article": "Geometry Dash",
+"category": "games",
+"views": 58731
+},
+{
+"name": "Subway Surfers",
+"article": "Subway Surfers",
+"category": "games",
+"views": 21700
+},
+{
+"name": "Clash of Clans",
+"article": "Clash of Clans",
+"category": "games",
+"views": 9648
+},
+{
+"name": "Clash Royale",
+"article": "Clash Royale",
+"category": "games",
+"views": 7241
+},
+{
+"name": "Brawl Stars",
+"article": "Brawl Stars",
+"category": "games",
+"views": 19033
+},
+{
+"name": "Angry Birds",
+"article": "Angry Birds",
+"category": "games",
+"views": 25471
+},
+{
+"name": "Kai Cenat",
+"article": "Kai Cenat",
+"category": "streamers",
+"views": 60677
+},
+{
+"name": "xQc",
+"article": "XQc",
+"category": "streamers",
+"views": 18247
+},
+{
+"name": "Pokimane",
+"article": "Pokimane",
+"category": "streamers",
+"views": 24308
+},
+{
+"name": "Dream",
+"article": "Dream (YouTuber)",
+"category": "streamers",
+"views": 16133
+},
+{
+"name": "Technoblade",
+"article": "Technoblade",
+"category": "streamers",
+"views": 67314
+},
+{
+"name": "Shroud",
+"article": "Shroud (gamer)",
+"category": "streamers",
+"views": 6087
+},
+{
+"name": "Sodapoppin",
+"article": "Sodapoppin",
+"category": "streamers",
+"views": 8685
+},
+{
+"name": "Asmongold",
+"article": "Asmongold",
+"category": "streamers",
+"views": 57366
+},
+{
+"name": "Tyler1",
+"article": "Tyler1",
+"category": "streamers",
+"views": 7954
+},
+{
+"name": "Ludwig Ahgren",
+"article": "Ludwig Ahgren",
+"category": "streamers",
+"views": 33330
+},
+{
+"name": "Valkyrae",
+"article": "Valkyrae",
+"category": "streamers",
+"views": 22997
+},
+{
+"name": "TimTheTatman",
+"article": "TimTheTatman",
+"category": "streamers",
+"views": 3941
+},
+{
+"name": "Moistcr1tikal",
+"article": "MoistCr1tikal",
+"category": "streamers",
+"views": 20282
+},
+{
+"name": "Northernlion",
+"article": "Northernlion",
+"category": "streamers",
+"views": 40505
+},
+{
+"name": "Ironmouse",
+"article": "Ironmouse",
+"category": "streamers",
+"views": 56144
+},
+{
+"name": "Sykkuno",
+"article": "Sykkuno",
+"category": "streamers",
+"views": 6850
+},
+{
+"name": "IShowSpeed",
+"article": "IShowSpeed",
+"category": "streamers",
+"views": 112283
+},
+{
+"name": "Wilbur Soot",
+"article": "Wilbur Soot",
+"category": "streamers",
+"views": 10298
+},
+{
+"name": "Quackity",
+"article": "Quackity",
+"category": "streamers",
+"views": 5237
+},
+{
+"name": "TommyInnit",
+"article": "TommyInnit",
+"category": "streamers",
+"views": 15045
+},
+{
+"name": "Summit1g",
+"article": "Summit1g",
+"category": "streamers",
+"views": 4416
+},
+{
+"name": "Forsen",
+"article": "Forsen",
+"category": "streamers",
+"views": 3871
+},
+{
+"name": "Nadeshot",
+"article": "Nadeshot",
+"category": "streamers",
+"views": 3226
+},
+{
+"name": "FaZe Rug",
+"article": "FaZe Rug",
+"category": "streamers",
+"views": 7995
+},
+{
+"name": "VanossGaming",
+"article": "VanossGaming",
+"category": "streamers",
+"views": 7663
+},
+{
+"name": "Markiplier",
+"article": "Markiplier",
+"category": "streamers",
+"views": 62165
+},
+{
+"name": "Jacksepticeye",
+"article": "Jacksepticeye",
+"category": "streamers",
+"views": 35837
+},
+{
+"name": "DanTDM",
+"article": "DanTDM",
+"category": "streamers",
+"views": 12944
+},
+{
+"name": "Jacksfilms",
+"article": "Jacksfilms",
+"category": "streamers",
+"views": 5679
+},
+{
+"name": "Corpse Husband",
+"article": "Corpse Husband",
+"category": "streamers",
+"views": 9531
+},
+{
+"name": "CaptainSparklez",
+"article": "CaptainSparklez",
+"category": "streamers",
+"views": 4764
+},
+{
+"name": "Disguised Toast",
+"article": "Disguised Toast",
+"category": "streamers",
+"views": 5295
+},
+{
+"name": "Imaqtpie",
+"article": "Imaqtpie",
+"category": "streamers",
+"views": 1199
+},
+{
+"name": "DrLupo",
+"article": "DrLupo",
+"category": "streamers",
+"views": 2133
+},
+{
+"name": "Bugha",
+"article": "Buğa",
+"category": "streamers",
+"views": 34
+},
+{
+"name": "Tfue",
+"article": "Tfue",
+"category": "streamers",
+"views": 4279
+},
+{
+"name": "Jerma985",
+"article": "Jerma985",
+"category": "streamers",
+"views": 17191
+},
+{
+"name": "Taylor Swift",
+"article": "Taylor Swift",
+"category": "celebrities",
+"views": 562825
+},
+{
+"name": "Drake",
+"article": "Drake (musician)",
+"category": "celebrities",
+"views": 212678
+},
+{
+"name": "Ariana Grande",
+"article": "Ariana Grande",
+"category": "celebrities",
+"views": 323859
+},
+{
+"name": "Beyonce",
+"article": "Beyoncé",
+"category": "celebrities",
+"views": 235888
+},
+{
+"name": "Ed Sheeran",
+"article": "Ed Sheeran",
+"category": "celebrities",
+"views": 782785
+},
+{
+"name": "Billie Eilish",
+"article": "Billie Eilish",
+"category": "celebrities",
+"views": 199263
+},
+{
+"name": "The Weeknd",
+"article": "The Weeknd",
+"category": "celebrities",
+"views": 142645
+},
+{
+"name": "Rihanna",
+"article": "Rihanna",
+"category": "celebrities",
+"views": 218557
+},
+{
+"name": "Justin Bieber",
+"article": "Justin Bieber",
+"category": "celebrities",
+"views": 169905
+},
+{
+"name": "Bruno Mars",
+"article": "Bruno Mars",
+"category": "celebrities",
+"views": 342196
+},
+{
+"name": "Dua Lipa",
+"article": "Dua Lipa",
+"category": "celebrities",
+"views": 336322
+},
+{
+"name": "Olivia Rodrigo",
+"article": "Olivia Rodrigo",
+"category": "celebrities",
+"views": 387300
+},
+{
+"name": "Post Malone",
+"article": "Post Malone",
+"category": "celebrities",
+"views": 81404
+},
+{
+"name": "Kendrick Lamar",
+"article": "Kendrick Lamar",
+"category": "celebrities",
+"views": 121632
+},
+{
+"name": "Travis Scott",
+"article": "Travis Scott",
+"category": "celebrities",
+"views": 115784
+},
+{
+"name": "Doja Cat",
+"article": "Doja Cat",
+"category": "celebrities",
+"views": 81558
+},
+{
+"name": "Lady Gaga",
+"article": "Lady Gaga",
+"category": "celebrities",
+"views": 684032
+},
+{
+"name": "Adele",
+"article": "Adele",
+"category": "celebrities",
+"views": 127102
+},
+{
+"name": "Harry Styles",
+"article": "Harry Styles",
+"category": "celebrities",
+"views": 286969
+},
+{
+"name": "BTS",
+"article": "BTS",
+"category": "celebrities",
+"views": 182718
+},
+{
+"name": "Tom Hanks",
+"article": "Tom Hanks",
+"category": "celebrities",
+"views": 231072
+},
+{
+"name": "Leonardo DiCaprio",
+"article": "Leonardo DiCaprio",
+"category": "celebrities",
+"views": 268222
+},
+{
+"name": "Dwayne Johnson",
+"article": "Dwayne Johnson",
+"category": "celebrities",
+"views": 230975
+},
+{
+"name": "Will Smith",
+"article": "Will Smith",
+"category": "celebrities",
+"views": 197001
+},
+{
+"name": "Zendaya",
+"article": "Zendaya",
+"category": "celebrities",
+"views": 753801
+},
+{
+"name": "Tom Holland",
+"article": "Tom Holland",
+"category": "celebrities",
+"views": 606309
+},
+{
+"name": "Robert Downey Jr.",
+"article": "Robert Downey Jr.",
+"category": "celebrities",
+"views": 293259
+},
+{
+"name": "Scarlett Johansson",
+"article": "Scarlett Johansson",
+"category": "celebrities",
+"views": 414000
+},
+{
+"name": "Chris Hemsworth",
+"article": "Chris Hemsworth",
+"category": "celebrities",
+"views": 194612
+},
+{
+"name": "Ryan Reynolds",
+"article": "Ryan Reynolds",
+"category": "celebrities",
+"views": 375691
+},
+{
+"name": "Keanu Reeves",
+"article": "Keanu Reeves",
+"category": "celebrities",
+"views": 391711
+},
+{
+"name": "Margot Robbie",
+"article": "Margot Robbie",
+"category": "celebrities",
+"views": 199877
+},
+{
+"name": "Emma Watson",
+"article": "Emma Watson",
+"category": "celebrities",
+"views": 261309
+},
+{
+"name": "Jennifer Lawrence",
+"article": "Jennifer Lawrence",
+"category": "celebrities",
+"views": 333738
+},
+{
+"name": "Tom Cruise",
+"article": "Tom Cruise",
+"category": "celebrities",
+"views": 612684
+},
+{
+"name": "LeBron James",
+"article": "LeBron James",
+"category": "celebrities",
+"views": 278463
+},
+{
+"name": "Cristiano Ronaldo",
+"article": "Cristiano Ronaldo",
+"category": "celebrities",
+"views": 646892
+},
+{
+"name": "Lionel Messi",
+"article": "Lionel Messi",
+"category": "celebrities",
+"views": 571803
+},
+{
+"name": "Serena Williams",
+"article": "Serena Williams",
+"category": "celebrities",
+"views": 242313
+},
+{
+"name": "Stephen Curry",
+"article": "Stephen Curry",
+"category": "celebrities",
+"views": 133445
+},
+{
+"name": "Kevin Durant",
+"article": "Kevin Durant",
+"category": "celebrities",
+"views": 96405
+},
+{
+"name": "Tom Brady",
+"article": "Tom Brady",
+"category": "celebrities",
+"views": 300022
+},
+{
+"name": "Simone Biles",
+"article": "Simone Biles",
+"category": "celebrities",
+"views": 68273
+},
+{
+"name": "Usain Bolt",
+"article": "Usain Bolt",
+"category": "celebrities",
+"views": 118719
+},
+{
+"name": "Michael Jordan",
+"article": "Michael Jordan",
+"category": "celebrities",
+"views": 253478
+},
+{
+"name": "Shohei Ohtani",
+"article": "Shohei Ohtani",
+"category": "celebrities",
+"views": 130001
+},
+{
+"name": "Patrick Mahomes",
+"article": "Patrick Mahomes",
+"category": "celebrities",
+"views": 279123
+},
+{
+"name": "Novak Djokovic",
+"article": "Novak Djokovic",
+"category": "celebrities",
+"views": 271705
+},
+{
+"name": "Rafael Nadal",
+"article": "Rafael Nadal",
+"category": "celebrities",
+"views": 180227
+},
+{
+"name": "Caitlin Clark",
+"article": "Caitlin Clark",
+"category": "celebrities",
+"views": 161321
+},
+{
+"name": "MrBeast",
+"article": "MrBeast",
+"category": "celebrities",
+"views": 277297
+},
+{
+"name": "PewDiePie",
+"article": "PewDiePie",
+"category": "celebrities",
+"views": 59019
+},
+{
+"name": "KSI",
+"article": "KSI",
+"category": "celebrities",
+"views": 87358
+},
+{
+"name": "Emma Chamberlain",
+"article": "Emma Chamberlain",
+"category": "celebrities",
+"views": 36822
+},
+{
+"name": "iJustine",
+"article": "IJustine",
+"category": "celebrities",
+"views": 13543
+},
+{
+"name": "Charli D'Amelio",
+"article": "Charli D'Amelio",
+"category": "celebrities",
+"views": 85847
+},
+{
+"name": "Khaby Lame",
+"article": "Khaby Lame",
+"category": "celebrities",
+"views": 34102
+},
+{
+"name": "Addison Rae",
+"article": "Addison Rae",
+"category": "celebrities",
+"views": 59161
+},
+{
+"name": "Zach King",
+"article": "Zach King",
+"category": "celebrities",
+"views": 9573
+},
+{
+"name": "Liza Koshy",
+"article": "Liza Koshy",
+"category": "celebrities",
+"views": 19416
+},
+{
+"name": "Pizza",
+"article": "Pizza",
+"category": "food",
+"views": 47654
+},
+{
+"name": "Sushi",
+"article": "Sushi",
+"category": "food",
+"views": 42001
+},
+{
+"name": "Hamburger",
+"article": "Hamburger",
+"category": "food",
+"views": 45530
+},
+{
+"name": "Hot Dog",
+"article": "Hot dog",
+"category": "food",
+"views": 74809
+},
+{
+"name": "Taco",
+"article": "Taco",
+"category": "food",
+"views": 20621
+},
+{
+"name": "Burrito",
+"article": "Burrito",
+"category": "food",
+"views": 16929
+},
+{
+"name": "Ramen",
+"article": "Ramen",
+"category": "food",
+"views": 30586
+},
+{
+"name": "Pasta",
+"article": "Pasta",
+"category": "food",
+"views": 53358
+},
+{
+"name": "Spaghetti",
+"article": "Spaghetti",
+"category": "food",
+"views": 17747
+},
+{
+"name": "Pancake",
+"article": "Pancake",
+"category": "food",
+"views": 20663
+},
+{
+"name": "Waffle",
+"article": "Waffle",
+"category": "food",
+"views": 14817
+},
+{
+"name": "Ice Cream",
+"article": "Ice cream",
+"category": "food",
+"views": 58095
+},
+{
+"name": "Chocolate",
+"article": "Chocolate",
+"category": "food",
+"views": 110074
+},
+{
+"name": "Cake",
+"article": "Cake",
+"category": "food",
+"views": 16267
+},
+{
+"name": "Cookie",
+"article": "Cookie",
+"category": "food",
+"views": 24650
+},
+{
+"name": "Doughnut",
+"article": "Doughnut",
+"category": "food",
+"views": 22042
+},
+{
+"name": "Bagel",
+"article": "Bagel",
+"category": "food",
+"views": 22595
+},
+{
+"name": "Sandwich",
+"article": "Sandwich",
+"category": "food",
+"views": 24960
+},
+{
+"name": "French Fries",
+"article": "French fries",
+"category": "food",
+"views": 34277
+},
+{
+"name": "Fried Chicken",
+"article": "Fried chicken",
+"category": "food",
+"views": 16835
+},
+{
+"name": "Popcorn",
+"article": "Popcorn",
+"category": "food",
+"views": 24088
+},
+{
+"name": "Nachos",
+"article": "Nachos",
+"category": "food",
+"views": 14059
+},
+{
+"name": "Guacamole",
+"article": "Guacamole",
+"category": "food",
+"views": 17424
+},
+{
+"name": "Pretzel",
+"article": "Pretzel",
+"category": "food",
+"views": 20698
+},
+{
+"name": "Churro",
+"article": "Churro",
+"category": "food",
+"views": 16239
+},
+{
+"name": "Dumpling",
+"article": "Dumpling",
+"category": "food",
+"views": 19325
+},
+{
+"name": "Curry",
+"article": "Curry",
+"category": "food",
+"views": 24741
+},
+{
+"name": "Pho",
+"article": "Pho",
+"category": "food",
+"views": 30861
+},
+{
+"name": "Pad Thai",
+"article": "Pad thai",
+"category": "food",
+"views": 28289
+},
+{
+"name": "Lasagne",
+"article": "Lasagna",
+"category": "food",
+"views": 21392
+},
+{
+"name": "Falafel",
+"article": "Falafel",
+"category": "food",
+"views": 35571
+},
+{
+"name": "Hummus",
+"article": "Hummus",
+"category": "food",
+"views": 31052
+},
+{
+"name": "Kebab",
+"article": "Kebab",
+"category": "food",
+"views": 19509
+},
+{
+"name": "Croissant",
+"article": "Croissant",
+"category": "food",
+"views": 26947
+},
+{
+"name": "Cheesecake",
+"article": "Cheesecake",
+"category": "food",
+"views": 16414
+},
+{
+"name": "Brownie",
+"article": "Chocolate brownie",
+"category": "food",
+"views": 8236
+},
+{
+"name": "Muffin",
+"article": "Muffin",
+"category": "food",
+"views": 5502
+},
+{
+"name": "Oatmeal",
+"article": "Oatmeal",
+"category": "food",
+"views": 11003
+},
+{
+"name": "Egg",
+"article": "Eggs as food",
+"category": "food",
+"views": 14751
+},
+{
+"name": "Bacon",
+"article": "Bacon",
+"category": "food",
+"views": 18720
+},
+{
+"name": "Cheese",
+"article": "Cheese",
+"category": "food",
+"views": 38360
+},
+{
+"name": "Honey",
+"article": "Honey",
+"category": "food",
+"views": 26807
+},
+{
+"name": "Avocado",
+"article": "Avocado",
+"category": "food",
+"views": 53916
+},
+{
+"name": "Mango",
+"article": "Mango",
+"category": "food",
+"views": 29470
+},
+{
+"name": "Watermelon",
+"article": "Watermelon",
+"category": "food",
+"views": 29408
+},
+{
+"name": "Strawberry",
+"article": "Strawberry",
+"category": "food",
+"views": 30837
+},
+{
+"name": "Banana",
+"article": "Banana",
+"category": "food",
+"views": 60637
+},
+{
+"name": "Apple",
+"article": "Apple",
+"category": "food",
+"views": 77089
+},
+{
+"name": "Pineapple",
+"article": "Pineapple",
+"category": "food",
+"views": 32605
+},
+{
+"name": "Peanut Butter",
+"article": "Peanut butter",
+"category": "food",
+"views": 18417
+},
+{
+"name": "YouTube",
+"article": "YouTube",
+"category": "brands",
+"views": 1058941
+},
+{
+"name": "Google",
+"article": "Google",
+"category": "brands",
+"views": 548798
+},
+{
+"name": "Amazon",
+"article": "Amazon (company)",
+"category": "brands",
+"views": 231587
+},
+{
+"name": "Netflix",
+"article": "Netflix",
+"category": "brands",
+"views": 181270
+},
+{
+"name": "Disney",
+"article": "The Walt Disney Company",
+"category": "brands",
+"views": 102336
+},
+{
+"name": "Nike",
+"article": "Nike, Inc.",
+"category": "brands",
+"views": 82875
+},
+{
+"name": "Adidas",
+"article": "Adidas",
+"category": "brands",
+"views": 67888
+},
+{
+"name": "Coca-Cola",
+"article": "Coca-Cola",
+"category": "brands",
+"views": 82666
+},
+{
+"name": "Pepsi",
+"article": "Pepsi",
+"category": "brands",
+"views": 41681
+},
+{
+"name": "McDonald's",
+"article": "McDonald's",
+"category": "brands",
+"views": 110140
+},
+{
+"name": "Starbucks",
+"article": "Starbucks",
+"category": "brands",
+"views": 66803
+},
+{
+"name": "Walmart",
+"article": "Walmart",
+"category": "brands",
+"views": 99928
+},
+{
+"name": "Target",
+"article": "Target Corporation",
+"category": "brands",
+"views": 37992
+},
+{
+"name": "Lego",
+"article": "Lego",
+"category": "brands",
+"views": 56140
+},
+{
+"name": "Nintendo",
+"article": "Nintendo",
+"category": "brands",
+"views": 101447
+},
+{
+"name": "Sony",
+"article": "Sony",
+"category": "brands",
+"views": 70734
+},
+{
+"name": "Microsoft",
+"article": "Microsoft",
+"category": "brands",
+"views": 217012
+},
+{
+"name": "Apple Inc.",
+"article": "Apple Inc.",
+"category": "brands",
+"views": 301168
+},
+{
+"name": "Samsung",
+"article": "Samsung Electronics",
+"category": "brands",
+"views": 39449
+},
+{
+"name": "Tesla",
+"article": "Tesla, Inc.",
+"category": "brands",
+"views": 84238
+},
+{
+"name": "SpaceX",
+"article": "SpaceX",
+"category": "brands",
+"views": 86639
+},
+{
+"name": "Instagram",
+"article": "Instagram",
+"category": "brands",
+"views": 753539
+},
+{
+"name": "TikTok",
+"article": "TikTok",
+"category": "brands",
+"views": 211367
+},
+{
+"name": "Snapchat",
+"article": "Snapchat",
+"category": "brands",
+"views": 63049
+},
+{
+"name": "Facebook",
+"article": "Facebook",
+"category": "brands",
+"views": 515423
+},
+{
+"name": "Twitter",
+"article": "X (social network)",
+"category": "brands",
+"views": 275247
+},
+{
+"name": "Discord",
+"article": "Discord",
+"category": "brands",
+"views": 94035
+},
+{
+"name": "Spotify",
+"article": "Spotify",
+"category": "brands",
+"views": 74840
+},
+{
+"name": "Twitch",
+"article": "Twitch (service)",
+"category": "brands",
+"views": 58719
+},
+{
+"name": "Red Bull",
+"article": "Red Bull",
+"category": "brands",
+"views": 61580
+},
+{
+"name": "Oreo",
+"article": "Oreo",
+"category": "brands",
+"views": 28806
+},
+{
+"name": "Doritos",
+"article": "Doritos",
+"category": "brands",
+"views": 17511
+},
+{
+"name": "Lay's",
+"article": "Lay's",
+"category": "brands",
+"views": 17175
+},
+{
+"name": "Pringles",
+"article": "Pringles",
+"category": "brands",
+"views": 20010
+},
+{
+"name": "Hershey's",
+"article": "The Hershey Company",
+"category": "brands",
+"views": 25565
+},
+{
+"name": "M&M's",
+"article": "M&M's",
+"category": "brands",
+"views": 26829
+},
+{
+"name": "Skittles",
+"article": "Skittles (confectionery)",
+"category": "brands",
+"views": 9589
+},
+{
+"name": "Reese's",
+"article": "Reese's Peanut Butter Cups",
+"category": "brands",
+"views": 11548
+},
+{
+"name": "Kit Kat",
+"article": "KitKat",
+"category": "brands",
+"views": 13040
+},
+{
+"name": "Gatorade",
+"article": "Gatorade",
+"category": "brands",
+"views": 20474
+},
+{
+"name": "Monster Energy",
+"article": "Monster Energy",
+"category": "brands",
+"views": 43103
+},
+{
+"name": "Chick-fil-A",
+"article": "Chick-fil-A",
+"category": "brands",
+"views": 38977
+},
+{
+"name": "Subway",
+"article": "Subway (restaurant)",
+"category": "brands",
+"views": 24781
+},
+{
+"name": "Domino's Pizza",
+"article": "Domino's",
+"category": "brands",
+"views": 19803
+},
+{
+"name": "Pizza Hut",
+"article": "Pizza Hut",
+"category": "brands",
+"views": 28483
+},
+{
+"name": "Burger King",
+"article": "Burger King",
+"category": "brands",
+"views": 41637
+},
+{
+"name": "KFC",
+"article": "KFC",
+"category": "brands",
+"views": 50170
+},
+{
+"name": "Taco Bell",
+"article": "Taco Bell",
+"category": "brands",
+"views": 33348
+},
+{
+"name": "Wendy's",
+"article": "Wendy's",
+"category": "brands",
+"views": 31243
+},
+{
+"name": "Dunkin'",
+"article": "Dunkin' Donuts",
+"category": "brands",
+"views": 25405
+},
+{
+"name": "Dog",
+"article": "Dog",
+"category": "animals",
+"views": 178084
+},
+{
+"name": "Cat",
+"article": "Cat",
+"category": "animals",
+"views": 361656
+},
+{
+"name": "Lion",
+"article": "Lion",
+"category": "animals",
+"views": 103125
+},
+{
+"name": "Tiger",
+"article": "Tiger",
+"category": "animals",
+"views": 96713
+},
+{
+"name": "Elephant",
+"article": "Elephant",
+"category": "animals",
+"views": 71181
+},
+{
+"name": "Giraffe",
+"article": "Giraffe",
+"category": "animals",
+"views": 49064
+},
+{
+"name": "Zebra",
+"article": "Zebra",
+"category": "animals",
+"views": 30757
+},
+{
+"name": "Gorilla",
+"article": "Gorilla",
+"category": "animals",
+"views": 57703
+},
+{
+"name": "Chimpanzee",
+"article": "Chimpanzee",
+"category": "animals",
+"views": 54471
+},
+{
+"name": "Panda",
+"article": "Giant panda",
+"category": "animals",
+"views": 107935
+},
+{
+"name": "Koala",
+"article": "Koala",
+"category": "animals",
+"views": 44158
+},
+{
+"name": "Kangaroo",
+"article": "Kangaroo",
+"category": "animals",
+"views": 46759
+},
+{
+"name": "Platypus",
+"article": "Platypus",
+"category": "animals",
+"views": 72643
+},
+{
+"name": "Axolotl",
+"article": "Axolotl",
+"category": "animals",
+"views": 129224
+},
+{
+"name": "Capybara",
+"article": "Capybara",
+"category": "animals",
+"views": 103984
+},
+{
+"name": "Sloth",
+"article": "Sloth",
+"category": "animals",
+"views": 33893
+},
+{
+"name": "Red Panda",
+"article": "Red panda",
+"category": "animals",
+"views": 58964
+},
+{
+"name": "Penguin",
+"article": "Penguin",
+"category": "animals",
+"views": 54028
+},
+{
+"name": "Polar Bear",
+"article": "Polar bear",
+"category": "animals",
+"views": 77103
+},
+{
+"name": "Brown Bear",
+"article": "Brown bear",
+"category": "animals",
+"views": 61450
+},
+{
+"name": "Wolf",
+"article": "Wolf",
+"category": "animals",
+"views": 81613
+},
+{
+"name": "Fox",
+"article": "Fox",
+"category": "animals",
+"views": 65898
+},
+{
+"name": "Rabbit",
+"article": "Rabbit",
+"category": "animals",
+"views": 60550
+},
+{
+"name": "Squirrel",
+"article": "Squirrel",
+"category": "animals",
+"views": 104253
+},
+{
+"name": "Hedgehog",
+"article": "Hedgehog",
+"category": "animals",
+"views": 38752
+},
+{
+"name": "Raccoon",
+"article": "Raccoon",
+"category": "animals",
+"views": 75709
+},
+{
+"name": "Otter",
+"article": "Otter",
+"category": "animals",
+"views": 37089
+},
+{
+"name": "Beaver",
+"article": "Beaver",
+"category": "animals",
+"views": 43451
+},
+{
+"name": "Deer",
+"article": "Deer",
+"category": "animals",
+"views": 51496
+},
+{
+"name": "Moose",
+"article": "Moose",
+"category": "animals",
+"views": 73235
+},
+{
+"name": "Bison",
+"article": "Bison",
+"category": "animals",
+"views": 34057
+},
+{
+"name": "Horse",
+"article": "Horse",
+"category": "animals",
+"views": 78822
+},
+{
+"name": "Cow",
+"article": "Cattle",
+"category": "animals",
+"views": 63541
+},
+{
+"name": "Pig",
+"article": "Pig",
+"category": "animals",
+"views": 43671
+},
+{
+"name": "Sheep",
+"article": "Sheep",
+"category": "animals",
+"views": 42032
+},
+{
+"name": "Goat",
+"article": "Goat",
+"category": "animals",
+"views": 42989
+},
+{
+"name": "Chicken",
+"article": "Chicken",
+"category": "animals",
+"views": 66684
+},
+{
+"name": "Duck",
+"article": "Duck",
+"category": "animals",
+"views": 32411
+},
+{
+"name": "Owl",
+"article": "Owl",
+"category": "animals",
+"views": 36130
+},
+{
+"name": "Eagle",
+"article": "Eagle",
+"category": "animals",
+"views": 25889
+},
+{
+"name": "Parrot",
+"article": "Parrot",
+"category": "animals",
+"views": 31769
+},
+{
+"name": "Flamingo",
+"article": "Flamingo",
+"category": "animals",
+"views": 25713
+},
+{
+"name": "Peacock",
+"article": "Peafowl",
+"category": "animals",
+"views": 38772
+},
+{
+"name": "Shark",
+"article": "Shark",
+"category": "animals",
+"views": 52580
+},
+{
+"name": "Dolphin",
+"article": "Dolphin",
+"category": "animals",
+"views": 39524
+},
+{
+"name": "Octopus",
+"article": "Octopus",
+"category": "animals",
+"views": 56142
+},
+{
+"name": "Jellyfish",
+"article": "Jellyfish",
+"category": "animals",
+"views": 47525
+},
+{
+"name": "Crab",
+"article": "Crab",
+"category": "animals",
+"views": 22199
+},
+{
+"name": "Turtle",
+"article": "Turtle",
+"category": "animals",
+"views": 34897
+},
+{
+"name": "Snake",
+"article": "Snake",
+"category": "animals",
+"views": 71140
+},
+{
+"name": "United States",
+"article": "United States",
+"category": "countries",
+"views": 1520090
+},
+{
+"name": "Canada",
+"article": "Canada",
+"category": "countries",
+"views": 353830
+},
+{
+"name": "Mexico",
+"article": "Mexico",
+"category": "countries",
+"views": 242295
+},
+{
+"name": "Brazil",
+"article": "Brazil",
+"category": "countries",
+"views": 300449
+},
+{
+"name": "United Kingdom",
+"article": "United Kingdom",
+"category": "countries",
+"views": 540018
+},
+{
+"name": "France",
+"article": "France",
+"category": "countries",
+"views": 256173
+},
+{
+"name": "Germany",
+"article": "Germany",
+"category": "countries",
+"views": 340312
+},
+{
+"name": "Italy",
+"article": "Italy",
+"category": "countries",
+"views": 211186
+},
+{
+"name": "Spain",
+"article": "Spain",
+"category": "countries",
+"views": 221592
+},
+{
+"name": "Russia",
+"article": "Russia",
+"category": "countries",
+"views": 345961
+},
+{
+"name": "China",
+"article": "China",
+"category": "countries",
+"views": 383030
+},
+{
+"name": "Japan",
+"article": "Japan",
+"category": "countries",
+"views": 312155
+},
+{
+"name": "South Korea",
+"article": "South Korea",
+"category": "countries",
+"views": 169179
+},
+{
+"name": "India",
+"article": "India",
+"category": "countries",
+"views": 444280
+},
+{
+"name": "Australia",
+"article": "Australia",
+"category": "countries",
+"views": 336749
+},
+{
+"name": "Egypt",
+"article": "Egypt",
+"category": "countries",
+"views": 160634
+},
+{
+"name": "South Africa",
+"article": "South Africa",
+"category": "countries",
+"views": 208199
+},
+{
+"name": "Nigeria",
+"article": "Nigeria",
+"category": "countries",
+"views": 153555
+},
+{
+"name": "Kenya",
+"article": "Kenya",
+"category": "countries",
+"views": 93665
+},
+{
+"name": "Saudi Arabia",
+"article": "Saudi Arabia",
+"category": "countries",
+"views": 245237
+},
+{
+"name": "Turkey",
+"article": "Turkey",
+"category": "countries",
+"views": 252874
+},
+{
+"name": "Greece",
+"article": "Greece",
+"category": "countries",
+"views": 155403
+},
+{
+"name": "Netherlands",
+"article": "Netherlands",
+"category": "countries",
+"views": 212004
+},
+{
+"name": "Sweden",
+"article": "Sweden",
+"category": "countries",
+"views": 189070
+},
+{
+"name": "Norway",
+"article": "Norway",
+"category": "countries",
+"views": 181180
+},
+{
+"name": "Switzerland",
+"article": "Switzerland",
+"category": "countries",
+"views": 185587
+},
+{
+"name": "Portugal",
+"article": "Portugal",
+"category": "countries",
+"views": 205985
+},
+{
+"name": "Ireland",
+"article": "Ireland",
+"category": "countries",
+"views": 173495
+},
+{
+"name": "Iceland",
+"article": "Iceland",
+"category": "countries",
+"views": 155507
+},
+{
+"name": "New Zealand",
+"article": "New Zealand",
+"category": "countries",
+"views": 212663
+},
+{
+"name": "Argentina",
+"article": "Argentina",
+"category": "countries",
+"views": 193250
+},
+{
+"name": "Chile",
+"article": "Chile",
+"category": "countries",
+"views": 112759
+},
+{
+"name": "Colombia",
+"article": "Colombia",
+"category": "countries",
+"views": 128861
+},
+{
+"name": "Peru",
+"article": "Peru",
+"category": "countries",
+"views": 97426
+},
+{
+"name": "Thailand",
+"article": "Thailand",
+"category": "countries",
+"views": 161106
+},
+{
+"name": "Vietnam",
+"article": "Vietnam",
+"category": "countries",
+"views": 187714
+},
+{
+"name": "Philippines",
+"article": "Philippines",
+"category": "countries",
+"views": 246887
+},
+{
+"name": "Indonesia",
+"article": "Indonesia",
+"category": "countries",
+"views": 239931
+},
+{
+"name": "Jamaica",
+"article": "Jamaica",
+"category": "countries",
+"views": 105145
+},
+{
+"name": "Cuba",
+"article": "Cuba",
+"category": "countries",
+"views": 121475
+},
+{
+"name": "Titanic",
+"article": "Titanic (1997 film)",
+"category": "movies",
+"views": 153276
+},
+{
+"name": "The Avengers",
+"article": "The Avengers (2012 film)",
+"category": "movies",
+"views": 122611
+},
+{
+"name": "Avengers: Endgame",
+"article": "Avengers: Endgame",
+"category": "movies",
+"views": 727068
+},
+{
+"name": "Spider-Man: No Way Home",
+"article": "Spider-Man: No Way Home",
+"category": "movies",
+"views": 196507
+},
+{
+"name": "Star Wars",
+"article": "Star Wars (film)",
+"category": "movies",
+"views": 116914
+},
+{
+"name": "The Lion King",
+"article": "The Lion King",
+"category": "movies",
+"views": 88667
+},
+{
+"name": "Frozen",
+"article": "Frozen (2013 film)",
+"category": "movies",
+"views": 62717
+},
+{
+"name": "Shrek",
+"article": "Shrek",
+"category": "movies",
+"views": 79902
+},
+{
+"name": "The Dark Knight",
+"article": "The Dark Knight",
+"category": "movies",
+"views": 153764
+},
+{
+"name": "Jurassic Park",
+"article": "Jurassic Park",
+"category": "movies",
+"views": 116221
+},
+{
+"name": "Harry Potter",
+"article": "Harry Potter and the Philosopher's Stone (film)",
+"category": "movies",
+"views": 119142
+},
+{
+"name": "Toy Story",
+"article": "Toy Story",
+"category": "movies",
+"views": 94086
+},
+{
+"name": "Finding Nemo",
+"article": "Finding Nemo",
+"category": "movies",
+"views": 57339
+},
+{
+"name": "The Matrix",
+"article": "The Matrix",
+"category": "movies",
+"views": 143723
+},
+{
+"name": "Inception",
+"article": "Inception",
+"category": "movies",
+"views": 119364
+},
+{
+"name": "Deadpool",
+"article": "Deadpool (film)",
+"category": "movies",
+"views": 66045
+},
+{
+"name": "Barbie",
+"article": "Barbie (film)",
+"category": "movies",
+"views": 83368
+},
+{
+"name": "Oppenheimer",
+"article": "Oppenheimer (film)",
+"category": "movies",
+"views": 203956
+},
+{
+"name": "Minions",
+"article": "Minions (film)",
+"category": "movies",
+"views": 49131
+},
+{
+"name": "Despicable Me",
+"article": "Despicable Me",
+"category": "movies",
+"views": 51188
+},
+{
+"name": "Encanto",
+"article": "Encanto",
+"category": "movies",
+"views": 54328
+},
+{
+"name": "Moana",
+"article": "Moana",
+"category": "movies",
+"views": 2190
+},
+{
+"name": "Coco",
+"article": "Coco (2017 film)",
+"category": "movies",
+"views": 75368
+},
+{
+"name": "Up",
+"article": "Up (2009 film)",
+"category": "movies",
+"views": 56840
+},
+{
+"name": "The Incredibles",
+"article": "The Incredibles",
+"category": "movies",
+"views": 59389
+},
+{
+"name": "Cars",
+"article": "Cars (film)",
+"category": "movies",
+"views": 129465
+},
+{
+"name": "Ratatouille",
+"article": "Ratatouille",
+"category": "movies",
+"views": 26598
+},
+{
+"name": "WALL-E",
+"article": "WALL-E",
+"category": "movies",
+"views": 55090
+},
+{
+"name": "Inside Out",
+"article": "Inside Out",
+"category": "movies",
+"views": 39586
+},
+{
+"name": "Guardians of the Galaxy",
+"article": "Guardians of the Galaxy (film)",
+"category": "movies",
+"views": 99161
+},
+{
+"name": "Black Panther",
+"article": "Black Panther (film)",
+"category": "movies",
+"views": 92231
+},
+{
+"name": "Iron Man",
+"article": "Ironman",
+"category": "movies",
+"views": 1232
+},
+{
+"name": "Joker",
+"article": "Joker (2019 film)",
+"category": "movies",
+"views": 75222
+},
+{
+"name": "It",
+"article": "It (2017 film)",
+"category": "movies",
+"views": 111472
+},
+{
+"name": "Venom",
+"article": "Venom (disambiguation)",
+"category": "movies",
+"views": 931
+},
+{
+"name": "The Super Mario Bros. Movie",
+"article": "The Super Mario Bros. Movie",
+"category": "movies",
+"views": 47621
+},
+{
+"name": "Jaws",
+"article": "Jaws (film)",
+"category": "movies",
+"views": 84401
+},
+{
+"name": "E.T. the Extra-Terrestrial",
+"article": "E.T. the Extra-Terrestrial",
+"category": "movies",
+"views": 66485
+},
+{
+"name": "Home Alone",
+"article": "Home Alone",
+"category": "movies",
+"views": 64653
+},
+{
+"name": "Night at the Museum",
+"article": "Night at the Museum",
+"category": "movies",
+"views": 50399
+},
+{
+"name": "The Office",
+"article": "The Office (American TV series)",
+"category": "tv",
+"views": 155403
+},
+{
+"name": "Friends",
+"article": "Friends",
+"category": "tv",
+"views": 141817
+},
+{
+"name": "Breaking Bad",
+"article": "Breaking Bad",
+"category": "tv",
+"views": 234100
+},
+{
+"name": "Stranger Things",
+"article": "Stranger Things",
+"category": "tv",
+"views": 171681
+},
+{
+"name": "Game of Thrones",
+"article": "Game of Thrones",
+"category": "tv",
+"views": 233526
+},
+{
+"name": "The Simpsons",
+"article": "The Simpsons",
+"category": "tv",
+"views": 166732
+},
+{
+"name": "SpongeBob SquarePants",
+"article": "SpongeBob SquarePants",
+"category": "tv",
+"views": 112163
+},
+{
+"name": "Naruto",
+"article": "Naruto",
+"category": "tv",
+"views": 74210
+},
+{
+"name": "One Piece",
+"article": "One Piece",
+"category": "tv",
+"views": 126933
+},
+{
+"name": "Attack on Titan",
+"article": "Attack on Titan",
+"category": "tv",
+"views": 108095
+},
+{
+"name": "Dragon Ball Z",
+"article": "Dragon Ball Z",
+"category": "tv",
+"views": 48862
+},
+{
+"name": "My Hero Academia",
+"article": "My Hero Academia",
+"category": "tv",
+"views": 51260
+},
+{
+"name": "Demon Slayer",
+"article": "Demon Slayer: Kimetsu no Yaiba",
+"category": "tv",
+"views": 79954
+},
+{
+"name": "Death Note",
+"article": "Death Note",
+"category": "tv",
+"views": 74325
+},
+{
+"name": "Avatar: The Last Airbender",
+"article": "Avatar: The Last Airbender",
+"category": "tv",
+"views": 110046
+},
+{
+"name": "Rick and Morty",
+"article": "Rick and Morty",
+"category": "tv",
+"views": 112142
+},
+{
+"name": "South Park",
+"article": "South Park",
+"category": "tv",
+"views": 279785
+},
+{
+"name": "Family Guy",
+"article": "Family Guy",
+"category": "tv",
+"views": 108224
+},
+{
+"name": "The Big Bang Theory",
+"article": "The Big Bang Theory",
+"category": "tv",
+"views": 190553
+},
+{
+"name": "How I Met Your Mother",
+"article": "How I Met Your Mother",
+"category": "tv",
+"views": 75402
+},
+{
+"name": "Brooklyn Nine-Nine",
+"article": "Brooklyn Nine-Nine",
+"category": "tv",
+"views": 67952
+},
+{
+"name": "Grey's Anatomy",
+"article": "Grey's Anatomy",
+"category": "tv",
+"views": 176257
+},
+{
+"name": "The Mandalorian",
+"article": "The Mandalorian",
+"category": "tv",
+"views": 99794
+},
+{
+"name": "Wednesday",
+"article": "Wednesday (TV series)",
+"category": "tv",
+"views": 108837
+},
+{
+"name": "Squid Game",
+"article": "Squid Game",
+"category": "tv",
+"views": 61989
+},
+{
+"name": "The Boys",
+"article": "The Boys (TV series)",
+"category": "tv",
+"views": 115702
+},
+{
+"name": "Doctor Who",
+"article": "Doctor Who",
+"category": "tv",
+"views": 130162
+},
+{
+"name": "The Walking Dead",
+"article": "The Walking Dead (TV series)",
+"category": "tv",
+"views": 164415
+},
+{
+"name": "Cobra Kai",
+"article": "Cobra Kai",
+"category": "tv",
+"views": 55149
+},
+{
+"name": "Suits",
+"article": "Suits (American TV series)",
+"category": "tv",
+"views": 112382
+},
+{
+"name": "Basketball",
+"article": "Basketball",
+"category": "sports",
+"views": 68856
+},
+{
+"name": "Soccer",
+"article": "Association football",
+"category": "sports",
+"views": 142927
+},
+{
+"name": "American Football",
+"article": "American football",
+"category": "sports",
+"views": 101585
+},
+{
+"name": "Baseball",
+"article": "Baseball",
+"category": "sports",
+"views": 48916
+},
+{
+"name": "Tennis",
+"article": "Tennis",
+"category": "sports",
+"views": 40483
+},
+{
+"name": "Golf",
+"article": "Golf",
+"category": "sports",
+"views": 23257
+},
+{
+"name": "Boxing",
+"article": "Boxing",
+"category": "sports",
+"views": 30540
+},
+{
+"name": "Volleyball",
+"article": "Volleyball",
+"category": "sports",
+"views": 48974
+},
+{
+"name": "Ice Hockey",
+"article": "Ice hockey",
+"category": "sports",
+"views": 28474
+},
+{
+"name": "Swimming",
+"article": "Competitive swimming",
+"category": "sports",
+"views": 9028
+},
+{
+"name": "Cricket",
+"article": "Cricket",
+"category": "sports",
+"views": 113346
+},
+{
+"name": "Rugby",
+"article": "Rugby union",
+"category": "sports",
+"views": 35600
+},
+{
+"name": "Table Tennis",
+"article": "Table tennis",
+"category": "sports",
+"views": 20690
+},
+{
+"name": "Badminton",
+"article": "Badminton",
+"category": "sports",
+"views": 40684
+},
+{
+"name": "Skateboarding",
+"article": "Skateboarding",
+"category": "sports",
+"views": 9757
+},
+{
+"name": "Gymnastics",
+"article": "Gymnastics",
+"category": "sports",
+"views": 12871
+},
+{
+"name": "Olympic Games",
+"article": "Olympic Games",
+"category": "sports",
+"views": 66245
+},
+{
+"name": "FIFA World Cup",
+"article": "FIFA World Cup",
+"category": "sports",
+"views": 153112
+},
+{
+"name": "Super Bowl",
+"article": "Super Bowl",
+"category": "sports",
+"views": 82487
+},
+{
+"name": "Formula One",
+"article": "Formula One",
+"category": "sports",
+"views": 150901
+}
+]
+}
