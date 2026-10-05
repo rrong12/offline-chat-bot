@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "offline-chat-bot"
+version = "0.1.0"
+description = "Twitch chat-games bot for jasontheween's offline chat"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "twitchio==3.3.2",
+    "aiohttp>=3.9",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[tool.setuptools.packages.find]
+include = ["bot*"]
+
+[tool.setuptools.package-data]
+bot = ["content/*.txt", "content/words/*.txt"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    # TwitchIO's web adapter subclasses aiohttp's Application; harmless, not ours to fix.
+    "ignore:Inheritance class AiohttpAdapter from web.Application is discouraged:DeprecationWarning",
+]
