@@ -26,12 +26,18 @@ class ActivityLog:
         return self.directory / f"{_PREFIX}{day.isoformat()}.jsonl"
 
     def write(self, event: str, **fields: Any) -> None:
+        """Append one event. Never raises: a logging failure must not crash the bot."""
         now = self.clock.now()
-        record = {"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "event": event, **fields}
+        stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        record = {"ts": stamp, "event": event, **fields}
+        record["ts"] = stamp  # a caller-supplied "ts" field must not replace the real timestamp
         line = json.dumps(record, ensure_ascii=False, default=str)
-        with self.path_for(now.date()).open("a", encoding="utf-8") as fp:
-            fp.write(line + "\n")
         logger.info("%s %s", event, json.dumps(fields, ensure_ascii=False, default=str))
+        try:
+            with self.path_for(now.date()).open("a", encoding="utf-8") as fp:
+                fp.write(line + "\n")
+        except OSError:
+            logger.exception("could not write the activity log")
 
     def prune(self) -> int:
         """Delete files older than the retention window. Returns how many were deleted."""
@@ -44,7 +50,11 @@ class ActivityLog:
             except ValueError:
                 continue
             if day < cutoff:
-                path.unlink()
+                try:
+                    path.unlink()
+                except OSError:
+                    logger.exception("could not delete old log %s", path)
+                    continue
                 deleted += 1
         self._last_prune_day = today
         return deleted

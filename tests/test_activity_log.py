@@ -19,6 +19,19 @@ def test_write_appends_json_line_to_todays_file(tmp_path, clock: FakeClock):
     }
 
 
+def test_caller_cannot_overwrite_timestamp(tmp_path, clock: FakeClock):
+    log = ActivityLog(tmp_path, clock)
+    log.write("command", ts="bogus")
+    record = json.loads(log.path_for(date(2026, 10, 4)).read_text())
+    assert record["ts"] == "2026-10-04T12:00:00Z"
+
+
+def test_write_failure_is_swallowed(tmp_path, clock: FakeClock):
+    log = ActivityLog(tmp_path / "logs", clock)
+    (tmp_path / "logs").rmdir()  # the log folder disappears while the bot runs
+    log.write("error", where="test")  # must not raise
+
+
 def test_new_utc_day_starts_new_file(tmp_path, clock: FakeClock):
     log = ActivityLog(tmp_path, clock)
     log.write("a")
@@ -33,10 +46,11 @@ def test_prune_deletes_files_older_than_retention(tmp_path, clock: FakeClock):
     old = tmp_path / "activity-2026-09-03.jsonl"
     kept = tmp_path / "activity-2026-09-04.jsonl"
     other = tmp_path / "notes.txt"
-    for p in (old, kept, other):
+    malformed = tmp_path / "activity-not-a-date.jsonl"
+    for p in (old, kept, other, malformed):
         p.write_text("x")
     assert log.prune() == 1
-    assert not old.exists() and kept.exists() and other.exists()
+    assert not old.exists() and kept.exists() and other.exists() and malformed.exists()
 
 
 def test_maybe_rollover_prunes_once_per_day(tmp_path, clock: FakeClock):

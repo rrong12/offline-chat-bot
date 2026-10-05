@@ -23,7 +23,7 @@ class Assets:
         return sorted(p.stem for p in (self.root / "words").glob("*.txt"))
 
 
-@cache
+@cache  # content is bundled and read-only, so each file is read once per process
 def _read(path: Path) -> tuple[str, ...]:
     text = path.read_text(encoding="utf-8")
     return tuple(
