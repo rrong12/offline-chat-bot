@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 MIGRATIONS: list[str] = [
@@ -44,6 +44,10 @@ MIGRATIONS: list[str] = [
     );
 
     CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+    -- Covering index for per-user totals (leaderboards, ranks, ?gamestats); game filter.
+    CREATE INDEX round_players_user ON round_players(user_id, points, won);
+    CREATE INDEX rounds_game ON rounds(game);
     """,
 ]
 
@@ -93,7 +97,7 @@ class GameStats:
 
 
 def _iso(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class StatsStore:
@@ -110,16 +114,18 @@ class StatsStore:
     def _migrate(self) -> None:
         with self._conn:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
-            row = self._conn.execute("SELECT version FROM schema_version").fetchone()
-            version = row["version"] if row else 0
-            if row is None:
+            if self._conn.execute("SELECT version FROM schema_version").fetchone() is None:
                 self._conn.execute("INSERT INTO schema_version (version) VALUES (0)")
+        version = self.schema_version()
+        if version > len(MIGRATIONS):
+            raise RuntimeError(
+                f"database schema is version {version}, newer than this code (version {len(MIGRATIONS)})"
+            )
         for number, sql in enumerate(MIGRATIONS[version:], start=version + 1):
+            # sqlite3 doesn't wrap CREATE statements in a transaction by itself, so BEGIN/COMMIT
+            # make each migration all-or-nothing; on an error, the `with` block rolls it back.
             with self._conn:
-                for statement in sql.split(";"):
-                    if statement.strip():
-                        self._conn.execute(statement)
-                self._conn.execute("UPDATE schema_version SET version = ?", (number,))
+                self._conn.executescript(f"BEGIN;\n{sql}\nUPDATE schema_version SET version = {number};\nCOMMIT;")
 
     def schema_version(self) -> int:
         return self._conn.execute("SELECT version FROM schema_version").fetchone()["version"]
@@ -151,7 +157,11 @@ class StatsStore:
     # rounds
 
     def record_round(self, rec: RoundRecord) -> int:
-        """Write a finished round and its players in one transaction. Returns the round id."""
+        """Write a finished round and its players in one transaction. Returns the round id.
+
+        Players' user rows are upserted here; the starter (`started_by`) must already have a
+        user row (the game manager touches the starter when the game starts).
+        """
         with self._conn:
             for p in rec.players:
                 self._upsert_user(p.user_id, p.login, p.display_name, rec.ended_at)
@@ -167,29 +177,39 @@ class StatsStore:
             )
         return round_id
 
-    def _ranked(self, game: str | None) -> list[LeaderRow]:
+    @staticmethod
+    def _totals_sql(game: str | None) -> str:
+        """Per-user totals with points > 0, for all games or one (`:game`)."""
+        if game is None:
+            return """SELECT user_id, SUM(points) AS points, SUM(won) AS wins
+                      FROM round_players GROUP BY user_id HAVING SUM(points) > 0"""
+        return """SELECT rp.user_id, SUM(rp.points) AS points, SUM(rp.won) AS wins
+                  FROM round_players rp JOIN rounds r ON r.round_id = rp.round_id
+                  WHERE r.game = :game GROUP BY rp.user_id HAVING SUM(rp.points) > 0"""
+
+    def leaderboard(self, game: str | None, limit: int) -> list[LeaderRow]:
         rows = self._conn.execute(
-            """SELECT rp.user_id, u.login, u.display_name,
-                      SUM(rp.points) AS points, SUM(rp.won) AS wins
-               FROM round_players rp
-               JOIN rounds r ON r.round_id = rp.round_id
-               JOIN users u ON u.user_id = rp.user_id
-               WHERE (:game IS NULL OR r.game = :game)
-               GROUP BY rp.user_id
-               HAVING SUM(rp.points) > 0
-               ORDER BY points DESC, wins DESC, u.login ASC""",
-            {"game": game},
+            f"""WITH t AS ({self._totals_sql(game)})
+                SELECT t.user_id, u.login, u.display_name, t.points, t.wins
+                FROM t JOIN users u ON u.user_id = t.user_id
+                ORDER BY t.points DESC, t.wins DESC, u.login ASC
+                LIMIT :limit""",
+            {"game": game, "limit": max(0, limit)},
         ).fetchall()
         return [LeaderRow(r["user_id"], r["login"], r["display_name"], r["points"], r["wins"]) for r in rows]
 
-    def leaderboard(self, game: str | None, limit: int) -> list[LeaderRow]:
-        return self._ranked(game)[:limit]
-
     def rank(self, user_id: str, game: str | None) -> int | None:
-        for position, row in enumerate(self._ranked(game), start=1):
-            if row.user_id == user_id:
-                return position
-        return None
+        """1-based position on the leaderboard, or None if the user has no points there."""
+        row = self._conn.execute(
+            f"""WITH t AS ({self._totals_sql(game)}),
+                ranked AS (
+                  SELECT t.user_id,
+                         ROW_NUMBER() OVER (ORDER BY t.points DESC, t.wins DESC, u.login ASC) AS position
+                  FROM t JOIN users u ON u.user_id = t.user_id)
+                SELECT position FROM ranked WHERE user_id = :user_id""",
+            {"game": game, "user_id": user_id},
+        ).fetchone()
+        return row["position"] if row else None
 
     def user_stats(self, user_id: str) -> list[GameStats]:
         rows = self._conn.execute(
@@ -206,15 +226,13 @@ class StatsStore:
 
     def claim_daily(self, user_id: str, feature: str, utc_date: str, result: str) -> bool:
         """Record today's use. Returns False if this user already used the feature today."""
-        try:
-            with self._conn:
-                self._conn.execute(
-                    "INSERT INTO daily_uses (user_id, feature, utc_date, result) VALUES (?, ?, ?, ?)",
-                    (user_id, feature, utc_date, result),
-                )
-        except sqlite3.IntegrityError:
-            return False
-        return True
+        with self._conn:
+            cur = self._conn.execute(
+                """INSERT INTO daily_uses (user_id, feature, utc_date, result) VALUES (?, ?, ?, ?)
+                   ON CONFLICT (user_id, feature, utc_date) DO NOTHING""",
+                (user_id, feature, utc_date, result),
+            )
+        return cur.rowcount == 1
 
     def get_daily(self, user_id: str, feature: str, utc_date: str) -> str | None:
         row = self._conn.execute(
