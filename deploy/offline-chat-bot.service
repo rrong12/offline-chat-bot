@@ -15,6 +15,9 @@ ExecStart=/opt/offline-chat-bot/.venv/bin/python -m bot
 Restart=on-failure
 RestartSec=30
 RestartPreventExitStatus=2 3
+# A clean shutdown takes at most about 20 s (finish the current send, drain, close).
+TimeoutStopSec=30
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target

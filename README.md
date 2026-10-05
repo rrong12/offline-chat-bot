@@ -6,8 +6,8 @@ and a daily activity log. Design: `docs/superpowers/specs/2026-10-04-offline-cha
 
 Games are personal: `?scramble` starts **your** game, only your answers count, and the bot
 answers you in threaded replies. Many people can play at once (25 games by default), each
-person runs one game at a time, and new games pause while the bot's outgoing messages are
-backed up.
+person runs one game at a time, and new games are refused ("try again in a moment") while the
+bot's outgoing messages are backed up.
 
 ## Commands
 
@@ -21,17 +21,24 @@ backed up.
 | `?gamestats [game] [username]` | anyone | Wins, games played, points |
 | `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke` | anyone | Quick fun |
 | `?cookie`, `?cookie give <username>` | anyone | Daily fortune cookie (resets 00:00 UTC) |
-| `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check |
+| `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check. `?bot off` ends every running game with no points, and while paused the bot ignores everything except `?bot` from a mod |
 | `?bot shutdown` | mods, broadcaster, owners | Stop the bot process. Only someone with access to the machine can start it again |
 | `?stopgame` | mods, broadcaster, owners | End all running games with no points |
 
 Categories: animals, countries, food, games, general, streamers.
 
-## Try it without Twitch
+## Install
 
 ```
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
+```
+
+Any Python from 3.11 to 3.13 works.
+
+## Try it without Twitch
+
+```
 .venv/bin/python -m bot console
 ```
 
@@ -44,17 +51,26 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 ## Set up on Twitch (one time)
 
 1. **Bot account:** create a new Twitch account for the bot and verify its email.
-2. **Twitch app:** at https://dev.twitch.tv/console, register an application.
+2. **Twitch app:** at https://dev.twitch.tv/console, register an application (Twitch requires
+   two-factor authentication on the account that registers it).
    - OAuth Redirect URL: `http://localhost:4343/oauth/callback` (exactly).
    - Category: Chat Bot. Client type: Confidential.
    - Copy the Client ID and create a Client Secret.
-3. **Secrets:** `cp .env.example .env`, then fill in `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, and
-   your own Twitch user ID in `OWNER_IDS`.
-4. **Log the bot in:** run `.venv/bin/python -m bot auth`. Open the printed URL in a browser where
+3. **Secrets:** `cp .env.example .env`, then fill in `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET`.
+   `.env` holds secrets: never share or commit it (it's git-ignored).
+4. **Your numeric user ID** goes in `OWNER_IDS`. It's a number, not your username. To look it up
+   (replace `yourname`):
+   ```
+   source .env
+   TOKEN=$(curl -s -X POST "https://id.twitch.tv/oauth2/token?client_id=$TWITCH_CLIENT_ID&client_secret=$TWITCH_CLIENT_SECRET&grant_type=client_credentials" | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')
+   curl -s -H "Client-Id: $TWITCH_CLIENT_ID" -H "Authorization: Bearer $TOKEN" "https://api.twitch.tv/helix/users?login=yourname"
+   ```
+   The `"id"` in the answer is your user ID.
+5. **Log the bot in:** run `.venv/bin/python -m bot auth`. Open the printed URL in a browser where
    you're logged in as the **bot** account and approve. Put the printed `BOT_ID=...` line in `.env`.
    The login is saved in `data/.tio.tokens.json`. Never share or commit that file.
-5. **Channel:** set `channel` in `config.toml` to the channel the bot should join.
-6. **Mod the bot** in that channel (`/mod <botaccount>` in its chat). Without mod status the bot
+6. **Channel:** set `channel` in `config.toml` to the channel the bot should join.
+7. **Mod the bot** in that channel (`/mod <botaccount>` in its chat). Without mod status the bot
    still runs, but it can only send 1 message per second, slow mode applies, and it won't show
    the Chat Bot badge. The startup log says `is_mod` either way.
 
@@ -72,6 +88,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - 1: crashed.
 - 2: config problem (the message names the setting).
 - 3: the Twitch login needs redoing (`python -m bot auth`).
+- 130: Ctrl+C before the bot finished starting.
 
 ## Settings
 
@@ -94,9 +111,13 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 1. Copy the project folder to the server (for example `/opt/offline-chat-bot`), including
    `.env` and `data/.tio.tokens.json`.
-2. On the server: `python3.12 -m venv .venv && .venv/bin/pip install -e .`
-3. Create a user for the bot (`sudo useradd -r chatbot`) and give it the folder
-   (`sudo chown -R chatbot /opt/offline-chat-bot`).
+2. On the server: `python3 -m venv .venv && .venv/bin/pip install -e .` (any Python 3.11-3.13).
+3. Create a user for the bot (`sudo useradd -r chatbot`), give it the folder, and make the two
+   secret files readable only by it:
+   ```
+   sudo chown -R chatbot /opt/offline-chat-bot
+   sudo chmod 600 /opt/offline-chat-bot/.env /opt/offline-chat-bot/data/.tio.tokens.json
+   ```
 4. `sudo cp deploy/offline-chat-bot.service /etc/systemd/system/`, then
    `sudo systemctl daemon-reload && sudo systemctl enable --now offline-chat-bot`.
 5. **How it behaves on the server:**
@@ -108,12 +129,16 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
    - **Logs:** `journalctl -u offline-chat-bot -f`.
 6. **Run only one copy of the bot at a time.** If it's running on both your laptop and the
    server, every command is answered twice.
+7. **If it stops with exit 3 (login needed):** the login page needs a browser, which a server
+   doesn't have. Either run `python -m bot auth` on your laptop and copy the new
+   `data/.tio.tokens.json` to the server (then `chmod 600` it and restart the service), or tunnel
+   the login port with `ssh -L 4343:localhost:4343 <server>` and run `auth` on the server.
 
 ## Go live in jasontheween's chat
 
 1. A channel mod runs `/mod <botaccount>` there.
 2. Set `channel = "jasontheween"` in `config.toml`.
-3. Restart the bot.
+3. Restart the bot (`sudo systemctl restart offline-chat-bot` on the server).
 
 ## Tests
 
