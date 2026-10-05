@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (190 tests in total before the content task). Copy the code exactly. If a step's
+  this order (193 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -2381,7 +2381,7 @@ Spec §7: a personal game with `?g` guessing (Robert's choice; plain chat is ign
 - **Entries:** ASCII letters, spaces, hyphens, and apostrophes, 3+ letters, at most 30 characters. Word gaps show as `/` on the board.
 - **Guessing:** at most one `?g` every 2 s. Repeated or non-letter single characters are rejected (`None`), and the cooldown isn't consumed.
 - **Letter points:** each correct letter holds 1 point for its guesser.
-- **Solving:** a wrong solve is a free attempt. The solve check ignores spaces and punctuation.
+- **Solving:** a wrong solve costs no lives and gets "❌ Not it.". The solve check ignores spaces and punctuation.
 - **Win:** solving it, or revealing the last letter, gives 10 plus the held letter points.
 - **Loss:** after 6 wrong letters or a timeout, nobody gets points.
 
@@ -2462,11 +2462,31 @@ def test_guess_cooldown(assets):
     assert g(game, "e", at=2) is not None
 
 
-def test_wrong_solve_attempt_is_free_attempt(assets):
+def test_wrong_solve_attempt_costs_no_lives(assets):
     game = make(assets)
     out = g(game, "walrus")
-    assert out is not None and not out.finished and out.messages == []
+    assert out is not None and not out.finished and out.messages == ["❌ Not it."]
     assert game.wrong == []
+
+
+def test_extra_words_after_g_are_a_solve_attempt(assets):
+    game = make(assets)
+    out = g(game, "e please")
+    assert out.messages == ["❌ Not it."] and game.guessed == set()
+
+
+def test_repeated_letters_reveal_together_for_one_point(assets):
+    game = make(assets, "lollipop")
+    out = g(game, "l")
+    assert game.board() == "L _ L L _ _ _ _"
+    assert game.held == {"id-alice": 1}
+    assert not out.finished
+
+
+def test_punctuation_is_shown_and_optional_when_solving(assets):
+    game = make(assets, "x-ray")
+    assert game.board() == "_ - _ _ _"
+    assert g(game, "xray").result == "won"
 
 
 def test_full_solve_wins_with_held_points(assets):
@@ -2615,7 +2635,7 @@ class Hangman(Game):
         self._last_guess[msg.user_id] = now
         if _compact(guess) == _compact(self.answer):
             return self._win(msg)
-        return Outcome()  # a wrong solve attempt costs nothing
+        return Outcome(messages=["❌ Not it."])  # a wrong solve attempt costs no lives
 
     def _guess_letter(self, letter: str, msg: ChatMessage) -> Outcome:
         if letter in self.answer:
@@ -2653,7 +2673,7 @@ class Hangman(Game):
 
 Run: `.venv/bin/pytest tests/test_hangman.py -q`
 
-Expected: PASS (14 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (17 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -5811,7 +5831,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 205 tests pass.
+Expected: `15 passed`, then all 208 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -5984,7 +6004,7 @@ Console mode keeps its own database under `data/console/`, separate from the rea
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (205).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (208).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
