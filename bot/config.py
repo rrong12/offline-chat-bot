@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import tomllib
 from collections.abc import Mapping
@@ -12,6 +13,17 @@ from typing import Any
 from bot.games import ALL_GAMES
 
 _CHANNEL = re.compile(r"^[a-z0-9_]{3,25}$")
+MAX_SEND_RATE = 3.0  # messages/s; Twitch allows a mod account about 100 per 30 s
+
+# Every setting config.toml may contain. Anything else is almost certainly a typo.
+_SCHEMA: dict[str, set[str] | None] = {
+    "channel": None,
+    "prefix": None,
+    "cooldowns": {"user_seconds", "global_seconds"},
+    "games": {"enabled", "max_running", "cooldown_seconds", "busy_queue"},
+    "outbox": {"rate_per_second", "burst", "max_queue"},
+    "logs": {"retention_days"},
+}
 
 
 class ConfigError(Exception):
@@ -48,12 +60,35 @@ def _get(table: Mapping[str, Any], dotted: str, default: Any) -> Any:
     return node
 
 
-def _number(table: Mapping[str, Any], key: str, default: float, *, integer: bool = False, minimum: float = 0) -> Any:
+def _check_schema(table: Mapping[str, Any]) -> None:
+    for key, value in table.items():
+        if key not in _SCHEMA:
+            raise ConfigError(f"unknown setting {key!r} (known: {', '.join(_SCHEMA)})")
+        allowed = _SCHEMA[key]
+        if allowed is None:
+            continue
+        if not isinstance(value, Mapping):
+            raise ConfigError(f"{key} must be a [{key}] section, got {value!r}")
+        for sub_key in value:
+            if sub_key not in allowed:
+                raise ConfigError(f"unknown setting {key}.{sub_key} (known: {', '.join(sorted(allowed))})")
+
+
+def _number(
+    table: Mapping[str, Any],
+    key: str,
+    default: float,
+    *,
+    integer: bool = False,
+    minimum: float = 0,
+    maximum: float = math.inf,
+) -> Any:
     value = _get(table, key, default)
     ok_type = isinstance(value, int) if integer else isinstance(value, (int, float))
-    if isinstance(value, bool) or not ok_type or value < minimum:
+    if isinstance(value, bool) or not ok_type or not math.isfinite(value) or not minimum <= value <= maximum:
         kind = "an integer" if integer else "a number"
-        raise ConfigError(f"{key} must be {kind} >= {minimum}, got {value!r}")
+        limits = f">= {minimum}" if maximum == math.inf else f"between {minimum} and {maximum}"
+        raise ConfigError(f"{key} must be {kind} {limits}, got {value!r}")
     return value
 
 
@@ -65,13 +100,18 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path} is not valid TOML: {exc}") from None
 
-    channel = str(_get(table, "channel", "")).strip().lower()
+    _check_schema(table)
+
+    raw_channel = _get(table, "channel", "")
+    channel = raw_channel.strip().lower() if isinstance(raw_channel, str) else ""
     if not _CHANNEL.fullmatch(channel):
-        raise ConfigError(f"channel must be a Twitch username, got {channel!r}")
+        raise ConfigError(f"channel must be a Twitch username, got {raw_channel!r}")
 
     prefix = _get(table, "prefix", "?")
     if not isinstance(prefix, str) or not 1 <= len(prefix) <= 3 or any(c.isspace() for c in prefix):
         raise ConfigError(f"prefix must be 1-3 non-space characters, got {prefix!r}")
+    if prefix[0] in "/.":
+        raise ConfigError(f"prefix can't start with '/' or '.' (Twitch's own commands), got {prefix!r}")
 
     enabled = _get(table, "games.enabled", list(ALL_GAMES))
     if not isinstance(enabled, list) or not all(isinstance(g, str) for g in enabled):
@@ -79,6 +119,9 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     unknown = [g for g in enabled if g not in ALL_GAMES]
     if unknown:
         raise ConfigError(f"games.enabled has unknown games: {', '.join(unknown)} (known: {', '.join(ALL_GAMES)})")
+    if not enabled:
+        raise ConfigError(f"games.enabled must list at least one game (known: {', '.join(ALL_GAMES)})")
+    enabled = list(dict.fromkeys(enabled))  # drop duplicates, keep order
 
     client_id = env.get("TWITCH_CLIENT_ID", "").strip()
     client_secret = env.get("TWITCH_CLIENT_SECRET", "").strip()
@@ -91,6 +134,10 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         if not bot_id.isdigit():
             raise ConfigError(f"BOT_ID must be a numeric Twitch user ID, got {bot_id!r}")
     owner_ids = frozenset(part.strip() for part in env.get("OWNER_IDS", "").split(",") if part.strip())
+    if require_twitch:
+        bad = sorted(o for o in owner_ids if not o.isdigit())
+        if bad:
+            raise ConfigError(f"OWNER_IDS must be numeric Twitch user IDs, got {', '.join(bad)}")
 
     return Config(
         client_id=client_id,
@@ -105,7 +152,7 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         max_games=_number(table, "games.max_running", 25, integer=True, minimum=1),
         game_cooldown=_number(table, "games.cooldown_seconds", 10),
         busy_queue=_number(table, "games.busy_queue", 10, integer=True, minimum=1),
-        outbox_rate=_number(table, "outbox.rate_per_second", 2, minimum=0.1),
+        outbox_rate=_number(table, "outbox.rate_per_second", 2, minimum=0.1, maximum=MAX_SEND_RATE),
         outbox_burst=_number(table, "outbox.burst", 3, integer=True, minimum=1),
         outbox_max_queue=_number(table, "outbox.max_queue", 30, integer=True, minimum=1),
         log_retention_days=_number(table, "logs.retention_days", 30, integer=True, minimum=1),

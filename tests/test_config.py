@@ -38,6 +38,16 @@ def test_defaults_and_env(tmp_path):
         ('channel = "ok_name"\n[games]\nenabled = ["chess"]', "chess"),
         ('channel = "ok_name"\n[outbox]\nburst = 1.5', "outbox.burst"),
         ("channel = ", "not valid TOML"),
+        ('channel = "ok_name"\n[games]\nmax_runing = 5', "unknown setting games.max_runing"),
+        ('channel = "ok_name"\ngames = "oops"', "games must be a \\[games\\] section"),
+        ('channel = "ok_name"\ncolour = "blue"', "unknown setting 'colour'"),
+        ('channel = "ok_name"\n[outbox]\nrate_per_second = 1000', "outbox.rate_per_second"),
+        ('channel = "ok_name"\n[outbox]\nrate_per_second = nan', "outbox.rate_per_second"),
+        ('channel = "ok_name"\n[outbox]\nrate_per_second = inf', "outbox.rate_per_second"),
+        ('channel = "ok_name"\nprefix = "/"', "can't start with"),
+        ('channel = "ok_name"\nprefix = ".b"', "can't start with"),
+        ('channel = "ok_name"\n[games]\nenabled = []', "at least one game"),
+        ("channel = 123", "channel must be a Twitch username"),
     ],
 )
 def test_invalid_values_name_the_key(tmp_path, toml, message):
@@ -50,6 +60,18 @@ def test_missing_secrets_fail_only_when_twitch_required(tmp_path):
     with pytest.raises(ConfigError, match="TWITCH_CLIENT_ID"):
         load_config(path, {})
     assert load_config(path, {}, require_twitch=False).bot_id == "console-bot"
+
+
+def test_owner_ids_must_be_numeric_for_twitch_but_not_console(tmp_path):
+    path = write(tmp_path, 'channel = "ok_name"\n')
+    with pytest.raises(ConfigError, match="OWNER_IDS"):
+        load_config(path, {**ENV, "OWNER_IDS": "123,robert"})
+    assert load_config(path, {"OWNER_IDS": "console-robert"}, require_twitch=False).owner_ids == {"console-robert"}
+
+
+def test_duplicate_games_are_dropped(tmp_path):
+    cfg = load_config(write(tmp_path, 'channel = "ok_name"\n[games]\nenabled = ["scramble", "scramble"]'), ENV)
+    assert cfg.enabled_games == ("scramble",)
 
 
 def test_bot_id_must_be_numeric(tmp_path):
