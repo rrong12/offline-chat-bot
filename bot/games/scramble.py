@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import codecs
+import logging
 import math
 import random
 from datetime import datetime
@@ -12,6 +13,8 @@ from bot.connectors.base import ChatMessage
 from bot.games.base import Game, Outcome
 from bot.text import normalize
 
+logger = logging.getLogger(__name__)
+
 MAX_SHUFFLES = 200
 
 
@@ -20,6 +23,7 @@ def _blocked_fragments(assets: Assets) -> tuple[str, ...]:
     try:
         return tuple(codecs.decode(line, "rot13").upper() for line in assets.lines("blocked_rot13"))
     except FileNotFoundError:
+        logger.warning("content/blocked_rot13.txt is missing: scrambles are not being filtered")
         return ()
 
 
