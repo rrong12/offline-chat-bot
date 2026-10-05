@@ -986,8 +986,22 @@ async def test_recent_questions_are_not_repeated_for_that_player(h: Harness):
         await h.command("?skip")
         h.clock.advance(10)
     assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the game falls back to any question
+
+
+async def test_each_player_has_their_own_question_history(h: Harness):
+    for _ in range(2):
+        await h.command("?quiz science", "alice")
+        await h.command("?skip", "alice")
+        h.clock.advance(10)
     await h.command("?quiz science", "bob")
-    assert h.texts()[-1].endswith("q1")  # other players have their own history
+    assert h.texts()[-1].endswith("q1")  # a shared history would have given bob q3
+
+
+async def test_refusal_notices_are_limited_per_game_even_through_an_alias(h: Harness):
+    await h.command("?quiz science")
+    await h.command("?qz science")
+    await h.command("?quiz science")
+    assert h.replies == ["You already have a quiz game running."]
 
 
 async def test_restart_timer_gives_a_fresh_time_limit(h: Harness):
@@ -1329,9 +1343,10 @@ class GameManager:
         key = f"{coalesce_key}:{session.key}" if coalesce_key else None  # unique per player and round
         self._say(text.replace("{p}", self.prefix), reply_to=session.reply_to, coalesce_key=key)
 
-    def _notice(self, ctx: CommandContext, text: str) -> None:
-        """Reply to a start request we can't fulfil, at most once per NOTICE_SECONDS per player per game."""
-        if self._cooldowns.check_command(f"notice:{ctx.name}", ctx.msg.user_id, NOTICE_SECONDS, 0):
+    def _notice(self, ctx: CommandContext, cls: type[Game], text: str) -> None:
+        """Reply to a start request we can't fulfil, at most once per NOTICE_SECONDS per player per game.
+        Keyed by the game, not the name typed, so switching to an alias (?hl) doesn't get around it."""
+        if self._cooldowns.check_command(f"notice:{cls.name}", ctx.msg.user_id, NOTICE_SECONDS, 0):
             ctx.reply(text)
 
     def cooldown_remaining(self, user_id: str) -> float:
@@ -1384,17 +1399,17 @@ class GameManager:
         categories = cls.category_names(self.assets)
         uid = ctx.msg.user_id
         if tokens == ["categories"]:
-            self._notice(ctx, self._options(cls, categories))
+            self._notice(ctx, cls, self._options(cls, categories))
             return
         if uid in self.sessions:
-            self._notice(ctx, f"You already have a {self.sessions[uid].game.name} game running.")
+            self._notice(ctx, cls, f"You already have a {self.sessions[uid].game.name} game running.")
             return
         remaining = self.cooldown_remaining(uid)
         if remaining > 0:
-            self._notice(ctx, f"Your next game in {math.ceil(remaining)}s.")
+            self._notice(ctx, cls, f"Your next game in {math.ceil(remaining)}s.")
             return
         if len(self.sessions) >= self.max_games or self._is_busy():
-            self._notice(ctx, "Too many games running right now, try again in a moment.")
+            self._notice(ctx, cls, "Too many games running right now, try again in a moment.")
             return
         category: str | None = None
         level: str | None = None
@@ -1404,7 +1419,8 @@ class GameManager:
             elif token in cls.levels and level is None:
                 level = token
             else:  # never repeat the unknown word: it could be anything
-                self._notice(ctx, f"Unknown {'option' if cls.levels else 'category'}. {self._options(cls, categories)}")
+                kind = "option" if cls.levels else "category"
+                self._notice(ctx, cls, f"Unknown {kind}. {self._options(cls, categories)}")
                 return
         if categories and category is None:
             category = self.rng.choice(categories)
@@ -1416,7 +1432,7 @@ class GameManager:
         except Exception as exc:
             logger.exception("could not start %s", cls.name)
             self.log.write("error", where=f"game:{cls.name}.start", type=type(exc).__name__, message=str(exc))
-            self._notice(ctx, "Couldn't start that game.")
+            self._notice(ctx, cls, "Couldn't start that game.")
             return
         session = Session(
             key=uuid.uuid4().hex[:8],
@@ -1832,7 +1848,7 @@ class Hangman(Game):
 - [ ] **Step 8: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_manager.py tests/test_scramble.py -q`, then `.venv/bin/pytest -q`.
-Expected: `49 passed`, then the whole suite passes (318 passed).
+Expected: `51 passed`, then the whole suite passes (320 passed).
 
 - [ ] **Step 9: Commit**
 
@@ -2208,7 +2224,7 @@ class Trivia(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_trivia.py -q`, then `.venv/bin/pytest -q`.
-Expected: `26 passed`, then the whole suite passes (344 passed).
+Expected: `26 passed`, then the whole suite passes (346 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2454,7 +2470,7 @@ class Riddle(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_riddle.py -q`, then `.venv/bin/pytest -q`.
-Expected: `10 passed`, then the whole suite passes (354 passed).
+Expected: `10 passed`, then the whole suite passes (356 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2700,7 +2716,7 @@ class HigherLower(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_higherlower.py -q`, then `.venv/bin/pytest -q`.
-Expected: `9 passed`, then the whole suite passes (363 passed).
+Expected: `9 passed`, then the whole suite passes (365 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -3696,7 +3712,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - [ ] **Step 9: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py -q`, then `.venv/bin/pytest -q`.
-Expected: `71 passed`, then the whole suite passes (368 passed).
+Expected: `71 passed`, then the whole suite passes (370 passed).
 
 - [ ] **Step 10: Commit**
 
@@ -3866,7 +3882,7 @@ Expected: it takes about 25 minutes; the last line reads `wrote N questions` wit
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 368 passed.
+Expected: 370 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4106,7 +4122,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
 - [ ] **Step 2: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 368 passed.
+Expected: 370 passed.
 
 - [ ] **Step 3: Commit**
 
@@ -4716,7 +4732,7 @@ Expected: it takes a few minutes; it prints `wrote N terms for <month>` and any 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 368 passed.
+Expected: 370 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4925,7 +4941,7 @@ def test_higherlower_terms():
 - [ ] **Step 2: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `23 passed`, then the whole suite passes (372 passed).
+Expected: `23 passed`, then the whole suite passes (374 passed).
 
 - [ ] **Step 3: Commit**
 

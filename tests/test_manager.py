@@ -464,8 +464,22 @@ async def test_recent_questions_are_not_repeated_for_that_player(h: Harness):
         await h.command("?skip")
         h.clock.advance(10)
     assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the game falls back to any question
+
+
+async def test_each_player_has_their_own_question_history(h: Harness):
+    for _ in range(2):
+        await h.command("?quiz science", "alice")
+        await h.command("?skip", "alice")
+        h.clock.advance(10)
     await h.command("?quiz science", "bob")
-    assert h.texts()[-1].endswith("q1")  # other players have their own history
+    assert h.texts()[-1].endswith("q1")  # a shared history would have given bob q3
+
+
+async def test_refusal_notices_are_limited_per_game_even_through_an_alias(h: Harness):
+    await h.command("?quiz science")
+    await h.command("?qz science")
+    await h.command("?quiz science")
+    assert h.replies == ["You already have a quiz game running."]
 
 
 async def test_restart_timer_gives_a_fresh_time_limit(h: Harness):

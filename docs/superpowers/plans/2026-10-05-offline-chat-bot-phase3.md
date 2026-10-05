@@ -357,7 +357,7 @@ meme_badges = true          # ?rng's 69 and 420 badges; false turns them off
 - [ ] **Step 5: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_config.py -q`, then `.venv/bin/pytest -q`.
-Expected: `26 passed`, then the whole suite passes (374 passed).
+Expected: `26 passed`, then the whole suite passes (376 passed).
 
 - [ ] **Step 6: Commit**
 
@@ -942,7 +942,7 @@ class StatsStore:
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_stats.py -q`, then `.venv/bin/pytest -q`.
-Expected: `19 passed`, then the whole suite passes (377 passed).
+Expected: `19 passed`, then the whole suite passes (379 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -1292,7 +1292,7 @@ def register_rng(
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_rng.py -q`, then `.venv/bin/pytest -q`.
-Expected: `19 passed`, then the whole suite passes (396 passed).
+Expected: `19 passed`, then the whole suite passes (398 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2278,7 +2278,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - [ ] **Step 5: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_flows.py -q`, then `.venv/bin/pytest -q`.
-Expected: `40 passed`, then the whole suite passes (397 passed).
+Expected: `40 passed`, then the whole suite passes (399 passed).
 
 - [ ] **Step 6: Commit**
 
