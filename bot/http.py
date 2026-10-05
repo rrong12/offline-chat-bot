@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import aiohttp
 
+from bot import __version__
+
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "offline-chat-bot/0.1 (Twitch chat bot)"
+USER_AGENT = f"offline-chat-bot/{__version__} (Twitch chat bot)"
+MAX_BODY = 64_000  # bytes; fact and joke responses are tiny
 
 
 class HttpClient:
@@ -27,7 +31,7 @@ class HttpClient:
                 if resp.status != 200:
                     logger.warning("GET %s -> HTTP %s", url, resp.status)
                     return None
-                return await resp.json(content_type=None)
+                return json.loads(await resp.content.read(MAX_BODY))
         except Exception as exc:  # timeouts, DNS, bad JSON: all fall back
             logger.warning("GET %s failed: %s", url, type(exc).__name__)
             return None

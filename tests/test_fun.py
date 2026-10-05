@@ -1,3 +1,4 @@
+import asyncio
 import random
 
 import pytest
@@ -19,8 +20,13 @@ class Fun:
         self.said: list[str] = []
         self.known = {"bob": UserRef("id-bob", "bob", "Bob")}
 
-        async def lookup(login):
+        async def default_lookup(login):
             return self.known.get(login)
+
+        self.lookup = default_lookup
+
+        async def lookup(login):
+            return await self.lookup(login)
 
         register_fun(
             self.registry, assets=assets, rng=random.Random(1), http=self.http,
@@ -72,15 +78,33 @@ async def test_fact_falls_back_when_api_fails_or_is_malformed_or_too_long(assets
         "https://catfact.ninja/fact": None,
         "https://dogapi.dog/api/v2/facts": {"unexpected": True},
         "https://uselessfacts.jsph.pl/api/v2/facts/random?language=en": {"text": "x" * 401},
+        "https://icanhazdadjoke.com/": {"joke": None},
     })
     fun = Fun(assets, clock, http)
-    for name in ("catfact", "dogfact", "fact"):
+    for name in ("catfact", "dogfact", "fact", "dadjoke"):
         await fun.run(f"?{name}")
     assert fun.replies == [
         "🐱 fallback catfacts line",
         "🐶 fallback dogfacts line",
         "💡 fallback facts line",
+        "😄 fallback dadjokes line",
     ]
+
+
+@pytest.mark.parametrize("bad", [
+    "Visit https://spam.example now", "see www.spam.example", "ask @someone about it", 42, ["a", "b"],
+])
+async def test_fact_with_links_mentions_or_wrong_type_falls_back(assets, clock, bad):
+    fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": bad}}))
+    await fun.run("?catfact")
+    assert fun.replies == ["🐱 fallback catfacts line"]
+
+
+async def test_fact_text_is_stripped_of_invisible_and_control_characters(assets, clock):
+    text = "Cats" + chr(0x202E) + " purr" + chr(0x07) + "."
+    fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
+    await fun.run("?catfact")
+    assert fun.replies == ["🐱 Cats purr."]
 
 
 async def test_cookie_once_per_utc_day(fun: Fun, clock: FakeClock):
@@ -107,11 +131,42 @@ async def test_cookie_give_rejections_do_not_use_the_cookie(fun: Fun):
     await fun.run("?cookie give not/valid")
     await fun.run("?cookie give alice")
     await fun.run("?cookie give ghost_user")
+    await fun.run("?cookie gift bob")
     assert fun.replies == [
-        "Usage: ?cookie give <username>",
+        "Usage: ?cookie or ?cookie give <username>",
         "That's not a valid username.",
         "You can't give a cookie to yourself.",
-        "Couldn't find a user named ghost_user.",
+        "Couldn't find that user.",
+        "Usage: ?cookie or ?cookie give <username>",
     ]
     await fun.run("?cookie")
     assert fun.replies[-1] == "🥠 Good things are coming."
+
+
+async def test_cookie_give_after_cookie_used(fun: Fun):
+    await fun.run("?cookie")
+    await fun.run("?cookie give bob")
+    assert fun.replies[-1].startswith("You already opened today's cookie.")
+    assert fun.said == []
+
+
+async def test_cookie_give_lookup_timeout(assets, clock, monkeypatch):
+    import bot.fun
+
+    monkeypatch.setattr(bot.fun, "LOOKUP_TIMEOUT", 0.05)
+    fun = Fun(assets, clock)
+
+    async def slow(login):
+        await asyncio.sleep(1)
+
+    fun.lookup = slow
+    await fun.run("?cookie give bob")
+    assert fun.replies == ["Couldn't check that user right now. Try again in a bit."]
+    await fun.run("?cookie")
+    assert fun.replies[-1] == "🥠 Good things are coming."
+
+
+async def test_cookie_give_mentions_login_for_localised_display_names(fun: Fun):
+    fun.known["bob"] = UserRef("id-bob", "bob", "\u9cf3\u51f0")
+    await fun.run("?cookie give bob")
+    assert fun.said == ["🥠 @alice gave @bob a fortune cookie: Good things are coming."]

@@ -42,6 +42,37 @@ async def test_get_json_returns_none_on_timeout():
         await server.close()
 
 
+async def test_get_json_parses_json_sent_as_text_and_sends_headers():
+    seen = {}
+
+    async def plain(request):
+        seen["accept"] = request.headers.get("Accept")
+        return web.Response(text='{"joke": "ha"}', content_type="text/plain")
+
+    server = await serve(plain)
+    client = HttpClient(timeout=1)
+    try:
+        url = str(server.make_url("/"))
+        assert await client.get_json(url, headers={"Accept": "application/json"}) == {"joke": "ha"}
+        assert seen["accept"] == "application/json"
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_get_json_returns_none_for_non_json_200():
+    async def html(request):
+        return web.Response(text="<html>challenge</html>", content_type="text/html")
+
+    server = await serve(html)
+    client = HttpClient(timeout=1)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) is None
+    finally:
+        await client.close()
+        await server.close()
+
+
 async def test_get_json_returns_none_on_http_error():
     async def broken(request):
         return web.Response(status=500)

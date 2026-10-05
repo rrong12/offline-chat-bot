@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -14,9 +16,14 @@ from bot.commands import Command, CommandContext, CommandRegistry
 from bot.connectors.base import UserRef
 from bot.http import HttpClient
 from bot.stats import StatsStore
-from bot.text import clean_username, format_duration
+from bot.text import clean_username, format_duration, strip_invisible
 
 MAX_FACT = 400
+LOOKUP_TIMEOUT = 5.0  # seconds to wait for Twitch to confirm a user exists
+# Third-party text must not carry links or @mentions into Jason's chat (the bot, as a mod,
+# bypasses Twitch's link filter). Every reply also starts with an emoji, so it can never begin
+# with "/" or "." and be read as a chat command; keep that prefix.
+_UNSAFE = re.compile(r"://|www\.|@\w", re.IGNORECASE)
 
 LookupUser = Callable[[str], Awaitable[UserRef | None]]
 
@@ -25,6 +32,22 @@ def _get(data: Any, *path: str | int) -> Any:
     for key in path:
         data = data[key]
     return data
+
+
+def _safe_text(value: Any) -> str | None:
+    """API text cleaned for chat, or None if it's missing, too long, or carries links/mentions."""
+    if not isinstance(value, str):
+        return None
+    text = " ".join(strip_invisible(value).split())  # all whitespace (incl. newlines) becomes one space
+    text = "".join(ch for ch in text if ch.isprintable())  # then drop control characters
+    if not text or len(text) > MAX_FACT or _UNSAFE.search(text):
+        return None
+    return text
+
+
+def _mention(display_name: str, login: str) -> str:
+    """@display name if it's just a capitalised login, else @login (localised names don't ping)."""
+    return f"@{display_name}" if display_name.lower() == login.lower() else f"@{login}"
 
 
 # command name -> (emoji, url, path to the text in the JSON, extra headers, fallback file, help)
@@ -67,14 +90,11 @@ def register_fun(
     def fact_handler(emoji: str, url: str, path: tuple, headers: dict, fallback: str):
         async def handler(ctx: CommandContext) -> None:
             data = await http.get_json(url, headers=headers or None)
-            text = None
             try:
-                text = " ".join(str(_get(data, *path)).split()) if data is not None else None
+                text = _safe_text(_get(data, *path)) if data is not None else None
             except (KeyError, IndexError, TypeError):
                 text = None
-            if not text or len(text) > MAX_FACT:
-                text = rng.choice(assets.lines(fallback))
-            ctx.reply(f"{emoji} {text}")
+            ctx.reply(f"{emoji} {text or rng.choice(assets.lines(fallback))}")
 
         return handler
 
@@ -91,9 +111,13 @@ def register_fun(
         today = clock.now().date().isoformat()
         uid = ctx.msg.user_id
         argv = ctx.argv
-        if argv and argv[0].lower() == "give":
+        usage = f"Usage: {ctx.prefix}cookie or {ctx.prefix}cookie give <username>"
+        if argv and argv[0].lower() != "give":
+            ctx.reply(usage)  # e.g. "?cookie gift bob": don't silently spend the cookie
+            return
+        if argv:
             if len(argv) < 2:
-                ctx.reply(f"Usage: {ctx.prefix}cookie give <username>")
+                ctx.reply(usage)
                 return
             login = clean_username(argv[1])
             if login is None:
@@ -105,19 +129,28 @@ def register_fun(
             if stats.get_daily(uid, "cookie", today) is not None:
                 ctx.reply(already_message())
                 return
-            target = await lookup_user(login)
+            try:
+                target = await asyncio.wait_for(lookup_user(login), LOOKUP_TIMEOUT)
+            except TimeoutError:
+                ctx.reply("Couldn't check that user right now. Try again in a bit.")
+                return
             if target is None:
-                ctx.reply(f"Couldn't find a user named {login}.")
+                ctx.reply("Couldn't find that user.")  # never repeat the name the user typed
+                return
+            if target.user_id == uid:
+                ctx.reply("You can't give a cookie to yourself.")
                 return
             fortune = rng.choice(assets.lines("fortunes"))
             record = json.dumps({"gave_to": target.login, "fortune": fortune})
             if not stats.claim_daily(uid, "cookie", today, record):
                 ctx.reply(already_message())
                 return
-            ctx.say(f"🥠 @{ctx.msg.display_name} gave @{target.display_name} a fortune cookie: {fortune}")
+            giver = _mention(ctx.msg.display_name, ctx.msg.login)
+            receiver = _mention(target.display_name, target.login)
+            ctx.say(f"🥠 {giver} gave {receiver} a fortune cookie: {fortune}")
             return
         fortune = rng.choice(assets.lines("fortunes"))
-        if not stats.claim_daily(uid, "cookie", today, fortune):
+        if not stats.claim_daily(uid, "cookie", today, json.dumps({"fortune": fortune})):
             ctx.reply(already_message())
             return
         ctx.reply(f"🥠 {fortune}")
