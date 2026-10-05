@@ -30,6 +30,37 @@ def test_blocked_attempt_does_not_restart_cooldown(clock: FakeClock):
     assert cd.check_command("fact", "u1", 10, 0)
 
 
+def test_ready(clock: FakeClock):
+    cd = Cooldowns(clock)
+    assert cd.ready("k")
+    cd.trigger("k", 5)
+    assert not cd.ready("k")
+    clock.advance(5)
+    assert cd.ready("k")
+
+
+def test_prune_drops_expired_entries(clock: FakeClock, monkeypatch):
+    monkeypatch.setattr("bot.cooldowns._PRUNE_AT", 10)
+    cd = Cooldowns(clock)
+    for i in range(10):
+        cd.trigger(("old", i), 1)
+    clock.advance(2)  # all ten have expired
+    cd.trigger("new", 5)  # reaching the threshold prunes first
+    assert len(cd._until) == 1
+
+
+def test_prune_backs_off_when_entries_are_still_active(clock: FakeClock, monkeypatch):
+    monkeypatch.setattr("bot.cooldowns._PRUNE_AT", 10)
+    cd = Cooldowns(clock)
+    for i in range(10):
+        cd.trigger(("live", i), 60)
+    cd.trigger("one more", 60)  # prune finds nothing expired
+    assert cd._prune_at == 20  # next scan waits until the dict doubles
+    for i in range(8):
+        cd.trigger(("more", i), 60)
+    assert len(cd._until) == 19  # no rescans in between, nothing lost
+
+
 def test_remaining(clock: FakeClock):
     cd = Cooldowns(clock)
     cd.trigger("game", 30)
