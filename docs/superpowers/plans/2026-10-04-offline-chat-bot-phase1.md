@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (246 tests in total before the content task). Copy the code exactly. If a step's
+  this order (256 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -5681,10 +5681,12 @@ git commit -m "Add admin commands and the bot core"
 This follows the TwitchIO 3.3.2 source, which was read while writing the plan.
 
 - **Startup:**
-  1. The `_Client` subclass loads only the bot's token from `data/.tio.tokens.json`. A missing or unrefreshable token raises `AuthRequired`, which becomes exit 3.
+  1. The `_Client` subclass loads only the bot's token from `data/.tio.tokens.json`. A missing token, or one Twitch rejects (400/401/403), raises `AuthRequired`, which becomes exit 3. A 5xx or 429 while validating is a plain error, so systemd retries.
   2. In `setup_hook` it resolves the channel and checks `fetch_moderated_channels`. A channel that doesn't exist raises `ConfigError` (exit 2, so systemd doesn't restart-loop). A failed mod check logs a warning and continues.
   3. It subscribes to `channel.chat.message` over WebSocket with the bot token (`as_bot=True`).
-- **Sending:** through Helix with the **app token** (`token_for=None`), which gives a modded bot the Chat Bot badge. `MessageRejectedError` becomes `SendResult(False, code, message)`.
+- **Sending:** through Helix with the **app token** (`token_for=None`) when the bot is a mod, which gives it the Chat Bot badge. Without mod status it uses the bot's user token, since Twitch refuses app-token sends then. `MessageRejectedError` and HTTP errors become `SendResult(False, ...)`.
+- **Tokens:** TwitchIO's own save is a no-op when tokens are loaded this way, so the connector writes the bot token itself. The write is atomic with mode 0600, on close and on every `token_refreshed` event.
+- **Watchdog:** TwitchIO can lose the login or the chat subscription without ending. Every 30 s it checks both, and fails (exit 3, or a crash that systemd restarts) if the login was dropped or there has been no subscription for 4 minutes.
 - **Connection events:** the first `websocket_welcome` logs `connected` and later ones log `reconnected`. `websocket_closed` logs `disconnected`.
 - **Replies:** when a message is a Twitch reply that starts with "@<parent> ", that mention is stripped, so answering by replying to the bot works ("@bot alligator" reads "alligator").
 - **Revocation:** a revoked subscription is fatal (`AuthRequired`).
@@ -5701,14 +5703,22 @@ Only the pure parts are unit-tested here. The live behavior is verified in Task 
 - [ ] **Step 1: Write the failing test `tests/test_twitch_mapping.py`**
 
 ```python
+import asyncio
 import json
+import os
+import socket
 from types import SimpleNamespace
 
 import pytest
+import twitchio
 
+import bot.connectors.twitch as twitch
+from bot.activity_log import ActivityLog
 from bot.clock import FakeClock
+from bot.config import ConfigError
 from bot.connectors.base import AuthRequired
 from bot.connectors.twitch import AUTH_URL, read_bot_token, to_chat_message
+from tests.helpers import make_config
 
 
 def fake_payload(source=None, text="?scramble", reply=None, **chatter):
@@ -5761,13 +5771,20 @@ def test_read_bot_token(tmp_path):
     path.write_text(json.dumps({"999": {"token": "t", "refresh": "r"}}))
     with pytest.raises(AuthRequired, match="no token for bot user 123"):
         read_bot_token(path, "123")
+    path.write_text(json.dumps({"123": {"user_id": "123", "token": "t"}}))  # no refresh token
+    with pytest.raises(AuthRequired, match="no usable entry"):
+        read_bot_token(path, "123")
+    path.write_text(json.dumps(["not", "an", "object"]))
+    with pytest.raises(AuthRequired, match="no token for bot user 123"):
+        read_bot_token(path, "123")
     path.write_text(json.dumps({"123": {"user_id": "123", "token": "t", "refresh": "r"}}))
     assert read_bot_token(path, "123") == ("t", "r")
 
 
-def test_auth_url_requests_all_bot_scopes():
+def test_auth_url_requests_all_bot_scopes_and_forces_account_check():
     assert AUTH_URL == (
         "http://localhost:4343/oauth?scopes=user:read:chat%20user:write:chat%20user:bot%20user:read:moderated_channels"
+        "&force_verify=true"
     )
 
 
@@ -5797,6 +5814,150 @@ async def test_unexpected_end_of_connection_is_an_error(tmp_path, clock: FakeClo
 
     with pytest.raises(RuntimeError, match="ended unexpectedly"):
         await connector.run(noop, noop)
+
+
+# ---- connector behavior with fake TwitchIO pieces (no network) ----
+
+
+class FakeClient:
+    def __init__(self, tokens=None, subscriptions=None):
+        self.tokens = tokens if tokens is not None else {}
+        self.subscriptions = subscriptions if subscriptions is not None else {}
+        self.closed = False
+        self.sent = []
+
+    def websocket_subscriptions(self):
+        return self.subscriptions
+
+    async def close(self):
+        self.closed = True
+
+    def create_partialuser(self, user_id):
+        client = self
+
+        class Channel:
+            async def send_message(self, text, sender, token_for=None, reply_to_message_id=None):
+                client.sent.append((text, token_for))
+
+        return Channel()
+
+
+def connector_for(tmp_path, clock, client=None):
+    cfg = make_config(tmp_path, bot_id="123")
+    conn = twitch.TwitchConnector(cfg, ActivityLog(tmp_path / "logs", clock), clock)
+    conn._client = client
+    return conn
+
+
+def test_save_bot_token_writes_the_current_token_atomically_and_privately(tmp_path, clock):
+    client = FakeClient(tokens={"123": {"user_id": "123", "token": "NEW", "refresh": "R2"}})
+    conn = connector_for(tmp_path, clock, client)
+    conn.token_path.parent.mkdir(parents=True)
+    conn.token_path.write_text(json.dumps({"123": {"user_id": "123", "token": "OLD", "refresh": "R1"}}))
+    conn.save_bot_token()
+    assert json.loads(conn.token_path.read_text())["123"]["token"] == "NEW"
+    assert oct(os.stat(conn.token_path).st_mode & 0o777) == "0o600"
+    assert not list(conn.token_path.parent.glob(".tokens-*"))  # no temp files left behind
+
+
+def test_save_bot_token_never_raises_and_skips_without_a_token(tmp_path, clock):
+    conn = connector_for(tmp_path, clock, FakeClient(tokens={}))
+    conn.save_bot_token()
+    assert not conn.token_path.exists()
+    conn = connector_for(tmp_path, clock, FakeClient(tokens={"123": {"token": "t", "refresh": "r"}}))
+    conn.token_path = tmp_path / "missing-dir" / "file" / "x"
+    conn.token_path.parent.parent.write_text("a file where a folder should be")
+    conn.save_bot_token()  # OSError is logged, not raised
+
+
+def invalid_token(status):
+    exc = twitchio.InvalidTokenException.__new__(twitchio.InvalidTokenException)
+    exc.status = status
+    return exc
+
+
+async def test_startup_login_check_tells_outages_from_bad_tokens(tmp_path, clock, monkeypatch):
+    conn = connector_for(tmp_path, clock)
+    conn.token_path.parent.mkdir(parents=True)
+    conn.token_path.write_text(json.dumps({"123": {"user_id": "123", "token": "t", "refresh": "r"}}))
+    client = twitch._Client(conn)
+
+    for status, expected in ((401, AuthRequired), (400, AuthRequired), (500, RuntimeError), (429, RuntimeError)):
+        async def failing(token, refresh, status=status):
+            raise invalid_token(status)
+
+        monkeypatch.setattr(client, "add_token", failing)
+        with pytest.raises(expected) as info:
+            await client.load_tokens()
+        assert type(info.value) is expected
+
+
+async def test_watchdog_fails_when_the_login_is_dropped(tmp_path, clock, monkeypatch):
+    monkeypatch.setattr(twitch, "WATCHDOG_SECONDS", 0.01)
+    client = FakeClient(tokens={}, subscriptions={"s": object()})
+    conn = connector_for(tmp_path, clock, client)
+    await asyncio.wait_for(conn._watch(client), timeout=2)
+    assert isinstance(conn._fatal, AuthRequired) and client.closed
+
+
+async def test_watchdog_fails_after_losing_the_subscription_for_too_long(tmp_path, clock, monkeypatch):
+    monkeypatch.setattr(twitch, "WATCHDOG_SECONDS", 0.01)
+    monkeypatch.setattr(twitch, "NO_SUBSCRIPTION_GRACE", 0.05)
+    client = FakeClient(tokens={"123": {}}, subscriptions={})
+    conn = connector_for(tmp_path, clock, client)
+    await asyncio.wait_for(conn._watch(client), timeout=2)
+    assert isinstance(conn._fatal, RuntimeError) and "chat connection" in str(conn._fatal)
+
+
+async def test_send_uses_app_token_when_modded_and_bot_token_otherwise(tmp_path, clock):
+    client = FakeClient()
+    conn = connector_for(tmp_path, clock, client)
+    conn.channel_id = "999"
+    conn.is_mod = True
+    await conn.send("hi")
+    conn.is_mod = False
+    await conn.send("hi")
+    assert client.sent == [("hi", None), ("hi", "123")]
+
+
+async def test_send_maps_http_errors_to_a_drop(tmp_path, clock):
+    class Forbidden(FakeClient):
+        def create_partialuser(self, user_id):
+            class Channel:
+                async def send_message(self, *args, **kwargs):
+                    exc = twitchio.HTTPException.__new__(twitchio.HTTPException)
+                    exc.status = 403
+                    raise exc
+
+            return Channel()
+
+    conn = connector_for(tmp_path, clock, Forbidden())
+    result = await conn.send("hi")
+    assert (result.sent, result.drop_code) == (False, "http_403")
+
+
+def test_auth_accepts_a_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    twitch._check_port_free(port)  # free again after the with-block: must not raise
+
+
+def test_auth_refuses_a_busy_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("localhost", 0))
+        sock.listen()
+        port = sock.getsockname()[1]
+        with pytest.raises(ConfigError, match="in use"):
+            twitch._check_port_free(port)
+
+
+async def test_disconnect_is_not_logged_during_a_deliberate_close(tmp_path, clock):
+    conn = connector_for(tmp_path, clock, FakeClient())
+    client = twitch._Client(conn)
+    conn._closing = True
+    await client.event_websocket_closed(None)
+    assert not list((tmp_path / "logs").glob("*.jsonl"))
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -5812,8 +5973,14 @@ Expected: FAIL. `ModuleNotFoundError: No module named 'bot.connectors.twitch'`
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import json
 import logging
+import os
+import socket
+import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -5828,8 +5995,12 @@ from bot.connectors.base import AuthRequired, ChatMessage, OnMessage, OnReady, R
 logger = logging.getLogger(__name__)
 
 BOT_SCOPES = ("user:read:chat", "user:write:chat", "user:bot", "user:read:moderated_channels")
-REDIRECT_URI = "http://localhost:4343/oauth/callback"  # register this exact URL on the Twitch app
-AUTH_URL = "http://localhost:4343/oauth?scopes=" + "%20".join(BOT_SCOPES)
+AUTH_PORT = 4343  # the Twitch app's OAuth redirect must be exactly http://localhost:4343/oauth/callback
+# force_verify makes Twitch show which account is approving, so the wrong account can't slip through.
+AUTH_URL = f"http://localhost:{AUTH_PORT}/oauth?scopes=" + "%20".join(BOT_SCOPES) + "&force_verify=true"
+WATCHDOG_SECONDS = 30  # how often to check that the bot is still logged in and subscribed
+NO_SUBSCRIPTION_GRACE = 240  # seconds without a chat subscription before giving up (systemd restarts us)
+AUTH_FAILURE_STATUSES = {400, 401, 403}  # Twitch rejected the token itself; anything else may be transient
 
 
 def strip_reply_mention(text: str, reply: Any) -> str:
@@ -5861,39 +6032,55 @@ def to_chat_message(payload: Any, clock: Clock) -> ChatMessage:
 
 
 def read_bot_token(path: Path, bot_id: str) -> tuple[str, str]:
-    """Return (access token, refresh token) for the bot from TwitchIO's token file."""
+    """Return (access token, refresh token) for the bot from the token file."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        entry = data.get(bot_id) if isinstance(data, dict) else None
+        if not entry:
+            raise AuthRequired(f"no token for bot user {bot_id} in {path}")
+        return entry["token"], entry["refresh"]
     except FileNotFoundError:
         raise AuthRequired(f"no token file at {path}") from None
     except json.JSONDecodeError:
         raise AuthRequired(f"token file {path} is corrupt") from None
-    entry = data.get(bot_id)
-    if not entry:
-        raise AuthRequired(f"no token for bot user {bot_id} in {path}")
-    return entry["token"], entry["refresh"]
+    except (KeyError, TypeError):
+        raise AuthRequired(f"token file {path} has no usable entry for bot user {bot_id}") from None
+
+
+def write_token_file(path: Path, tokens: Mapping[str, Any]) -> None:
+    """Atomically write tokens as JSON, readable only by this user (0600)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tokens-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            json.dump({uid: dict(entry) for uid, entry in tokens.items()}, fp)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 class _Client(twitchio.Client):
     def __init__(self, connector: TwitchConnector) -> None:
         cfg = connector.config
-        super().__init__(client_id=cfg.client_id, client_secret=cfg.client_secret, bot_id=cfg.bot_id)
+        super().__init__(
+            client_id=cfg.client_id, client_secret=cfg.client_secret, bot_id=cfg.bot_id, fetch_client_user=False
+        )
         self.connector = connector
-        self._tokens_loaded = False
 
     async def load_tokens(self, path: str | None = None) -> None:
         token, refresh = read_bot_token(self.connector.token_path, self.connector.config.bot_id)
         try:
             await self.add_token(token, refresh)
         except twitchio.InvalidTokenException as exc:
-            raise AuthRequired("the saved bot token is invalid and could not be refreshed") from exc
-        self._tokens_loaded = True
+            if exc.status in AUTH_FAILURE_STATUSES:
+                raise AuthRequired("the saved bot token is invalid and could not be refreshed") from exc
+            # 5xx or 429 while validating: probably a Twitch hiccup, so crash and let systemd retry.
+            raise RuntimeError(f"Twitch login check failed (HTTP {exc.status}); will retry") from exc
 
     async def save_tokens(self, path: str | None = None) -> None:
-        # TwitchIO saves on close. If startup failed before the token loaded, saving would
-        # overwrite the token file with nothing and force a needless re-login.
-        if self._tokens_loaded:
-            await super().save_tokens(str(self.connector.token_path))
+        self.connector.save_bot_token()  # never raises; TwitchIO's own save would be a no-op here
 
     async def setup_hook(self) -> None:
         await self.connector._setup(self)
@@ -5901,14 +6088,19 @@ class _Client(twitchio.Client):
     async def event_message(self, payload: twitchio.ChatMessage) -> None:
         await self.connector._incoming(payload)
 
+    async def event_token_refreshed(self, payload: Any) -> None:
+        self.connector.save_bot_token()  # persist right away, so a hard kill doesn't lose the refresh
+
     async def event_websocket_welcome(self, payload: Any) -> None:
         self.connector._welcomed()
 
     async def event_websocket_closed(self, payload: Any) -> None:
-        self.connector.log.write("disconnected")
+        if not self.connector._closing:
+            self.connector.log.write("disconnected")
 
     async def event_subscription_revoked(self, payload: Any) -> None:
-        await self.connector._fail(AuthRequired(f"chat subscription revoked: {getattr(payload, 'reason', '?')}"))
+        reason = getattr(getattr(payload, "reason", None), "value", None) or "unknown"
+        await self.connector._fail(AuthRequired(f"Twitch revoked the chat subscription ({reason})"))
 
 
 class TwitchConnector:
@@ -5918,18 +6110,24 @@ class TwitchConnector:
         self.clock = clock
         self.token_path = config.data_dir / ".tio.tokens.json"
         self.channel_id = ""
+        self.is_mod = False
         self._client: _Client | None = None
         self._on_message: OnMessage | None = None
         self._on_ready: OnReady | None = None
         self._fatal: BaseException | None = None
         self._closing = False
         self._welcomes = 0
+        self._watchdog: asyncio.Task[None] | None = None
 
     async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
         self._on_message, self._on_ready = on_message, on_ready
         self._client = _Client(self)
-        async with self._client:
-            await self._client.start(with_adapter=False)
+        try:
+            async with self._client:
+                await self._client.start(with_adapter=False)
+        finally:
+            if self._watchdog is not None:
+                self._watchdog.cancel()
         if self._fatal is not None:
             raise self._fatal
         if not self._closing:  # nobody asked to stop: treat it as a crash so systemd restarts us
@@ -5939,15 +6137,14 @@ class TwitchConnector:
         users = await client.fetch_users(logins=[self.config.channel])
         if not users:
             raise ConfigError(f"Twitch channel {self.config.channel!r} not found")
-        channel = users[0]
-        self.channel_id = str(channel.id)
-        is_mod = self.channel_id == self.config.bot_id
-        if not is_mod:
+        self.channel_id = str(users[0].id)
+        self.is_mod = self.channel_id == self.config.bot_id
+        if not self.is_mod:
             try:
                 bot = client.create_partialuser(user_id=self.config.bot_id)
                 async for ch in bot.fetch_moderated_channels(first=100, token_for=self.config.bot_id):
                     if str(ch.id) == self.channel_id:
-                        is_mod = True
+                        self.is_mod = True
                         break
             except twitchio.HTTPException as exc:
                 logger.warning("could not check moderator status: %s", exc)
@@ -5955,8 +6152,37 @@ class TwitchConnector:
             eventsub.ChatMessageSubscription(broadcaster_user_id=self.channel_id, user_id=self.config.bot_id),
             as_bot=True,
         )
+        self._watchdog = asyncio.create_task(self._watch(client))
         assert self._on_ready is not None
-        await self._on_ready(ReadyInfo(self.config.channel, self.channel_id, is_mod))
+        await self._on_ready(ReadyInfo(self.config.channel, self.channel_id, self.is_mod))
+
+    async def _watch(self, client: _Client) -> None:
+        """TwitchIO can lose the login or the chat subscription without ending; detect that and fail loudly."""
+        loop = asyncio.get_running_loop()
+        empty_since: float | None = None
+        while not self._closing:
+            await asyncio.sleep(WATCHDOG_SECONDS)
+            if self.config.bot_id not in client.tokens:  # a runtime refresh failed and TwitchIO dropped it
+                await self._fail(AuthRequired("the bot's Twitch login expired and could not be refreshed"))
+                return
+            if client.websocket_subscriptions():
+                empty_since = None
+            elif empty_since is None:
+                empty_since = loop.time()
+            elif loop.time() - empty_since >= NO_SUBSCRIPTION_GRACE:
+                await self._fail(RuntimeError("lost the chat connection and could not get it back"))
+                return
+
+    def save_bot_token(self) -> None:
+        """Write the bot's current (possibly refreshed) token to disk. Never raises."""
+        client = self._client
+        if client is None or self.config.bot_id not in client.tokens:
+            return
+        try:
+            write_token_file(self.token_path, {self.config.bot_id: client.tokens[self.config.bot_id]})
+        except OSError as exc:
+            logger.exception("could not save the Twitch token")
+            self.log.write("error", where="twitch.save_token", type=type(exc).__name__, message=str(exc))
 
     def _welcomed(self) -> None:
         self._welcomes += 1
@@ -5973,12 +6199,17 @@ class TwitchConnector:
     async def send(self, text: str, reply_to: str | None = None) -> SendResult:
         assert self._client is not None
         channel = self._client.create_partialuser(user_id=self.channel_id)
+        # The app token gives a modded bot the Chat Bot badge; without mod status Twitch only accepts
+        # the bot's own user token.
+        token_for = None if self.is_mod else self.config.bot_id
         try:
             await channel.send_message(
-                text, sender=self.config.bot_id, token_for=None, reply_to_message_id=reply_to
+                text, sender=self.config.bot_id, token_for=token_for, reply_to_message_id=reply_to
             )
         except twitchio.MessageRejectedError as exc:
             return SendResult(False, exc.code, exc.message)
+        except twitchio.HTTPException as exc:
+            return SendResult(False, f"http_{exc.status}", str(exc))
         return SendResult(True)
 
     async def lookup_user(self, login: str) -> UserRef | None:
@@ -5994,26 +6225,46 @@ class TwitchConnector:
 
     async def close(self) -> None:
         self._closing = True
+        if self._watchdog is not None and self._watchdog is not asyncio.current_task():
+            self._watchdog.cancel()
         if self._client is not None:
             await self._client.close()
 
 
+def _check_port_free(port: int) -> None:
+    for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+        except OSError:  # this address family isn't available here
+            continue
+        with sock:
+            try:
+                sock.bind((host, port))
+            except OSError as exc:
+                if family == socket.AF_INET6 and exc.errno == errno.EADDRNOTAVAIL:  # no IPv6 loopback here
+                    continue
+                raise ConfigError(f"port {port} is in use; close whatever is using it and run auth again") from None
+
+
 async def authorize(config: Config) -> UserRef:
     """One-time login: serve http://localhost:4343, wait for the bot account to approve, save the token."""
-    import asyncio
-
+    _check_port_free(AUTH_PORT)
     done: asyncio.Future[UserRef] = asyncio.get_running_loop().create_future()
     token_path = config.data_dir / ".tio.tokens.json"
-    token_path.parent.mkdir(parents=True, exist_ok=True)
 
     class AuthClient(twitchio.Client):
         async def event_oauth_authorized(self, payload: Any) -> None:
-            valid = await self.add_token(payload.access_token, payload.refresh_token)
-            await self.save_tokens(str(token_path))
+            try:
+                valid = await self.add_token(payload.access_token, payload.refresh_token)
+                write_token_file(token_path, {str(valid.user_id): self.tokens[str(valid.user_id)]})
+            except Exception as exc:
+                if not done.done():
+                    done.set_exception(exc)
+                return
             if not done.done():
                 done.set_result(UserRef(str(valid.user_id), valid.login or "", valid.login or ""))
 
-    client = AuthClient(client_id=config.client_id, client_secret=config.client_secret)
+    client = AuthClient(client_id=config.client_id, client_secret=config.client_secret, fetch_client_user=False)
     async with client:
         await client.login(load_tokens=False, save_tokens=False)
         await client.adapter.run()
@@ -6026,7 +6277,7 @@ async def authorize(config: Config) -> UserRef:
 
 Run: `.venv/bin/pytest tests/test_twitch_mapping.py -q`
 
-Expected: PASS (7 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (17 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Smoke-test the login page wiring (no real credentials needed)**
 
@@ -6048,7 +6299,7 @@ asyncio.run(main())
 EOF
 ```
 
-Expected: `308 https://id.twitch.tv/oauth2/authorize?client_id=dummyclientid&redirect_uri=http://localhost:4343/oauth/callback&response_type=code&scope=...` with all four scopes (`user:read:chat`, `user:write:chat`, `user:bot`, `user:read:moderated_channels`) present in `scope=`, in any order.
+Expected: `308 https://id.twitch.tv/oauth2/authorize?client_id=dummyclientid&redirect_uri=http://localhost:4343/oauth/callback&response_type=code&scope=...&force_verify=true...` with all four scopes (`user:read:chat`, `user:write:chat`, `user:bot`, `user:read:moderated_channels`) present in `scope=`, in any order.
 
 - [ ] **Step 6: Commit**
 
@@ -6064,7 +6315,7 @@ git commit -m "Add the Twitch connector and login flow"
 - `.env` is read from next to the config file. Real environment variables win.
 - SIGINT and SIGTERM call `request_shutdown("signal")`, which stops cleanly with exit 0 (spec §13). A second signal during a stuck shutdown exits immediately.
 - A logging filter hides TwitchIO's irrelevant "install starlette" hint.
-- A database written by a newer version of the bot exits with code 2, so systemd doesn't restart-loop.
+- A database written by a newer version of the bot exits with code 2, so systemd doesn't restart-loop. A setup error during `auth` (port 4343 busy) also exits 2 with a plain message.
 - **Certificates:** the python.org macOS installers ship without root certificates, so every HTTPS call (Twitch, the fact APIs) fails until "Install Certificates.command" is run. That was found on Robert's laptop during review. `bot/certs.py` is imported first, before aiohttp builds its SSL contexts. When Python's default CA file is missing, it points `SSL_CERT_FILE` at the `certifi` bundle (a new dependency).
 
 The CLI tests run the real process, the way a person would.
@@ -6384,7 +6635,11 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CONFIG
 
     if args.mode == "auth":
-        return asyncio.run(_auth(config))
+        try:
+            return asyncio.run(_auth(config))
+        except ConfigError as exc:  # e.g. port 4343 already in use
+            print(f"Setup error: {exc}", file=sys.stderr)
+            return EXIT_CONFIG
     if args.mode == "console":
         config = dataclasses.replace(config, data_dir=config.data_dir / "console")
     return asyncio.run(_serve(config, console=args.mode == "console"))
@@ -6606,7 +6861,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 261 tests pass.
+Expected: `15 passed`, then all 271 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -6625,7 +6880,11 @@ git commit -m "Add bundled word lists, fortunes, 8-ball answers, and fallbacks"
 
 ### Task 19: README and systemd unit
 
-Covers spec §15 and §16 ("A README covers setup, the commands, and the server move"). The service file encodes the restart rules: restart after a crash, stay down after `?bot shutdown` (exit 0), never restart on exit 2 or 3, and give up after 5 restarts in 10 minutes.
+Covers spec §15 and §16 ("A README covers setup, the commands, and the server move"). The service file encodes the restart rules:
+
+- restart 30 s after a crash or lost connection, with no limit, so a long Twitch outage heals on its own;
+- stay down after `?bot shutdown` (exit 0);
+- never restart on exit 2 or 3, which need a person.
 
 **Files:**
 - Create: `README.md`, `deploy/offline-chat-bot.service`
@@ -6637,9 +6896,9 @@ Covers spec §15 and §16 ("A README covers setup, the commands, and the server 
 Description=Offline chat bot (Twitch)
 After=network-online.target
 Wants=network-online.target
-# At most 5 automatic restarts in 10 minutes, then systemd gives up.
-StartLimitIntervalSec=600
-StartLimitBurst=5
+# Never give up restarting after a crash: a long Twitch or network outage must not leave the bot
+# stopped for good. Config errors (exit 2) and login problems (exit 3) are excluded below.
+StartLimitIntervalSec=0
 
 [Service]
 User=chatbot
@@ -6648,7 +6907,7 @@ ExecStart=/opt/offline-chat-bot/.venv/bin/python -m bot
 # Restart after a crash, but not after ?bot shutdown (exit 0),
 # a config error (exit 2), or a needed re-login (exit 3).
 Restart=on-failure
-RestartSec=5
+RestartSec=30
 RestartPreventExitStatus=2 3
 
 [Install]
@@ -6760,7 +7019,9 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 4. `sudo cp deploy/offline-chat-bot.service /etc/systemd/system/`, then
    `sudo systemctl daemon-reload && sudo systemctl enable --now offline-chat-bot`.
 5. **How it behaves on the server:**
-   - **After a crash:** restarts after 5 seconds, at most 5 times in 10 minutes.
+   - **After a crash or a lost connection:** restarts after 30 seconds and keeps retrying, so a
+     long Twitch outage heals on its own. A config error (exit 2) or a needed re-login (exit 3)
+     is never restarted, because those need a person.
    - **After `?bot shutdown`:** stays down until someone with server access runs
      `sudo systemctl start offline-chat-bot`.
    - **Logs:** `journalctl -u offline-chat-bot -f`.
@@ -6782,7 +7043,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (261).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (271).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
@@ -6816,10 +7077,15 @@ can create accounts and approve logins. The agent walks him through it and recor
   - client type Confidential.
 - [ ] **Step 3:** Fill in `.env` (`cp .env.example .env`), including his own user ID in
   `OWNER_IDS`.
-- [ ] **Step 4:** Run `.venv/bin/python -m bot auth` and approve as the **bot** account. Copy
-  the printed `BOT_ID=` line into `.env`.
-- [ ] **Step 5:** Set `channel` in `config.toml` to Robert's channel. In his chat, type
-  `/mod <botaccount>`.
+- [ ] **Step 4:** Run `.venv/bin/python -m bot auth` and approve as the **bot** account (Twitch
+  shows which account is approving). The printed "Authorized as ..." must name the bot account.
+  Copy the printed `BOT_ID=` line into `.env`.
+- [ ] **Step 5:** Set `channel` in `config.toml` to Robert's channel. **Before modding**, start
+  the bot once and trigger one reply (`?coinflip`).
+  - The log shows `is_mod: false`.
+  - The reply arrives, sent with the bot's own token and no badge.
+  - Stop the bot.
+  Then, in Robert's chat, type `/mod <botaccount>`.
 - [ ] **Step 6:** Have a second, non-mod Twitch account ready, or a friend.
 
 **Checklist** (run `.venv/bin/python -m bot`; check each item off):
@@ -6841,15 +7107,30 @@ can create accounts and approve logins. The agent walks him through it and recor
   Restart the bot and it's still paused. `?bot on` resumes.
 - [ ] **Step 13:** `?bot shutdown` posts "Shutting down (requested by ...)" and the process exits.
   `echo $?` prints `0`.
-- [ ] **Step 14:** `data/logs/activity-<today>.jsonl` contains the following, and no ordinary
+- [ ] **Step 14:** Connection and login robustness:
+  - **Replies:** answering with Twitch's reply button on the bot's message works on **web and
+    mobile**.
+  - **Wi-Fi off for about 60 s:** chat resumes on its own, and the log shows `disconnected`
+    then `reconnected`.
+  - **Wi-Fi off for 5+ minutes:** the bot exits with a non-zero code, which systemd would
+    restart.
+  - **Token file:** after a run of a few hours, `data/.tio.tokens.json` is updated on
+    `?bot shutdown` (its mtime changes, and it's readable only by Robert, mode 0600).
+  - **Failure exits:**
+    - a bad `channel` exits 2;
+    - deleting `data/.tio.tokens.json` exits 3;
+    - Ctrl+C exits 0 with `shutdown` logged.
+  - **Last:** remove the app under the bot account's Settings → Connections. The bot exits 3,
+    naming the revocation. Re-run `auth` afterwards.
+- [ ] **Step 15:** `data/logs/activity-<today>.jsonl` contains the following, and no ordinary
   chat lines:
   - `startup`, `connected`, `command`, `game_start`, `game_end`;
   - `admin` (off, on, shutdown, each with who did it);
   - `shutdown`.
-- [ ] **Step 15:** Robert reviews `bot/content/words/streamers.txt`, `games.txt`, and
+- [ ] **Step 16:** Robert reviews `bot/content/words/streamers.txt`, `games.txt`, and
   `SOURCES.md`, and approves them or lists changes. Make the changes, rerun
   `.venv/bin/pytest tests/test_content.py`, and commit.
-- [ ] **Step 16:** Record the results (date, what passed, anything changed) in the Execution log
+- [ ] **Step 17:** Record the results (date, what passed, anything changed) in the Execution log
   below. Then commit: `git add docs/superpowers/plans && git commit -m "Record Phase 1 live test results"`.
 
 Phase 1 is done when every box above is checked (spec §16). Going live in jasontheween's chat

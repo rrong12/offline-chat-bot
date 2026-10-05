@@ -558,14 +558,15 @@ cp .env.example .env            # fill in client id and secret
   ExecStart=/opt/offline-chat-bot/.venv/bin/python -m bot
   WorkingDirectory=/opt/offline-chat-bot
   Restart=on-failure
-  RestartSec=5
+  RestartSec=30
   RestartPreventExitStatus=2 3
   [Unit]
-  StartLimitIntervalSec=600
-  StartLimitBurst=5
+  StartLimitIntervalSec=0
   ```
-- `?bot shutdown` exits with code 0, so it stays down. A crash restarts after 5 s, at most 5
-  times in 10 minutes.
+- `?bot shutdown` exits with code 0, so it stays down. A crash or lost connection restarts
+  after 30 s and keeps retrying, so a long Twitch outage heals on its own. Config errors (2) and
+  login problems (3) are never restarted. (Revised 2026-10-04: the earlier "at most 5 restarts in
+  10 minutes" would have left the bot stopped for good after an outage.)
 - Anyone with server access restarts it with `sudo systemctl start offline-chat-bot`.
 - Run only one instance at a time, or every command is answered twice.
 
