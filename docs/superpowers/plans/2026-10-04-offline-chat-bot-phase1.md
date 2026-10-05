@@ -1,0 +1,5519 @@
+# Offline Chat Bot Phase 1 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build Phase 1 of the Twitch chat bot for jasontheween's offline chat. It covers the
+core (Twitch connection, mod controls, activity log, rate-limited outbox, stats database, game
+manager), `?help`, `?leaderboard`, `?gamestats`, Scramble, Hangman (`?g`), `?skip`, and the
+quick fun commands including `?cookie`. It is playable in a terminal (console mode) and live on
+Twitch.
+
+**Architecture:**
+- `BotCore` filters incoming chat and routes it to a command registry, or to the active game.
+  It talks to the chat platform only through a small `Connector` interface. There are two
+  connectors: Twitch (TwitchIO: EventSub WebSocket in, Helix with the app token out) and the
+  console.
+- Games are pure classes: messages and time in, `Outcome` out. A `GameManager` owns timers,
+  cooldowns, skip votes, and scoring.
+- Everything the bot says goes through a rate-limited `Outbox`. State lives in one SQLite file;
+  activity goes to daily JSONL logs.
+
+**Tech Stack:** Python 3.12, TwitchIO 3.3.2, aiohttp, python-dotenv, SQLite (stdlib), pytest +
+pytest-asyncio.
+
+**Spec:** `docs/superpowers/specs/2026-10-04-offline-chat-bot-design.md` (approved 2026-10-04).
+
+---
+
+## Conventions
+
+- **Where to run:** every command runs from the project root, `offline-chat-bot/`. Tests run
+  with `.venv/bin/pytest`.
+- **Code is pre-verified:** the code in this plan was written and run before the plan was
+  saved. Each task's tests pass using only the files from that task and the ones before it, in
+  this order (147 tests in total before the content task). Copy the code exactly. If a step's
+  output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
+  Don't adjust the test to match.
+- **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
+  and see it pass, commit.
+- **Commits:** one per task. Never add AI attribution to commit messages: no `Co-Authored-By`
+  trailer and no "Generated with" line.
+- **Spec refinements:** this plan refines the spec in a few places, all compatible with it.
+  1. `Game.commands` is a dict `name -> (usage, description)`, so in-game commands like `?g`
+     carry their own help text.
+  2. `Game.category_names(assets)` replaces a static `categories` list, because categories come
+     from the word files.
+  3. `?help` lives in its own `bot/help.py`.
+  4. Hangman's solve check ignores spaces (`?g sealion` solves `SEA LION`).
+  5. A small `bot/clock.py` provides the real clock and a fake one for tests.
+  6. The console mode uses its own `data/console/` database, so local play never touches real
+     stats.
+  7. `deploy/offline-chat-bot.service` is the spec's systemd unit as a file.
+- **Not built in Phase 1:** trivia, riddles, Family Feud, Higher or Lower, `?rng`, `?ascii`,
+  `?chatsummary`, and the commands web page. These are spec §17.
+
+## File map
+
+| File | Responsibility | Task |
+|---|---|---|
+| `pyproject.toml`, `bot/__init__.py` | Package, dependencies, pytest config, version | 1 |
+| `bot/clock.py` | `Clock` (real) and `FakeClock` (tests) | 2 |
+| `bot/text.py` | normalize, truncate, username validation, durations | 2 |
+| `bot/assets.py` | Read bundled `bot/content/*.txt` | 3 |
+| `bot/activity_log.py` | Daily JSONL activity log + retention | 3 |
+| `bot/stats.py` | SQLite: users, rounds, players, daily uses, bot state | 4 |
+| `bot/connectors/base.py` | `ChatMessage`, `SendResult`, `UserRef`, `ReadyInfo`, `Connector`, `AuthRequired` | 5 |
+| `bot/outbox.py` | Token-bucket send queue: priority, coalescing, truncation | 5 |
+| `bot/cooldowns.py`, `bot/permissions.py` | Cooldowns; `is_controller` | 6 |
+| `bot/commands.py` | `parse_command`, `Command`, `CommandRegistry`, help text | 7 |
+| `bot/games/base.py`, `bot/games/scramble.py` | `Game` + `Outcome`; Scramble | 8 |
+| `bot/games/hangman.py` | Hangman with `?g` | 9 |
+| `bot/games/__init__.py`, `bot/games/manager.py` | `ALL_GAMES`; `GameManager` | 10 |
+| `bot/http.py`, `bot/fun.py` | HTTP client; quick commands + `?cookie` | 11 |
+| `bot/stats_commands.py`, `bot/help.py` | `?leaderboard`, `?gamestats`; `?help` | 12 |
+| `bot/config.py`, `config.toml`, `.env.example` | Settings + validation | 13 |
+| `bot/connectors/console.py` | Terminal connector | 14 |
+| `bot/admin.py`, `bot/core.py` | `?bot`, `?stopgame`; `BotCore` + run loop | 15 |
+| `bot/connectors/twitch.py` | TwitchIO connector + `auth` flow | 16 |
+| `bot/__main__.py` | CLI: run / auth / console | 17 |
+| `bot/content/**` | 8-ball, fortunes, fallbacks, six word lists, `SOURCES.md` | 18 |
+| `README.md`, `deploy/offline-chat-bot.service` | Docs, systemd unit | 19 |
+| `tests/helpers.py` | `make_msg` (6), `FakeHttp` (11), `make_config` (15) | 6, 11, 15 |
+
+
+### Task 1: Project scaffold
+
+The package, its dependencies, and pytest configuration. `asyncio_mode = "auto"` lets async test functions run without decorators.
+
+**Files:**
+- Create: `pyproject.toml`, `bot/__init__.py`, `tests/__init__.py` (empty), `tests/test_version.py`
+- Existing: `.gitignore` (already ignores `.env`, `data/`, `.venv/`)
+
+- [ ] **Step 1: Write `pyproject.toml`**
+
+```toml
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "offline-chat-bot"
+version = "0.1.0"
+description = "Twitch chat-games bot for jasontheween's offline chat"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "twitchio==3.3.2",
+    "aiohttp>=3.9",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[tool.setuptools.packages.find]
+include = ["bot*"]
+
+[tool.setuptools.package-data]
+bot = ["content/*.txt", "content/words/*.txt"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    # TwitchIO's web adapter subclasses aiohttp's Application; harmless, not ours to fix.
+    "ignore:Inheritance class AiohttpAdapter from web.Application is discouraged:DeprecationWarning",
+]
+```
+
+- [ ] **Step 2: Write `bot/__init__.py` and an empty `tests/__init__.py`**
+
+```python
+__version__ = "0.1.0"
+```
+
+```bash
+touch tests/__init__.py
+```
+
+- [ ] **Step 3: Create the virtualenv and install**
+
+Run: `python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev]'`
+
+Expected: ends with `Successfully installed ... offline-chat-bot-0.1.0 ... twitchio-3.3.2`.
+
+- [ ] **Step 4: Write `tests/test_version.py`**
+
+```python
+import bot
+
+
+def test_version():
+    assert bot.__version__ == "0.1.0"
+```
+
+- [ ] **Step 5: Run it**
+
+Run: `.venv/bin/pytest -q`
+
+Expected: `1 passed`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add pyproject.toml bot/__init__.py tests/__init__.py tests/test_version.py
+git commit -m "Scaffold the package and test setup"
+```
+
+### Task 2: Clock and text helpers
+
+`Clock` gives wall time (UTC, for dates and logs) and monotonic time (for timers and rate limits). `FakeClock` lets tests move time by hand. `text.py` holds the answer normalization from spec §6 (NFKC, lowercase, strip invisible characters such as Chatterino's U+E0000 duplicate tag, punctuation to spaces), 500-character truncation, Twitch username validation, and `3h 12m` formatting.
+
+**Files:**
+- Create: `bot/clock.py`, `bot/text.py`
+- Test: `tests/test_text.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_text.py`**
+
+```python
+from bot.text import clean_username, format_duration, normalize, strip_invisible, truncate
+
+
+def test_normalize_lowercases_and_collapses_spaces():
+    assert normalize("  Hello   WORLD ") == "hello world"
+
+
+def test_normalize_turns_punctuation_into_spaces():
+    assert normalize("spider-man!") == "spider man"
+
+
+def test_normalize_drops_chatterino_duplicate_tag():
+    assert normalize("alligator \U000e0000") == "alligator"
+
+
+def test_normalize_drops_zero_width_characters():
+    assert normalize("alli​gator") == "alligator"
+
+
+def test_normalize_applies_nfkc():
+    assert normalize("ｆｕｌｌｗｉｄｔｈ") == "fullwidth"
+
+
+def test_strip_invisible_keeps_visible_text():
+    assert strip_invisible("?scramble\U000e0000") == "?scramble"
+
+
+def test_truncate_leaves_short_text_alone():
+    assert truncate("hi") == "hi"
+
+
+def test_truncate_cuts_at_word_boundary_with_ellipsis():
+    text = "word " * 200
+    out = truncate(text)
+    assert len(out) <= 500
+    assert out.endswith("word…")
+
+
+def test_truncate_hard_cuts_one_long_word():
+    out = truncate("x" * 600)
+    assert len(out) == 500
+    assert out.endswith("…")
+
+
+def test_clean_username_accepts_valid_names():
+    assert clean_username("@Some_User") == "some_user"
+
+
+def test_clean_username_rejects_bad_names():
+    assert clean_username("ab") is None
+    assert clean_username("has space") is None
+    assert clean_username("emoji😀") is None
+    assert clean_username("x" * 26) is None
+
+
+def test_format_duration():
+    assert format_duration(45) == "45s"
+    assert format_duration(12 * 60 + 5) == "12m"
+    assert format_duration(3 * 3600 + 12 * 60) == "3h 12m"
+    assert format_duration(-5) == "0s"
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_text.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.text'`
+
+- [ ] **Step 3: Write `bot/clock.py`**
+
+```python
+"""Time sources. Real code uses Clock; tests use FakeClock to control time."""
+
+from __future__ import annotations
+
+import time
+from datetime import datetime, timedelta, timezone
+
+
+class Clock:
+    def now(self) -> datetime:
+        """Current wall-clock time in UTC (for dates, logs, and the database)."""
+        return datetime.now(timezone.utc)
+
+    def mono(self) -> float:
+        """Monotonic seconds (for timers and rate limits; never jumps backwards)."""
+        return time.monotonic()
+
+
+class FakeClock(Clock):
+    def __init__(self, start: datetime | None = None) -> None:
+        self._now = start or datetime(2026, 10, 4, 12, 0, 0, tzinfo=timezone.utc)
+        self._mono = 1000.0
+
+    def now(self) -> datetime:
+        return self._now
+
+    def mono(self) -> float:
+        return self._mono
+
+    def advance(self, seconds: float) -> None:
+        self._now += timedelta(seconds=seconds)
+        self._mono += seconds
+```
+
+- [ ] **Step 4: Write `bot/text.py`**
+
+```python
+"""Text helpers: answer normalization, truncation, usernames, durations."""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+
+MAX_MESSAGE = 500
+
+# Zero-width characters, word joiners, BOM, combining grapheme joiner, Mongolian vowel
+# separator, and the Unicode tag block (Chatterino/7TV append U+E0000 to repeated messages).
+_INVISIBLE = re.compile("[͏᠎​-‏⁠-⁤﻿\U000e0000-\U000e007f]")
+_USERNAME = re.compile(r"^[A-Za-z0-9_]{3,25}$")
+
+
+def strip_invisible(text: str) -> str:
+    return _INVISIBLE.sub("", text)
+
+
+def normalize(text: str) -> str:
+    """Lowercase, drop invisible characters, turn punctuation into spaces, collapse spaces."""
+    t = unicodedata.normalize("NFKC", text).lower()
+    t = strip_invisible(t)
+    t = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in t)
+    return " ".join(t.split())
+
+
+def truncate(text: str, limit: int = MAX_MESSAGE) -> str:
+    """Cut to at most `limit` characters at a word boundary, ending with an ellipsis."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space]
+    return cut.rstrip() + "…"
+
+
+def clean_username(raw: str) -> str | None:
+    """Strip a leading @ and return the lowercase login, or None if it isn't a valid name."""
+    name = strip_invisible(raw).strip().lstrip("@")
+    if not _USERNAME.fullmatch(name):
+        return None
+    return name.lower()
+
+
+def format_duration(seconds: float) -> str:
+    """3h 12m, 12m, or 45s."""
+    total = max(0, int(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m"
+    return f"{secs}s"
+```
+
+- [ ] **Step 5: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_text.py -q`
+
+Expected: PASS (12 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add bot/clock.py bot/text.py tests/test_text.py
+git commit -m "Add clock and text helpers"
+```
+
+### Task 3: Assets, shared test fixtures, activity log
+
+`Assets` reads the bundled text files (one item per line, `#` comments allowed). `conftest.py` gives every test a `FakeClock` and a tiny temporary content folder, so game tests never depend on the real word lists. `ActivityLog` appends one JSON object per line to `activity-YYYY-MM-DD.jsonl` (UTC) and prunes files older than the retention window, once per day (spec §11).
+
+**Files:**
+- Create: `bot/assets.py`, `bot/activity_log.py`, `tests/conftest.py`
+- Test: `tests/test_assets.py`, `tests/test_activity_log.py`
+
+- [ ] **Step 1: Write the failing test `tests/conftest.py`**
+
+```python
+from pathlib import Path
+
+import pytest
+
+from bot.assets import Assets
+from bot.clock import FakeClock
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()
+
+
+@pytest.fixture
+def content_dir(tmp_path: Path) -> Path:
+    """A tiny content folder so game tests don't depend on the real word lists."""
+    root = tmp_path / "content"
+    (root / "words").mkdir(parents=True)
+    (root / "words" / "animals.txt").write_text("# comment\nalligator\ncat\nsea lion\n", encoding="utf-8")
+    (root / "words" / "food.txt").write_text("ramen\nhot cheetos\n", encoding="utf-8")
+    (root / "8ball.txt").write_text("Yes.\nNo.\n", encoding="utf-8")
+    (root / "fortunes.txt").write_text("Good things are coming.\n", encoding="utf-8")
+    for name in ("catfacts", "dogfacts", "facts", "dadjokes"):
+        (root / f"fallback_{name}.txt").write_text(f"fallback {name} line\n", encoding="utf-8")
+    return root
+
+
+@pytest.fixture
+def assets(content_dir: Path) -> Assets:
+    return Assets(content_dir)
+```
+
+- [ ] **Step 2: Write the failing test `tests/test_assets.py`**
+
+```python
+from bot.assets import Assets
+
+
+def test_lines_skip_blank_and_comment_lines(assets: Assets):
+    assert assets.words("animals") == ["alligator", "cat", "sea lion"]
+
+
+def test_categories_are_sorted_file_stems(assets: Assets):
+    assert assets.categories() == ["animals", "food"]
+
+
+def test_lines_reads_top_level_files(assets: Assets):
+    assert assets.lines("8ball") == ["Yes.", "No."]
+```
+
+- [ ] **Step 3: Write the failing test `tests/test_activity_log.py`**
+
+```python
+import json
+from datetime import date
+
+from bot.activity_log import ActivityLog
+from bot.clock import FakeClock
+
+
+def test_write_appends_json_line_to_todays_file(tmp_path, clock: FakeClock):
+    log = ActivityLog(tmp_path, clock)
+    log.write("command", user_id="1", command="scramble")
+    log.write("admin", action="off")
+    lines = log.path_for(date(2026, 10, 4)).read_text().splitlines()
+    assert [json.loads(line)["event"] for line in lines] == ["command", "admin"]
+    assert json.loads(lines[0]) == {
+        "ts": "2026-10-04T12:00:00Z",
+        "event": "command",
+        "user_id": "1",
+        "command": "scramble",
+    }
+
+
+def test_new_utc_day_starts_new_file(tmp_path, clock: FakeClock):
+    log = ActivityLog(tmp_path, clock)
+    log.write("a")
+    clock.advance(12 * 3600)
+    log.write("b")
+    assert log.path_for(date(2026, 10, 4)).exists()
+    assert log.path_for(date(2026, 10, 5)).exists()
+
+
+def test_prune_deletes_files_older_than_retention(tmp_path, clock: FakeClock):
+    log = ActivityLog(tmp_path, clock, retention_days=30)
+    old = tmp_path / "activity-2026-09-03.jsonl"
+    kept = tmp_path / "activity-2026-09-04.jsonl"
+    other = tmp_path / "notes.txt"
+    for p in (old, kept, other):
+        p.write_text("x")
+    assert log.prune() == 1
+    assert not old.exists() and kept.exists() and other.exists()
+
+
+def test_maybe_rollover_prunes_once_per_day(tmp_path, clock: FakeClock):
+    log = ActivityLog(tmp_path, clock, retention_days=30)
+    log.maybe_rollover()
+    stale = tmp_path / "activity-2026-01-01.jsonl"
+    stale.write_text("x")
+    log.maybe_rollover()
+    assert stale.exists()
+    clock.advance(24 * 3600)
+    log.maybe_rollover()
+    assert not stale.exists()
+```
+
+- [ ] **Step 4: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_assets.py tests/test_activity_log.py -q`
+
+Expected: FAIL. `ImportError` while loading conftest (`No module named 'bot.assets'`)
+
+- [ ] **Step 5: Write `bot/assets.py`**
+
+```python
+"""Loads the bundled text files in bot/content/ (one item per line)."""
+
+from __future__ import annotations
+
+from functools import cache
+from pathlib import Path
+
+DEFAULT_ROOT = Path(__file__).parent / "content"
+
+
+class Assets:
+    def __init__(self, root: Path = DEFAULT_ROOT) -> None:
+        self.root = root
+
+    def lines(self, name: str) -> list[str]:
+        """Non-blank, non-comment lines of content/<name>.txt."""
+        return list(_read(self.root / f"{name}.txt"))
+
+    def words(self, category: str) -> list[str]:
+        return list(_read(self.root / "words" / f"{category}.txt"))
+
+    def categories(self) -> list[str]:
+        return sorted(p.stem for p in (self.root / "words").glob("*.txt"))
+
+
+@cache
+def _read(path: Path) -> tuple[str, ...]:
+    text = path.read_text(encoding="utf-8")
+    return tuple(
+        line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
+    )
+```
+
+- [ ] **Step 6: Write `bot/activity_log.py`**
+
+```python
+"""Append-only JSONL activity log: one file per UTC day, old files pruned."""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Any
+
+from bot.clock import Clock
+
+logger = logging.getLogger("bot.activity")
+_PREFIX = "activity-"
+
+
+class ActivityLog:
+    def __init__(self, directory: Path, clock: Clock, retention_days: int = 30) -> None:
+        self.directory = directory
+        self.clock = clock
+        self.retention_days = retention_days
+        self._last_prune_day: date | None = None
+        directory.mkdir(parents=True, exist_ok=True)
+
+    def path_for(self, day: date) -> Path:
+        return self.directory / f"{_PREFIX}{day.isoformat()}.jsonl"
+
+    def write(self, event: str, **fields: Any) -> None:
+        now = self.clock.now()
+        record = {"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "event": event, **fields}
+        line = json.dumps(record, ensure_ascii=False, default=str)
+        with self.path_for(now.date()).open("a", encoding="utf-8") as fp:
+            fp.write(line + "\n")
+        logger.info("%s %s", event, json.dumps(fields, ensure_ascii=False, default=str))
+
+    def prune(self) -> int:
+        """Delete files older than the retention window. Returns how many were deleted."""
+        today = self.clock.now().date()
+        cutoff = today - timedelta(days=self.retention_days)
+        deleted = 0
+        for path in self.directory.glob(f"{_PREFIX}*.jsonl"):
+            try:
+                day = date.fromisoformat(path.stem.removeprefix(_PREFIX))
+            except ValueError:
+                continue
+            if day < cutoff:
+                path.unlink()
+                deleted += 1
+        self._last_prune_day = today
+        return deleted
+
+    def maybe_rollover(self) -> None:
+        """Prune once per UTC day; called from the bot's 1-second tick."""
+        if self._last_prune_day != self.clock.now().date():
+            self.prune()
+```
+
+- [ ] **Step 7: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_assets.py tests/test_activity_log.py -q`
+
+Expected: PASS (7 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add bot/assets.py bot/activity_log.py tests/conftest.py tests/test_assets.py tests/test_activity_log.py
+git commit -m "Add asset loading and the activity log"
+```
+
+### Task 4: Stats store (SQLite)
+
+The schema from spec §8, applied through numbered migrations keyed off `schema_version`. Rounds and their players are written in one transaction when a round ends; `record_round` also upserts each player's user row. Leaderboards and ranks are computed from `round_players` (no stored totals), ordered by points, then wins, then login, and only list people with points. `claim_daily` relies on the primary key, so a second claim on the same UTC day fails atomically.
+
+**Files:**
+- Create: `bot/stats.py`
+- Test: `tests/test_stats.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_stats.py`**
+
+```python
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from bot.stats import GameStats, PlayerResult, RoundRecord, StatsStore
+
+T0 = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def store() -> StatsStore:
+    s = StatsStore(":memory:")
+    s.touch_user("u1", "alice", "Alice", T0)
+    return s
+
+
+def player(uid: str, points: int = 0, won: bool = False) -> PlayerResult:
+    return PlayerResult(uid, f"user_{uid}", f"User_{uid}", points, won)
+
+
+def record(store: StatsStore, game: str, players: list[PlayerResult], outcome: str = "won") -> int:
+    return store.record_round(
+        RoundRecord(game, "animals", "u1", T0, T0 + timedelta(seconds=30), outcome, players)
+    )
+
+
+def test_migrations_create_schema_and_are_idempotent(tmp_path: Path):
+    path = tmp_path / "bot.db"
+    StatsStore(path).close()
+    again = StatsStore(path)
+    assert again.schema_version() == 1
+
+
+def test_touch_and_find_user_case_insensitive(store: StatsStore):
+    assert store.find_user("ALICE").user_id == "u1"
+    assert store.find_user("nobody") is None
+
+
+def test_touch_user_updates_renamed_login(store: StatsStore):
+    store.touch_user("u1", "alice_new", "Alice_New", T0 + timedelta(days=1))
+    assert store.find_user("alice_new").display_name == "Alice_New"
+
+
+def test_record_round_upserts_players_and_returns_id(store: StatsStore):
+    rid = record(store, "scramble", [player("u2", 10, True), player("u3")])
+    assert rid == 1
+    assert store.find_user("user_u2").user_id == "u2"
+
+
+def test_leaderboard_orders_by_points_then_wins_then_login(store: StatsStore):
+    record(store, "scramble", [player("b", 10, True)])
+    record(store, "scramble", [player("a", 10, True)])
+    record(store, "hangman", [player("c", 7, False), player("d", 0)])
+    rows = store.leaderboard(None, 10)
+    assert [r.user_id for r in rows] == ["a", "b", "c"]  # d has 0 points and is left out
+    assert [r.user_id for r in store.leaderboard("hangman", 10)] == ["c"]
+    assert len(store.leaderboard(None, 2)) == 2
+
+
+def test_user_stats_per_game_and_rank(store: StatsStore):
+    record(store, "scramble", [player("a", 10, True), player("b")])
+    record(store, "scramble", [player("b", 7, True)])
+    record(store, "hangman", [player("a", 3)], outcome="lost")
+    assert store.user_stats("a") == [GameStats("scramble", 1, 1, 10), GameStats("hangman", 1, 0, 3)]
+    assert store.rank("a", "scramble") == 1
+    assert store.rank("b", "scramble") == 2
+    assert store.rank("zzz", "scramble") is None
+
+
+def test_claim_daily_only_once_per_day(store: StatsStore):
+    assert store.claim_daily("u1", "cookie", "2026-10-04", "fortune A")
+    assert not store.claim_daily("u1", "cookie", "2026-10-04", "fortune B")
+    assert store.get_daily("u1", "cookie", "2026-10-04") == "fortune A"
+    assert store.claim_daily("u1", "cookie", "2026-10-05", "fortune C")
+
+
+def test_state_round_trip_survives_reopen(tmp_path: Path):
+    path = tmp_path / "bot.db"
+    s = StatsStore(path)
+    assert s.get_state("paused", "0") == "0"
+    s.set_state("paused", "1")
+    s.close()
+    assert StatsStore(path).get_state("paused") == "1"
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_stats.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.stats'`
+
+- [ ] **Step 3: Write `bot/stats.py`**
+
+```python
+"""SQLite storage: users, game rounds and players, daily uses, and persistent bot state."""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+MIGRATIONS: list[str] = [
+    """
+    CREATE TABLE users (
+      user_id      TEXT PRIMARY KEY,
+      login        TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      last_seen    TEXT NOT NULL
+    );
+    CREATE INDEX users_login ON users(login);
+
+    CREATE TABLE rounds (
+      round_id    INTEGER PRIMARY KEY,
+      game        TEXT NOT NULL,
+      category    TEXT,
+      started_by  TEXT NOT NULL REFERENCES users(user_id),
+      started_at  TEXT NOT NULL,
+      ended_at    TEXT NOT NULL,
+      outcome     TEXT NOT NULL CHECK (outcome IN ('won','timeout','lost','skipped','stopped'))
+    );
+
+    CREATE TABLE round_players (
+      round_id INTEGER NOT NULL REFERENCES rounds(round_id),
+      user_id  TEXT NOT NULL REFERENCES users(user_id),
+      points   INTEGER NOT NULL DEFAULT 0,
+      won      INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (round_id, user_id)
+    );
+
+    CREATE TABLE daily_uses (
+      user_id  TEXT NOT NULL,
+      feature  TEXT NOT NULL,
+      utc_date TEXT NOT NULL,
+      result   TEXT,
+      PRIMARY KEY (user_id, feature, utc_date)
+    );
+
+    CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    """,
+]
+
+
+@dataclass(frozen=True)
+class UserRow:
+    user_id: str
+    login: str
+    display_name: str
+
+
+@dataclass(frozen=True)
+class PlayerResult:
+    user_id: str
+    login: str
+    display_name: str
+    points: int
+    won: bool
+
+
+@dataclass(frozen=True)
+class RoundRecord:
+    game: str
+    category: str | None
+    started_by: str
+    started_at: datetime
+    ended_at: datetime
+    outcome: str
+    players: list[PlayerResult]
+
+
+@dataclass(frozen=True)
+class LeaderRow:
+    user_id: str
+    login: str
+    display_name: str
+    points: int
+    wins: int
+
+
+@dataclass(frozen=True)
+class GameStats:
+    game: str
+    played: int
+    wins: int
+    points: int
+
+
+def _iso(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class StatsStore:
+    def __init__(self, path: Path | str) -> None:
+        if isinstance(path, Path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(path))
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        if str(path) != ":memory:":
+            self._conn.execute("PRAGMA journal_mode = WAL")
+        self._migrate()
+
+    def _migrate(self) -> None:
+        with self._conn:
+            self._conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+            row = self._conn.execute("SELECT version FROM schema_version").fetchone()
+            version = row["version"] if row else 0
+            if row is None:
+                self._conn.execute("INSERT INTO schema_version (version) VALUES (0)")
+        for number, sql in enumerate(MIGRATIONS[version:], start=version + 1):
+            with self._conn:
+                for statement in sql.split(";"):
+                    if statement.strip():
+                        self._conn.execute(statement)
+                self._conn.execute("UPDATE schema_version SET version = ?", (number,))
+
+    def schema_version(self) -> int:
+        return self._conn.execute("SELECT version FROM schema_version").fetchone()["version"]
+
+    def close(self) -> None:
+        self._conn.close()
+
+    # users
+
+    def touch_user(self, user_id: str, login: str, display_name: str, now: datetime) -> None:
+        with self._conn:
+            self._upsert_user(user_id, login, display_name, now)
+
+    def _upsert_user(self, user_id: str, login: str, display_name: str, now: datetime) -> None:
+        self._conn.execute(
+            """INSERT INTO users (user_id, login, display_name, last_seen) VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 login = excluded.login, display_name = excluded.display_name, last_seen = excluded.last_seen""",
+            (user_id, login.lower(), display_name, _iso(now)),
+        )
+
+    def find_user(self, login: str) -> UserRow | None:
+        row = self._conn.execute(
+            "SELECT user_id, login, display_name FROM users WHERE login = ? ORDER BY last_seen DESC LIMIT 1",
+            (login.lower(),),
+        ).fetchone()
+        return UserRow(row["user_id"], row["login"], row["display_name"]) if row else None
+
+    # rounds
+
+    def record_round(self, rec: RoundRecord) -> int:
+        """Write a finished round and its players in one transaction. Returns the round id."""
+        with self._conn:
+            for p in rec.players:
+                self._upsert_user(p.user_id, p.login, p.display_name, rec.ended_at)
+            cur = self._conn.execute(
+                """INSERT INTO rounds (game, category, started_by, started_at, ended_at, outcome)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (rec.game, rec.category, rec.started_by, _iso(rec.started_at), _iso(rec.ended_at), rec.outcome),
+            )
+            round_id = int(cur.lastrowid)
+            self._conn.executemany(
+                "INSERT INTO round_players (round_id, user_id, points, won) VALUES (?, ?, ?, ?)",
+                [(round_id, p.user_id, p.points, int(p.won)) for p in rec.players],
+            )
+        return round_id
+
+    def _ranked(self, game: str | None) -> list[LeaderRow]:
+        rows = self._conn.execute(
+            """SELECT rp.user_id, u.login, u.display_name,
+                      SUM(rp.points) AS points, SUM(rp.won) AS wins
+               FROM round_players rp
+               JOIN rounds r ON r.round_id = rp.round_id
+               JOIN users u ON u.user_id = rp.user_id
+               WHERE (:game IS NULL OR r.game = :game)
+               GROUP BY rp.user_id
+               HAVING SUM(rp.points) > 0
+               ORDER BY points DESC, wins DESC, u.login ASC""",
+            {"game": game},
+        ).fetchall()
+        return [LeaderRow(r["user_id"], r["login"], r["display_name"], r["points"], r["wins"]) for r in rows]
+
+    def leaderboard(self, game: str | None, limit: int) -> list[LeaderRow]:
+        return self._ranked(game)[:limit]
+
+    def rank(self, user_id: str, game: str | None) -> int | None:
+        for position, row in enumerate(self._ranked(game), start=1):
+            if row.user_id == user_id:
+                return position
+        return None
+
+    def user_stats(self, user_id: str) -> list[GameStats]:
+        rows = self._conn.execute(
+            """SELECT r.game, COUNT(*) AS played, SUM(rp.won) AS wins, SUM(rp.points) AS points
+               FROM round_players rp JOIN rounds r ON r.round_id = rp.round_id
+               WHERE rp.user_id = ?
+               GROUP BY r.game
+               ORDER BY points DESC, r.game ASC""",
+            (user_id,),
+        ).fetchall()
+        return [GameStats(r["game"], r["played"], r["wins"], r["points"]) for r in rows]
+
+    # daily uses
+
+    def claim_daily(self, user_id: str, feature: str, utc_date: str, result: str) -> bool:
+        """Record today's use. Returns False if this user already used the feature today."""
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO daily_uses (user_id, feature, utc_date, result) VALUES (?, ?, ?, ?)",
+                    (user_id, feature, utc_date, result),
+                )
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
+    def get_daily(self, user_id: str, feature: str, utc_date: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT result FROM daily_uses WHERE user_id = ? AND feature = ? AND utc_date = ?",
+            (user_id, feature, utc_date),
+        ).fetchone()
+        return row["result"] if row else None
+
+    # bot state
+
+    def get_state(self, key: str, default: str | None = None) -> str | None:
+        row = self._conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_state(self, key: str, value: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                """INSERT INTO bot_state (key, value) VALUES (?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                (key, value),
+            )
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_stats.py -q`
+
+Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bot/stats.py tests/test_stats.py
+git commit -m "Add the SQLite stats store"
+```
+
+### Task 5: Connector types and the outbox
+
+`connectors/base.py` defines the platform-neutral types from spec §4. The `Outbox` (spec §9) does several things:
+
+- truncates each message to 500 characters;
+- coalesces messages that share a `coalesce_key` (for example the Hangman board) by replacing the unsent one in place;
+- puts priority messages at the front, and evicts the newest normal message if the queue is full;
+- drops and logs new normal messages when the queue is full;
+- sends through a token bucket: 1 per second sustained, burst of 3.
+
+`flush_ready()` sends what the bucket allows right now, which makes it testable with `FakeClock`. `run()` is the background loop. `drain()` flushes for up to 3 real seconds at shutdown.
+
+**Files:**
+- Create: `bot/connectors/__init__.py` (empty), `bot/connectors/base.py`, `bot/outbox.py`
+- Test: `tests/test_outbox.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_outbox.py`**
+
+```python
+import asyncio
+
+import pytest
+
+from bot.activity_log import ActivityLog
+from bot.clock import Clock, FakeClock
+from bot.connectors.base import SendResult
+from bot.outbox import Outbox
+
+
+class Recorder:
+    def __init__(self, result: SendResult | None = None):
+        self.sent: list[tuple[str, str | None]] = []
+        self.result = result or SendResult(True)
+
+    async def __call__(self, text: str, reply_to: str | None) -> SendResult:
+        self.sent.append((text, reply_to))
+        return self.result
+
+
+@pytest.fixture
+def log(tmp_path, clock):
+    return ActivityLog(tmp_path / "logs", clock)
+
+
+def make(clock, log, recorder, **kw) -> Outbox:
+    return Outbox(recorder, clock, log, **kw)
+
+
+async def test_burst_then_one_per_second(clock: FakeClock, log):
+    rec = Recorder()
+    box = make(clock, log, rec, rate=1, burst=3)
+    for i in range(5):
+        box.enqueue(f"m{i}")
+    assert await box.flush_ready() == 3
+    assert await box.flush_ready() == 0
+    clock.advance(1)
+    assert await box.flush_ready() == 1
+    clock.advance(10)
+    assert await box.flush_ready() == 1
+    assert [t for t, _ in rec.sent] == ["m0", "m1", "m2", "m3", "m4"]
+
+
+async def test_tokens_cap_at_burst(clock: FakeClock, log):
+    rec = Recorder()
+    box = make(clock, log, rec, rate=1, burst=3)
+    clock.advance(100)
+    for i in range(6):
+        box.enqueue(f"m{i}")
+    assert await box.flush_ready() == 3
+
+
+async def test_reply_to_is_passed_through(clock, log):
+    rec = Recorder()
+    box = make(clock, log, rec)
+    box.enqueue("hi", reply_to="msg-1")
+    await box.flush_ready()
+    assert rec.sent == [("hi", "msg-1")]
+
+
+async def test_full_queue_drops_new_normal_messages_and_logs(clock, log, tmp_path):
+    box = make(clock, log, Recorder(), max_queue=2)
+    assert box.enqueue("a") and box.enqueue("b")
+    assert not box.enqueue("c")
+    assert box.pending() == ["a", "b"]
+    assert "queue_full" in (tmp_path / "logs" / "activity-2026-10-04.jsonl").read_text()
+
+
+async def test_priority_goes_first_and_evicts_newest_normal_when_full(clock, log):
+    box = make(clock, log, Recorder(), max_queue=3)
+    for t in ("a", "b", "c"):
+        box.enqueue(t)
+    assert box.enqueue("STOP", priority=True)
+    assert box.pending() == ["STOP", "a", "b"]
+
+
+async def test_priority_messages_keep_their_order(clock, log):
+    box = make(clock, log, Recorder())
+    box.enqueue("a")
+    box.enqueue("P1", priority=True)
+    box.enqueue("P2", priority=True)
+    assert box.pending() == ["P1", "P2", "a"]
+
+
+async def test_coalesce_replaces_unsent_message_in_place(clock, log):
+    box = make(clock, log, Recorder())
+    box.enqueue("board 1", coalesce_key="board")
+    box.enqueue("other")
+    box.enqueue("board 2", coalesce_key="board")
+    assert box.pending() == ["board 2", "other"]
+
+
+async def test_long_messages_are_truncated(clock, log):
+    rec = Recorder()
+    box = make(clock, log, rec)
+    box.enqueue("word " * 200)
+    await box.flush_ready()
+    assert len(rec.sent[0][0]) <= 500
+
+
+async def test_dropped_by_twitch_is_logged(clock, log, tmp_path):
+    rec = Recorder(SendResult(False, "msg_rejected", "AutoMod held it"))
+    box = make(clock, log, rec)
+    box.enqueue("hello")
+    await box.flush_ready()
+    text = (tmp_path / "logs" / "activity-2026-10-04.jsonl").read_text()
+    assert "msg_rejected" in text
+
+
+async def test_send_exception_is_logged_and_loop_continues(clock, log, tmp_path):
+    calls = []
+
+    async def flaky(text, reply_to):
+        calls.append(text)
+        if text == "boom":
+            raise ConnectionError("network down")
+        return SendResult(True)
+
+    box = Outbox(flaky, clock, log)
+    box.enqueue("boom")
+    box.enqueue("ok")
+    assert await box.flush_ready() == 2
+    assert calls == ["boom", "ok"]
+    assert "network down" in (tmp_path / "logs" / "activity-2026-10-04.jsonl").read_text()
+
+
+async def test_drain_sends_remaining_with_real_clock(tmp_path):
+    clock = Clock()
+    log = ActivityLog(tmp_path, clock)
+    rec = Recorder()
+    box = Outbox(rec, clock, log, rate=50, burst=1)
+    for i in range(5):
+        box.enqueue(f"m{i}")
+    await box.drain(timeout=2)
+    assert len(rec.sent) == 5
+
+
+async def test_run_loop_sends_and_stops(tmp_path):
+    clock = Clock()
+    rec = Recorder()
+    box = Outbox(rec, clock, ActivityLog(tmp_path, clock))
+    stop = asyncio.Event()
+    task = asyncio.create_task(box.run(stop))
+    box.enqueue("hello")
+    await asyncio.sleep(0.05)
+    stop.set()
+    await asyncio.wait_for(task, timeout=2)
+    assert rec.sent == [("hello", None)]
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_outbox.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.connectors'`
+
+- [ ] **Step 3: Create the empty package file**
+
+```bash
+mkdir -p bot/connectors && touch bot/connectors/__init__.py
+```
+
+- [ ] **Step 4: Write `bot/connectors/base.py`**
+
+```python
+"""The boundary between the bot core and a chat platform (Twitch, or the console)."""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Protocol
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    id: str
+    user_id: str
+    login: str  # lowercase username
+    display_name: str
+    text: str
+    is_broadcaster: bool
+    is_moderator: bool
+    source_channel_id: str | None  # set during shared chat
+    received_at: datetime  # UTC
+
+
+@dataclass(frozen=True)
+class SendResult:
+    sent: bool
+    drop_code: str | None = None
+    drop_message: str | None = None
+
+
+@dataclass(frozen=True)
+class UserRef:
+    user_id: str
+    login: str
+    display_name: str
+
+
+@dataclass(frozen=True)
+class ReadyInfo:
+    channel_login: str
+    channel_id: str
+    is_mod: bool
+
+
+OnMessage = Callable[[ChatMessage], Awaitable[None]]
+OnReady = Callable[[ReadyInfo], Awaitable[None]]
+
+
+class Connector(Protocol):
+    channel_id: str
+
+    async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
+        """Connect and deliver messages until closed. Raises on fatal errors."""
+
+    async def send(self, text: str, reply_to: str | None = None) -> SendResult: ...
+
+    async def lookup_user(self, login: str) -> UserRef | None: ...
+
+    async def close(self) -> None: ...
+
+
+class AuthRequired(Exception):
+    """The bot's Twitch login is missing or no longer valid; `python -m bot auth` must be re-run."""
+```
+
+- [ ] **Step 5: Write `bot/outbox.py`**
+
+```python
+"""Every message the bot sends goes through here: rate limit, bounded queue, coalescing."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+
+from bot.activity_log import ActivityLog
+from bot.clock import Clock
+from bot.connectors.base import SendResult
+from bot.text import truncate
+
+logger = logging.getLogger(__name__)
+
+SendFn = Callable[[str, str | None], Awaitable[SendResult]]
+
+
+@dataclass
+class OutMessage:
+    text: str
+    reply_to: str | None = None
+    coalesce_key: str | None = None
+    priority: bool = False
+
+
+class Outbox:
+    def __init__(
+        self,
+        send: SendFn,
+        clock: Clock,
+        log: ActivityLog,
+        *,
+        rate: float = 1.0,
+        burst: int = 3,
+        max_queue: int = 20,
+    ) -> None:
+        self._send = send
+        self._clock = clock
+        self._log = log
+        self.rate = rate
+        self.burst = burst
+        self.max_queue = max_queue
+        self._queue: list[OutMessage] = []
+        self._tokens = float(burst)
+        self._last_refill = clock.mono()
+        self._wake = asyncio.Event()
+
+    def __len__(self) -> int:
+        return len(self._queue)
+
+    def pending(self) -> list[str]:
+        return [m.text for m in self._queue]
+
+    def enqueue(
+        self,
+        text: str,
+        *,
+        reply_to: str | None = None,
+        coalesce_key: str | None = None,
+        priority: bool = False,
+    ) -> bool:
+        """Queue a message. Returns False if it was dropped because the queue is full."""
+        msg = OutMessage(truncate(text), reply_to, coalesce_key, priority)
+        if coalesce_key is not None:
+            for i, queued in enumerate(self._queue):
+                if queued.coalesce_key == coalesce_key:
+                    self._queue[i] = msg
+                    return True
+        if len(self._queue) >= self.max_queue:
+            normal = [i for i, m in enumerate(self._queue) if not m.priority]
+            if not priority or not normal:
+                self._log.write("send_dropped", reason="queue_full", text=msg.text[:100])
+                return False
+            dropped = self._queue.pop(normal[-1])
+            self._log.write("send_dropped", reason="queue_full", text=dropped.text[:100])
+        if priority:
+            position = sum(1 for m in self._queue if m.priority)
+            self._queue.insert(position, msg)
+        else:
+            self._queue.append(msg)
+        self._wake.set()
+        return True
+
+    def _refill(self) -> None:
+        now = self._clock.mono()
+        self._tokens = min(float(self.burst), self._tokens + (now - self._last_refill) * self.rate)
+        self._last_refill = now
+
+    async def flush_ready(self) -> int:
+        """Send as many queued messages as the rate limit allows right now."""
+        self._refill()
+        sent = 0
+        while self._queue and self._tokens >= 1:
+            msg = self._queue.pop(0)
+            self._tokens -= 1
+            sent += 1
+            try:
+                result = await self._send(msg.text, msg.reply_to)
+            except Exception as exc:  # network errors must not kill the send loop
+                logger.exception("send failed")
+                self._log.write("error", where="outbox.send", type=type(exc).__name__, message=str(exc))
+                continue
+            if not result.sent:
+                self._log.write(
+                    "send_dropped", reason=result.drop_code or "unknown", message=result.drop_message
+                )
+        return sent
+
+    async def run(self, stop: asyncio.Event) -> None:
+        """Background loop: send whenever there is something queued and a token available."""
+        while not stop.is_set():
+            await self.flush_ready()
+            self._wake.clear()
+            delay = 0.25 if self._queue else 1.0
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+
+    async def drain(self, timeout: float = 3.0) -> None:
+        """Send what's left (still rate limited), giving up after `timeout` real seconds."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while self._queue and loop.time() < deadline:
+            await self.flush_ready()
+            if self._queue:
+                await asyncio.sleep(0.05)
+```
+
+- [ ] **Step 6: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_outbox.py -q`
+
+Expected: PASS (12 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add bot/connectors/__init__.py bot/connectors/base.py bot/outbox.py tests/test_outbox.py
+git commit -m "Add connector types and the rate-limited outbox"
+```
+
+### Task 6: Cooldowns, permissions, test helpers
+
+`check_command` starts both the per-user and the global cooldown only when neither is running, so a blocked attempt doesn't extend the wait. `is_controller` is spec §10. `tests/helpers.py` starts here with `make_msg`; Tasks 11 and 15 append to it.
+
+**Files:**
+- Create: `bot/cooldowns.py`, `bot/permissions.py`, `tests/helpers.py`
+- Test: `tests/test_cooldowns_permissions.py`
+
+- [ ] **Step 1: Write `tests/helpers.py`**
+
+```python
+from datetime import datetime, timezone
+from itertools import count
+
+from bot.connectors.base import ChatMessage
+
+_ids = count(1)
+
+
+def make_msg(
+    text: str,
+    login: str = "alice",
+    *,
+    user_id: str | None = None,
+    mod: bool = False,
+    broadcaster: bool = False,
+    source_channel_id: str | None = None,
+    at: datetime | None = None,
+) -> ChatMessage:
+    return ChatMessage(
+        id=f"msg-{next(_ids)}",
+        user_id=user_id or f"id-{login}",
+        login=login.lower(),
+        display_name=login,
+        text=text,
+        is_broadcaster=broadcaster,
+        is_moderator=mod,
+        source_channel_id=source_channel_id,
+        received_at=at or datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc),
+    )
+```
+
+- [ ] **Step 2: Write the failing test `tests/test_cooldowns_permissions.py`**
+
+```python
+from bot.clock import FakeClock
+from bot.cooldowns import Cooldowns
+from bot.permissions import is_controller
+from tests.helpers import make_msg
+
+
+def test_user_cooldown_blocks_same_user_only(clock: FakeClock):
+    cd = Cooldowns(clock)
+    assert cd.check_command("8ball", "u1", 10, 0)
+    assert not cd.check_command("8ball", "u1", 10, 0)
+    assert cd.check_command("8ball", "u2", 10, 0)
+    clock.advance(10)
+    assert cd.check_command("8ball", "u1", 10, 0)
+
+
+def test_global_cooldown_blocks_everyone(clock: FakeClock):
+    cd = Cooldowns(clock)
+    assert cd.check_command("dadjoke", "u1", 10, 5)
+    assert not cd.check_command("dadjoke", "u2", 10, 5)
+    clock.advance(5)
+    assert cd.check_command("dadjoke", "u2", 10, 5)
+
+
+def test_blocked_attempt_does_not_restart_cooldown(clock: FakeClock):
+    cd = Cooldowns(clock)
+    cd.check_command("fact", "u1", 10, 0)
+    clock.advance(9)
+    assert not cd.check_command("fact", "u1", 10, 0)
+    clock.advance(1)
+    assert cd.check_command("fact", "u1", 10, 0)
+
+
+def test_remaining(clock: FakeClock):
+    cd = Cooldowns(clock)
+    cd.trigger("game", 30)
+    clock.advance(12)
+    assert cd.remaining("game") == 18
+
+
+def test_is_controller():
+    owners = {"id-robert"}
+    assert is_controller(make_msg("x", broadcaster=True), owners)
+    assert is_controller(make_msg("x", mod=True), owners)
+    assert is_controller(make_msg("x", "robert"), owners)
+    assert not is_controller(make_msg("x", "random"), owners)
+```
+
+- [ ] **Step 3: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_cooldowns_permissions.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.cooldowns'`
+
+- [ ] **Step 4: Write `bot/cooldowns.py`**
+
+```python
+"""Per-user and global command cooldowns, measured on the monotonic clock."""
+
+from __future__ import annotations
+
+from collections.abc import Hashable
+
+from bot.clock import Clock
+
+_PRUNE_AT = 10_000
+
+
+class Cooldowns:
+    def __init__(self, clock: Clock) -> None:
+        self._clock = clock
+        self._until: dict[Hashable, float] = {}
+
+    def remaining(self, key: Hashable) -> float:
+        return max(0.0, self._until.get(key, 0.0) - self._clock.mono())
+
+    def ready(self, key: Hashable) -> bool:
+        return self.remaining(key) == 0.0
+
+    def trigger(self, key: Hashable, seconds: float) -> None:
+        if len(self._until) >= _PRUNE_AT:
+            now = self._clock.mono()
+            self._until = {k: v for k, v in self._until.items() if v > now}
+        self._until[key] = self._clock.mono() + seconds
+
+    def check_command(self, command: str, user_id: str, user_seconds: float, global_seconds: float) -> bool:
+        """True (and start both cooldowns) if neither the user's nor the global cooldown is running."""
+        user_key, global_key = ("user", command, user_id), ("global", command)
+        if not (self.ready(user_key) and self.ready(global_key)):
+            return False
+        self.trigger(user_key, user_seconds)
+        self.trigger(global_key, global_seconds)
+        return True
+```
+
+- [ ] **Step 5: Write `bot/permissions.py`**
+
+```python
+"""Who may use control commands: the broadcaster, any moderator, or a listed owner."""
+
+from __future__ import annotations
+
+from collections.abc import Collection
+
+from bot.connectors.base import ChatMessage
+
+
+def is_controller(msg: ChatMessage, owner_ids: Collection[str]) -> bool:
+    return msg.is_broadcaster or msg.is_moderator or msg.user_id in owner_ids
+```
+
+- [ ] **Step 6: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_cooldowns_permissions.py -q`
+
+Expected: PASS (5 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add bot/cooldowns.py bot/permissions.py tests/helpers.py tests/test_cooldowns_permissions.py
+git commit -m "Add cooldowns, permissions, and test helpers"
+```
+
+### Task 7: Command parsing, registry, and help text
+
+`parse_command` strips invisible characters first, so a Chatterino duplicate like `?scramble\U000E0000` still parses. `usage` and `description` use `{p}` for the prefix, so changing the prefix in `config.toml` updates all help text. `help_overview()` lists the `listed` commands grouped Games, Stats, Fun; control commands and `?help` itself are unlisted.
+
+**Files:**
+- Create: `bot/commands.py`
+- Test: `tests/test_commands.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_commands.py`**
+
+```python
+import pytest
+
+from bot.commands import Command, CommandRegistry, parse_command
+
+
+async def noop(ctx):
+    pass
+
+
+def cmd(name: str, group: str = "Fun", **kw) -> Command:
+    return Command(name, noop, f"{{p}}{name}", f"Does {name}.", group, **kw)
+
+
+def test_parse_command_basic():
+    assert parse_command("?Scramble Animals", "?") == ("scramble", "Animals")
+    assert parse_command("?help", "?") == ("help", "")
+
+
+def test_parse_command_rejects_non_commands():
+    assert parse_command("hello ?scramble", "?") is None
+    assert parse_command("?", "?") is None
+    assert parse_command("? scramble", "?") is None
+
+
+def test_parse_command_strips_invisible_and_extra_spaces():
+    assert parse_command("  ?cookie   give  bob \U000e0000", "?") == ("cookie", "give  bob")
+
+
+def test_parse_command_custom_prefix():
+    assert parse_command("!scramble", "!") == ("scramble", "")
+    assert parse_command("!scramble", "?") is None
+
+
+def test_registry_get_by_name_or_alias():
+    reg = CommandRegistry("?")
+    reg.add(cmd("help", group="Info", aliases=("commands",)))
+    assert reg.get("commands").name == "help"
+    assert reg.get("HELP").name == "help"
+    assert reg.get("nope") is None
+
+
+def test_registry_rejects_duplicates():
+    reg = CommandRegistry("?")
+    reg.add(cmd("fact"))
+    with pytest.raises(ValueError):
+        reg.add(cmd("other", aliases=("fact",)))
+
+
+def test_help_overview_groups_in_order_and_skips_unlisted():
+    reg = CommandRegistry("?")
+    reg.add(cmd("8ball"))
+    reg.add(cmd("scramble", group="Games"))
+    reg.add(cmd("leaderboard", group="Stats"))
+    reg.add(cmd("bot", group="Control", controller_only=True))
+    reg.add(cmd("g", group="Games", listed=False))
+    assert reg.help_overview() == (
+        "Games: ?scramble | Stats: ?leaderboard | Fun: ?8ball · ?help <command> for details"
+    )
+
+
+def test_help_for_formats_usage_aliases_and_mod_note():
+    reg = CommandRegistry("!")
+    reg.add(cmd("help", group="Info", aliases=("commands",)))
+    reg.add(cmd("bot", group="Control", controller_only=True))
+    assert reg.help_for("help") == "!help · Does help. (also !commands)"
+    assert reg.help_for("!bot") == "!bot · Does bot. Mods only."
+    assert reg.help_for("missing") is None
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_commands.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.commands'`
+
+- [ ] **Step 3: Write `bot/commands.py`**
+
+```python
+"""Command parsing, the command registry, and help text generated from it."""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+
+from bot.connectors.base import ChatMessage
+from bot.text import strip_invisible, truncate
+
+GROUP_ORDER = ("Games", "Stats", "Fun")
+
+
+def parse_command(text: str, prefix: str) -> tuple[str, str] | None:
+    """'?Scramble animals' -> ('scramble', 'animals'). None if the text isn't a command."""
+    text = strip_invisible(text).strip()
+    if not text.startswith(prefix):
+        return None
+    body = text[len(prefix):]
+    if not body or body[0].isspace():
+        return None
+    name, _, args = body.partition(" ")
+    return name.lower(), args.strip()
+
+
+@dataclass
+class CommandContext:
+    msg: ChatMessage
+    name: str  # the name typed, lowercase (may be an alias)
+    args: str
+    prefix: str
+    reply: Callable[..., None]  # reply(text, priority=False): threaded reply to msg
+    say: Callable[..., None]  # say(text, priority=False, coalesce_key=None): plain message
+
+    @property
+    def argv(self) -> list[str]:
+        return self.args.split()
+
+
+Handler = Callable[[CommandContext], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class Command:
+    name: str
+    handler: Handler
+    usage: str  # "{p}leaderboard [game] [limit]"; {p} becomes the prefix
+    description: str
+    group: str  # "Games", "Stats", "Fun", "Control", or "Info"
+    aliases: tuple[str, ...] = ()
+    controller_only: bool = False
+    cooldown: bool = True
+    listed: bool = True  # shown in the ?help overview
+
+
+@dataclass
+class CommandRegistry:
+    prefix: str
+    _commands: dict[str, Command] = field(default_factory=dict)  # name and aliases -> command
+    _order: list[Command] = field(default_factory=list)
+
+    def add(self, cmd: Command) -> None:
+        for name in (cmd.name, *cmd.aliases):
+            if name in self._commands:
+                raise ValueError(f"duplicate command name: {name}")
+        for name in (cmd.name, *cmd.aliases):
+            self._commands[name] = cmd
+        self._order.append(cmd)
+
+    def get(self, name: str) -> Command | None:
+        return self._commands.get(name.lower())
+
+    def all(self) -> list[Command]:
+        return list(self._order)
+
+    def _fmt(self, text: str) -> str:
+        return text.replace("{p}", self.prefix)
+
+    def help_overview(self) -> str:
+        parts = []
+        for group in GROUP_ORDER:
+            names = [f"{self.prefix}{c.name}" for c in self._order if c.group == group and c.listed]
+            if names:
+                parts.append(f"{group}: {' '.join(names)}")
+        return truncate(" | ".join(parts) + f" · {self.prefix}help <command> for details")
+
+    def help_for(self, name: str) -> str | None:
+        cmd = self.get(name.removeprefix(self.prefix))
+        if cmd is None:
+            return None
+        text = f"{self._fmt(cmd.usage)} · {self._fmt(cmd.description)}"
+        if cmd.aliases:
+            text += " (also " + ", ".join(f"{self.prefix}{a}" for a in cmd.aliases) + ")"
+        if cmd.controller_only:
+            text += " Mods only."
+        return truncate(text)
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_commands.py -q`
+
+Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bot/commands.py tests/test_commands.py
+git commit -m "Add command parsing, registry, and help text"
+```
+
+### Task 8: Game interface and Scramble
+
+`Game` and `Outcome` are spec §6. Games are pure and return `None` for chatter that isn't an attempt, so people just chatting don't count as players.
+
+Scramble (spec §7):
+
+- **Words:** single words of 4 to 10 ASCII letters only.
+- **Scramble:** reshuffled until it differs from the word.
+- **Hint 1** at 15 s shows the first and last letters.
+- **Hint 2** at 30 s shows about half the letters (first, last, and `max(1, ceil(n/2) - 2)` random middle letters).
+- **Points:** 10, 7, or 4 by hints shown.
+- **Attempt:** a single word with the same letter count as the answer.
+
+`bot/games/__init__.py` starts as a docstring stub; Task 10 fills it in.
+
+**Files:**
+- Create: `bot/games/__init__.py` (stub), `bot/games/base.py`, `bot/games/scramble.py`
+- Test: `tests/test_scramble.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_scramble.py`**
+
+```python
+import random
+
+from bot.games.scramble import Scramble
+from tests.helpers import make_msg
+
+
+def make(assets, seed=1, category="animals") -> Scramble:
+    return Scramble(category, random.Random(seed), assets)
+
+
+def test_only_valid_words_and_categories(assets):
+    # "cat" is too short and "sea lion" has a space; "hot cheetos" too
+    assert Scramble.category_names(assets) == ["animals", "food"]
+    game = make(assets)
+    assert game.word == "ALLIGATOR"
+
+
+def test_start_message_shows_scramble_that_differs(assets):
+    game = make(assets)
+    assert game.scrambled != game.word
+    assert sorted(game.scrambled) == sorted(game.word)
+    assert game.start() == f"🔤 Unscramble (animals): {game.scrambled}, 45s"
+
+
+def test_unrelated_chatter_is_not_an_attempt(assets):
+    game = make(assets)
+    assert game.on_message(make_msg("lol"), None) is None
+    assert game.on_message(make_msg("is it gator lol"), None) is None
+
+
+def test_wrong_same_length_word_is_an_attempt(assets):
+    game = make(assets)
+    out = game.on_message(make_msg("crocodile"), None)
+    assert out is not None and not out.finished
+
+
+def test_correct_answer_wins_ten_points_case_insensitive(assets):
+    game = make(assets)
+    out = game.on_message(make_msg("AlLiGaToR \U000e0000", "bob"), None)
+    assert out.finished and out.result == "won"
+    assert out.awards == {"id-bob": 10} and out.winners == {"id-bob"}
+    assert out.messages == ["✅ bob got it: ALLIGATOR (+10)"]
+
+
+def test_hints_at_15_and_30_seconds_reduce_points(assets):
+    game = make(assets)
+    assert game.on_tick(14) is None
+    hint1 = game.on_tick(15)
+    assert hint1.messages == ["💡 Hint: A _ _ _ _ _ _ _ R"]
+    assert game.on_tick(20) is None
+    hint2 = game.on_tick(30).messages[0]
+    revealed = [c for c in hint2.removeprefix("💡 Hint: ").split(" ") if c != "_"]
+    assert len(revealed) == 5  # first, last, and 3 middle letters (about half of 9)
+    out = game.on_message(make_msg("alligator"), None)
+    assert out.awards == {"id-alice": 4}
+
+
+def test_timeout_reveals_word(assets):
+    out = make(assets).on_timeout()
+    assert out.finished and out.result == "timeout"
+    assert out.messages == ["⏰ Time's up! It was ALLIGATOR."]
+    assert out.awards == {}
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_scramble.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.games'`
+
+- [ ] **Step 3: Write the stub `bot/games/__init__.py`**
+
+```python
+"""Games. ALL_GAMES (added with the game manager) maps names to game classes."""
+```
+
+- [ ] **Step 4: Write `bot/games/base.py`**
+
+```python
+"""The interface every game implements. Games are pure: messages and time in, outcomes out."""
+
+from __future__ import annotations
+
+import random
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import ClassVar, Literal
+
+from bot.assets import Assets
+from bot.connectors.base import ChatMessage
+
+
+@dataclass
+class Outcome:
+    messages: list[str] = field(default_factory=list)
+    awards: dict[str, int] = field(default_factory=dict)  # user_id -> points
+    winners: set[str] = field(default_factory=set)  # user_ids counted as winners
+    finished: bool = False
+    result: Literal["won", "timeout", "lost"] | None = None  # set when finished
+    coalesce_key: str | None = None
+
+
+class Game(ABC):
+    name: ClassVar[str]  # also the start command
+    title: ClassVar[str]  # "Scramble"
+    usage: ClassVar[str]  # "{p}scramble [category]"
+    description: ClassVar[str]  # shown by ?help <game>; {p} becomes the prefix
+    time_limit: ClassVar[int]  # seconds
+    # In-game commands: name -> (usage, description). Routed here only while this game runs.
+    commands: ClassVar[dict[str, tuple[str, str]]] = {}
+
+    def __init__(self, category: str | None, rng: random.Random, assets: Assets) -> None:
+        self.category = category
+        self.rng = rng
+        self.assets = assets
+
+    @classmethod
+    def category_names(cls, assets: Assets) -> list[str]:
+        """Categories this game can be started with. [] means the game has no categories."""
+        return []
+
+    @abstractmethod
+    def start(self) -> str: ...
+
+    def on_message(self, msg: ChatMessage, now: datetime) -> Outcome | None:
+        """Plain chat while the game runs. None = not an attempt."""
+        return None
+
+    def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
+        """One of this game's in-game commands. None = rejected / not an attempt."""
+        return None
+
+    def on_tick(self, elapsed: float) -> Outcome | None:
+        return None
+
+    @abstractmethod
+    def on_timeout(self) -> Outcome: ...
+
+    @abstractmethod
+    def reveal(self) -> str:
+        """The answer, for skip and stop messages."""
+```
+
+- [ ] **Step 5: Write `bot/games/scramble.py`**
+
+```python
+"""Scramble: unscramble a word. First exact answer wins; hints lower the points."""
+
+from __future__ import annotations
+
+import math
+import random
+from datetime import datetime
+
+from bot.assets import Assets
+from bot.connectors.base import ChatMessage
+from bot.games.base import Game, Outcome
+from bot.text import normalize
+
+
+def _valid(entry: str) -> bool:
+    return entry.isascii() and entry.isalpha() and 4 <= len(entry) <= 10
+
+
+class Scramble(Game):
+    name = "scramble"
+    title = "Scramble"
+    usage = "{p}scramble [category]"
+    description = (
+        "Unscramble the word; first correct answer wins (10, 7, or 4 points depending on hints). "
+        "{p}scramble categories lists topics. {p}skip (3 votes) skips the word."
+    )
+    time_limit = 45
+    HINT_TIMES = (15, 30)
+    POINTS = (10, 7, 4)
+
+    @classmethod
+    def category_names(cls, assets: Assets) -> list[str]:
+        return [c for c in assets.categories() if any(_valid(w) for w in assets.words(c))]
+
+    def __init__(self, category: str | None, rng: random.Random, assets: Assets) -> None:
+        super().__init__(category, rng, assets)
+        assert category is not None
+        self.word = rng.choice([w for w in assets.words(category) if _valid(w)]).upper()
+        self.scrambled = self._scramble()
+        self.hints_shown = 0
+        middle = list(range(1, len(self.word) - 1))
+        rng.shuffle(middle)
+        self._reveal_order = middle
+
+    def _scramble(self) -> str:
+        letters = list(self.word)
+        for _ in range(50):
+            self.rng.shuffle(letters)
+            if "".join(letters) != self.word:
+                break
+        return "".join(letters)
+
+    def start(self) -> str:
+        return f"🔤 Unscramble ({self.category}): {self.scrambled}, {self.time_limit}s"
+
+    def _hint(self) -> str:
+        shown = {0, len(self.word) - 1}
+        if self.hints_shown >= 2:
+            middle = max(1, math.ceil(len(self.word) / 2) - 2)  # about half the word in total
+            shown |= set(self._reveal_order[:middle])
+        return " ".join(ch if i in shown else "_" for i, ch in enumerate(self.word))
+
+    def on_message(self, msg: ChatMessage, now: datetime) -> Outcome | None:
+        guess = normalize(msg.text)
+        if " " in guess or len(guess) != len(self.word):
+            return None
+        if guess != self.word.lower():
+            return Outcome()
+        points = self.POINTS[self.hints_shown]
+        return Outcome(
+            messages=[f"✅ {msg.display_name} got it: {self.word} (+{points})"],
+            awards={msg.user_id: points},
+            winners={msg.user_id},
+            finished=True,
+            result="won",
+        )
+
+    def on_tick(self, elapsed: float) -> Outcome | None:
+        if self.hints_shown < len(self.HINT_TIMES) and elapsed >= self.HINT_TIMES[self.hints_shown]:
+            self.hints_shown += 1
+            return Outcome(messages=[f"💡 Hint: {self._hint()}"])
+        return None
+
+    def on_timeout(self) -> Outcome:
+        return Outcome(messages=[f"⏰ Time's up! It was {self.word}."], finished=True, result="timeout")
+
+    def reveal(self) -> str:
+        return self.word
+```
+
+- [ ] **Step 6: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_scramble.py -q`
+
+Expected: PASS (7 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add bot/games/__init__.py bot/games/base.py bot/games/scramble.py tests/test_scramble.py
+git commit -m "Add the game interface and Scramble"
+```
+
+### Task 9: Hangman
+
+Spec §7, with `?g` guessing (Robert's choice; plain chat is ignored so "W" and "L" never count).
+
+- **Entries:** ASCII letters, spaces, hyphens, and apostrophes, 3+ letters, at most 30 characters. Word gaps show as `/` on the board.
+- **Guessing:** one `?g` per user per 5 s. Repeated or non-letter single characters are rejected (`None`), and the cooldown isn't consumed.
+- **Letter points:** each correct letter holds 1 point for its guesser.
+- **Solving:** a wrong solve is a free attempt. The solve check ignores spaces and punctuation.
+- **Win:** the solver, or whoever reveals the last letter, gets 10 plus their held points, and everyone else keeps their held points.
+- **Loss:** after 6 wrong letters or a timeout, nobody gets points.
+
+The start message contains a literal `{p}`; the manager substitutes the prefix.
+
+**Files:**
+- Create: `bot/games/hangman.py`
+- Test: `tests/test_hangman.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_hangman.py`**
+
+```python
+import random
+from datetime import datetime, timedelta, timezone
+
+from bot.games.hangman import Hangman
+from tests.helpers import make_msg
+
+T0 = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
+
+
+def make(assets, answer: str = "sea lion") -> Hangman:
+    game = Hangman("animals", random.Random(1), assets)
+    game.answer = answer.upper()  # pin the answer so tests are readable
+    return game
+
+
+def g(game: Hangman, args: str, login: str = "alice", at: float = 0):
+    return game.on_command("g", args, make_msg(f"?g {args}", login), T0 + timedelta(seconds=at))
+
+
+def test_categories_include_phrases(assets):
+    assert Hangman.category_names(assets) == ["animals", "food"]
+
+
+def test_start_shows_blank_board_with_word_gap(assets):
+    game = make(assets)
+    assert game.board() == "_ _ _ / _ _ _ _"
+    assert game.start() == (
+        "🪢 Hangman (animals): _ _ _ / _ _ _ _ · guess with {p}g <letter> or {p}g <answer> · 6 lives, 120s"
+    )
+
+
+def test_plain_chat_is_ignored(assets):
+    game = make(assets)
+    assert game.on_message(make_msg("W"), T0) is None
+    assert game.on_message(make_msg("sea lion"), T0) is None
+
+
+def test_correct_letter_reveals_and_holds_a_point(assets):
+    game = make(assets)
+    out = g(game, "a")
+    assert out.messages == ["_ _ A / _ _ _ _ | wrong: - (0/6)"]
+    assert out.coalesce_key == "hangman-board"
+    assert game.held == {"id-alice": 1}
+
+
+def test_wrong_letter_costs_a_life(assets):
+    game = make(assets)
+    out = g(game, "z")
+    assert out.messages == ["_ _ _ / _ _ _ _ | wrong: Z (1/6)"]
+
+
+def test_repeated_letter_is_ignored(assets):
+    game = make(assets)
+    g(game, "a", "alice")
+    assert g(game, "A", "bob") is None
+
+
+def test_non_letter_single_character_is_ignored(assets):
+    assert g(make(assets), "7") is None
+
+
+def test_per_user_guess_cooldown(assets):
+    game = make(assets)
+    assert g(game, "a", at=0) is not None
+    assert g(game, "e", at=4) is None
+    assert g(game, "e", at=5) is not None
+    assert g(game, "s", "bob", at=5) is not None
+
+
+def test_wrong_solve_attempt_is_free_attempt(assets):
+    game = make(assets)
+    out = g(game, "walrus")
+    assert out is not None and not out.finished and out.messages == []
+    assert game.wrong == []
+
+
+def test_full_solve_wins_with_held_points(assets):
+    game = make(assets)
+    g(game, "a", "alice")
+    out = g(game, "Sea-Lion", "bob")
+    assert out.finished and out.result == "won"
+    assert out.awards == {"id-alice": 1, "id-bob": 10}
+    assert out.winners == {"id-bob"}
+    assert out.messages == ["🎉 bob solved it: SEA LION (+10)"]
+
+
+def test_solve_ignores_spaces(assets):
+    out = g(make(assets), "sealion")
+    assert out.result == "won"
+
+
+def test_revealing_last_letter_wins(assets):
+    game = make(assets, "cat")
+    g(game, "c", "a1")
+    g(game, "a", "a2")
+    out = g(game, "t", "a3")
+    assert out.result == "won"
+    assert out.awards == {"id-a1": 1, "id-a2": 1, "id-a3": 11}
+
+
+def test_six_wrong_letters_loses_and_awards_nothing(assets):
+    game = make(assets)
+    g(game, "a", "helper")
+    outs = [g(game, letter, f"u{i}") for i, letter in enumerate("bdfghj")]
+    last = outs[-1]
+    assert last.finished and last.result == "lost"
+    assert last.awards == {}
+    assert last.messages == ["💀 Out of lives! The word was SEA LION."]
+
+
+def test_timeout(assets):
+    out = make(assets).on_timeout()
+    assert out.result == "timeout" and out.messages == ["💀 Time's up! The word was SEA LION."]
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_hangman.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.games.hangman'`
+
+- [ ] **Step 3: Write `bot/games/hangman.py`**
+
+```python
+"""Hangman: chat guesses with ?g <letter> or ?g <answer>. Plain chat never counts."""
+
+from __future__ import annotations
+
+import random
+from collections import defaultdict
+from datetime import datetime
+
+from bot.assets import Assets
+from bot.connectors.base import ChatMessage
+from bot.games.base import Game, Outcome
+from bot.text import normalize
+
+_ALLOWED_PUNCT = " -'"
+
+
+def _valid(entry: str) -> bool:
+    letters = sum(ch.isalpha() for ch in entry)
+    return (
+        entry.isascii()
+        and letters >= 3
+        and len(entry) <= 30
+        and all(ch.isalpha() or ch in _ALLOWED_PUNCT for ch in entry)
+    )
+
+
+def _compact(text: str) -> str:
+    return normalize(text).replace(" ", "")
+
+
+class Hangman(Game):
+    name = "hangman"
+    title = "Hangman"
+    usage = "{p}hangman [category]"
+    description = (
+        "Guess the hidden word with {p}g <letter> or {p}g <answer>. 6 wrong letters and chat loses. "
+        "1 point per correct letter, 10 for the winner. {p}hangman categories lists topics. "
+        "{p}skip (3 votes) skips the word."
+    )
+    time_limit = 120
+    LIVES = 6
+    GUESS_COOLDOWN = 5.0
+    WIN_POINTS = 10
+    commands = {"g": ("{p}g <letter|answer>", "Guess a letter or the whole answer during Hangman.")}
+
+    @classmethod
+    def category_names(cls, assets: Assets) -> list[str]:
+        return [c for c in assets.categories() if any(_valid(w) for w in assets.words(c))]
+
+    def __init__(self, category: str | None, rng: random.Random, assets: Assets) -> None:
+        super().__init__(category, rng, assets)
+        assert category is not None
+        self.answer = rng.choice([w for w in assets.words(category) if _valid(w)]).upper()
+        self.guessed: set[str] = set()
+        self.wrong: list[str] = []
+        self.held: defaultdict[str, int] = defaultdict(int)  # user_id -> letter points
+        self._last_guess: dict[str, datetime] = {}
+
+    def board(self) -> str:
+        cells = []
+        for ch in self.answer:
+            if ch == " ":
+                cells.append("/")
+            elif ch.isalpha():
+                cells.append(ch if ch in self.guessed else "_")
+            else:
+                cells.append(ch)
+        return " ".join(cells)
+
+    def status(self) -> str:
+        wrong = " ".join(self.wrong) or "-"
+        return f"{self.board()} | wrong: {wrong} ({len(self.wrong)}/{self.LIVES})"
+
+    def _hidden(self) -> set[str]:
+        return {ch for ch in self.answer if ch.isalpha()} - self.guessed
+
+    def start(self) -> str:
+        return (
+            f"🪢 Hangman ({self.category}): {self.board()} · guess with {{p}}g <letter> or "
+            f"{{p}}g <answer> · {self.LIVES} lives, {self.time_limit}s"
+        )
+
+    def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
+        guess = normalize(args)
+        if name != "g" or not guess:
+            return None
+        last = self._last_guess.get(msg.user_id)
+        if last is not None and (now - last).total_seconds() < self.GUESS_COOLDOWN:
+            return None
+        if len(guess) == 1:
+            letter = guess.upper()
+            if not ("A" <= letter <= "Z") or letter in self.guessed or letter in self.wrong:
+                return None
+            self._last_guess[msg.user_id] = now
+            return self._guess_letter(letter, msg)
+        self._last_guess[msg.user_id] = now
+        if _compact(guess) == _compact(self.answer):
+            return self._win(msg)
+        return Outcome()  # a wrong solve attempt costs nothing
+
+    def _guess_letter(self, letter: str, msg: ChatMessage) -> Outcome:
+        if letter in self.answer:
+            self.guessed.add(letter)
+            self.held[msg.user_id] += 1
+            if not self._hidden():
+                return self._win(msg)
+            return Outcome(messages=[self.status()], coalesce_key="hangman-board")
+        self.wrong.append(letter)
+        if len(self.wrong) >= self.LIVES:
+            return Outcome(
+                messages=[f"💀 Out of lives! The word was {self.answer}."], finished=True, result="lost"
+            )
+        return Outcome(messages=[self.status()], coalesce_key="hangman-board")
+
+    def _win(self, msg: ChatMessage) -> Outcome:
+        awards = dict(self.held)
+        awards[msg.user_id] = awards.get(msg.user_id, 0) + self.WIN_POINTS
+        return Outcome(
+            messages=[f"🎉 {msg.display_name} solved it: {self.answer} (+{awards[msg.user_id]})"],
+            awards=awards,
+            winners={msg.user_id},
+            finished=True,
+            result="won",
+        )
+
+    def on_timeout(self) -> Outcome:
+        return Outcome(messages=[f"💀 Time's up! The word was {self.answer}."], finished=True, result="timeout")
+
+    def reveal(self) -> str:
+        return self.answer
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_hangman.py -q`
+
+Expected: PASS (14 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bot/games/hangman.py tests/test_hangman.py
+git commit -m "Add Hangman with ?g guessing"
+```
+
+### Task 10: Game registry and GameManager
+
+`ALL_GAMES` maps names to classes; `config.toml` picks which run. `GameManager` (spec §6) handles:
+
+- **Registration:** one start command per game, `?skip`, and each game's in-game commands as hidden, cooldown-free commands that do nothing unless that game is running.
+- **Starting:** `?<game> categories`, the one-game-at-a-time rule, the 30 s cooldown, unknown categories, and the random category pick.
+- **Rounds:** marking attempters as players, ticks and timeouts, and three distinct `?skip` votes.
+- **Stopping:** `stop()` ends the game with no points.
+- **Errors:** an exception in game code ends the round as `stopped` with "Game ended due to an error.", and the bot keeps going.
+- **Finishing:** records the round, logs `game_end`, sends the messages, and starts the cooldown.
+- **Prefix:** game text has `{p}` replaced with the prefix.
+
+**Files:**
+- Modify: `bot/games/__init__.py` (replace the stub)
+- Create: `bot/games/manager.py`
+- Test: `tests/test_manager.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_manager.py`**
+
+```python
+import json
+import random
+
+import pytest
+
+from bot.activity_log import ActivityLog
+from bot.clock import FakeClock
+from bot.commands import CommandContext, CommandRegistry
+from bot.games.base import Game, Outcome
+from bot.games.manager import GameManager
+from bot.games.scramble import Scramble
+from bot.stats import StatsStore
+from tests.helpers import make_msg
+
+
+class Boom(Game):
+    """A game whose code raises, to test error handling."""
+
+    name = "boom"
+    title = "Boom"
+    usage = "{p}boom"
+    description = "Explodes."
+    time_limit = 10
+
+    def start(self) -> str:
+        return "boom started"
+
+    def on_message(self, msg, now):
+        raise RuntimeError("kaboom")
+
+    def on_timeout(self) -> Outcome:
+        return Outcome(finished=True, result="timeout")
+
+    def reveal(self) -> str:
+        return "nothing"
+
+
+class Harness:
+    def __init__(self, tmp_path, clock: FakeClock, assets):
+        self.clock = clock
+        self.said: list[tuple[str, dict]] = []
+        self.replies: list[str] = []
+        self.stats = StatsStore(":memory:")
+        self.log = ActivityLog(tmp_path / "logs", clock)
+        self.manager = GameManager(
+            games={"scramble": Scramble, "boom": Boom},
+            stats=self.stats,
+            log=self.log,
+            clock=clock,
+            assets=assets,
+            rng=random.Random(1),
+            say=lambda text, **kw: self.said.append((text, kw)),
+            prefix="?",
+            cooldown_seconds=30,
+            skip_votes=3,
+        )
+        self.registry = CommandRegistry("?")
+        self.manager.register(self.registry)
+
+    async def command(self, text: str, login: str = "alice") -> None:
+        name, _, args = text.removeprefix("?").partition(" ")
+        msg = make_msg(text, login)
+        ctx = CommandContext(
+            msg, name, args, "?",
+            lambda t, **kw: self.replies.append(t), lambda t, **kw: self.said.append((t, kw)),
+        )
+        await self.registry.get(name).handler(ctx)
+
+    def chat(self, text: str, login: str = "alice") -> None:
+        self.manager.on_message(make_msg(text, login))
+
+    def texts(self) -> list[str]:
+        return [t for t, _ in self.said]
+
+    def events(self) -> list[dict]:
+        path = self.log.path_for(self.clock.now().date())
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+@pytest.fixture
+def h(tmp_path, clock, assets) -> Harness:
+    return Harness(tmp_path, clock, assets)
+
+
+def test_register_adds_start_skip_and_hidden_game_commands(tmp_path, clock, assets):
+    from bot.games import ALL_GAMES
+
+    reg = CommandRegistry("?")
+    GameManager(
+        games=ALL_GAMES, stats=StatsStore(":memory:"), log=ActivityLog(tmp_path, clock), clock=clock,
+        assets=assets, rng=random.Random(1), say=lambda *a, **k: None, prefix="?", cooldown_seconds=30, skip_votes=3,
+    ).register(reg)
+    assert {c.name for c in reg.all()} == {"scramble", "hangman", "skip", "g"}
+    assert not reg.get("g").listed and not reg.get("g").cooldown
+
+
+async def test_start_with_random_category_announces_it(h: Harness):
+    await h.command("?scramble")
+    assert h.manager.active is not None
+    assert h.texts()[0].startswith("🔤 Unscramble (")
+    assert h.events()[0]["event"] == "game_start"
+
+
+async def test_categories_lists_and_starts_nothing(h: Harness):
+    await h.command("?scramble categories")
+    assert h.replies == ["Scramble categories: animals, food"]
+    assert h.manager.active is None
+
+
+async def test_unknown_category_lists_categories(h: Harness):
+    await h.command("?scramble planets")
+    assert h.replies == ["Unknown category. Scramble categories: animals, food"]
+    assert h.manager.active is None
+
+
+async def test_only_one_game_at_a_time_and_cooldown_after(h: Harness):
+    await h.command("?scramble animals")
+    await h.command("?scramble animals", "bob")
+    assert h.replies[-1] == "A scramble game is already running."
+    h.chat("alligator", "bob")
+    await h.command("?scramble animals")
+    assert h.replies[-1] == "Next game in 30s."
+    h.clock.advance(30)
+    await h.command("?scramble animals")
+    assert h.manager.active is not None
+
+
+async def test_win_records_round_with_all_attempters(h: Harness):
+    await h.command("?scramble animals")
+    h.chat("hello there")  # not an attempt
+    h.chat("crocodile", "carol")  # attempt
+    h.chat("alligator", "bob")
+    assert h.texts()[-1] == "✅ bob got it: ALLIGATOR (+10)"
+    assert [r.login for r in h.stats.leaderboard("scramble", 5)] == ["bob"]
+    assert {g.played for g in h.stats.user_stats("id-carol")} == {1}
+    assert h.stats.user_stats("id-alice") == []  # started it, never attempted
+    end = h.events()[-1]
+    assert end["event"] == "game_end" and end["winners"] == ["bob"] and end["awards"] == {"bob": 10}
+
+
+async def test_tick_sends_hints_then_times_out(h: Harness):
+    await h.command("?scramble animals")
+    h.clock.advance(15)
+    h.manager.tick()
+    assert h.texts()[-1].startswith("💡 Hint:")
+    h.clock.advance(30)
+    h.manager.tick()
+    assert h.texts()[-1] == "⏰ Time's up! It was ALLIGATOR."
+    assert h.manager.active is None
+
+
+async def test_status_shows_time_left(h: Harness):
+    assert h.manager.status() is None
+    await h.command("?scramble animals")
+    h.clock.advance(24)
+    assert h.manager.status() == "scramble (21s left)"
+
+
+async def test_three_distinct_skip_votes_skip_the_word(h: Harness):
+    await h.command("?scramble animals")
+    await h.command("?skip", "a")
+    await h.command("?skip", "a")  # same user twice counts once
+    await h.command("?skip", "b")
+    assert h.said[-1] == ("Skip 2/3", {"coalesce_key": "skip"})
+    await h.command("?skip", "c")
+    assert h.texts()[-1] == "⏭️ Skipped! It was ALLIGATOR."
+    assert h.manager.active is None
+    assert h.events()[-1]["outcome"] == "skipped"
+
+
+async def test_skip_without_game_does_nothing(h: Harness):
+    await h.command("?skip")
+    assert h.said == [] and h.replies == []
+
+
+async def test_stop_ends_game_without_points(h: Harness):
+    await h.command("?scramble animals")
+    h.chat("crocodile", "carol")
+    assert h.manager.stop()
+    assert h.texts()[-1] == "🛑 Game stopped. It was ALLIGATOR."
+    assert h.stats.leaderboard(None, 5) == []
+    assert not h.manager.stop()
+
+
+async def test_game_error_ends_round_and_bot_continues(h: Harness):
+    await h.command("?boom")
+    h.chat("anything")
+    assert h.texts()[-1] == "Game ended due to an error."
+    assert h.manager.active is None
+    assert any(e["event"] == "error" and e["where"] == "game:boom.on_message" for e in h.events())
+    assert h.events()[-1]["outcome"] == "stopped"
+
+
+async def test_game_messages_get_prefix_substituted(h: Harness):
+    h.manager.say("use {p}g")
+    assert h.texts() == ["use ?g"]
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_manager.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.games.manager'`
+
+- [ ] **Step 3: Write `bot/games/__init__.py`**
+
+```python
+"""All game classes, by name. config.toml's [games] enabled picks which ones run."""
+
+from bot.games.base import Game
+from bot.games.hangman import Hangman
+from bot.games.scramble import Scramble
+
+ALL_GAMES: dict[str, type[Game]] = {cls.name: cls for cls in (Scramble, Hangman)}
+```
+
+- [ ] **Step 4: Write `bot/games/manager.py`**
+
+```python
+"""Runs one game at a time: start, timers, in-game commands, skip votes, scoring, cooldown."""
+
+from __future__ import annotations
+
+import logging
+import math
+import random
+import traceback
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from bot.activity_log import ActivityLog
+from bot.assets import Assets
+from bot.clock import Clock
+from bot.commands import Command, CommandContext, CommandRegistry
+from bot.connectors.base import ChatMessage
+from bot.games.base import Game, Outcome
+from bot.stats import PlayerResult, RoundRecord, StatsStore
+
+logger = logging.getLogger(__name__)
+
+Say = Callable[..., None]  # say(text, *, coalesce_key=None, priority=False)
+
+
+@dataclass
+class ActiveRound:
+    key: str  # short id that ties game_start and game_end log lines together
+    game: Game
+    category: str | None
+    started_by: str
+    started_at: datetime
+    start_mono: float
+    players: dict[str, tuple[str, str]] = field(default_factory=dict)  # user_id -> (login, display)
+    skip_votes: set[str] = field(default_factory=set)
+
+
+class GameManager:
+    def __init__(
+        self,
+        *,
+        games: dict[str, type[Game]],
+        stats: StatsStore,
+        log: ActivityLog,
+        clock: Clock,
+        assets: Assets,
+        rng: random.Random,
+        say: Say,
+        prefix: str,
+        cooldown_seconds: float,
+        skip_votes: int,
+    ) -> None:
+        self.games = games
+        self.stats = stats
+        self.log = log
+        self.clock = clock
+        self.assets = assets
+        self.rng = rng
+        self._say = say
+        self.prefix = prefix
+        self.cooldown_seconds = cooldown_seconds
+        self.skip_votes_needed = skip_votes
+        self.active: ActiveRound | None = None
+        self._cooldown_until = 0.0
+
+    # registration
+
+    def register(self, registry: CommandRegistry) -> None:
+        for cls in self.games.values():
+            registry.add(Command(cls.name, self._start_command, cls.usage, cls.description, "Games"))
+        registry.add(
+            Command(
+                "skip",
+                self._skip_command,
+                "{p}skip",
+                f"Vote to skip the current game's word ({self.skip_votes_needed} votes needed).",
+                "Games",
+                cooldown=False,
+            )
+        )
+        seen: set[str] = set()
+        for cls in self.games.values():
+            for name, (usage, description) in cls.commands.items():
+                if name not in seen:
+                    seen.add(name)
+                    registry.add(
+                        Command(name, self._game_command, usage, description, "Games", cooldown=False, listed=False)
+                    )
+
+    # helpers
+
+    def say(self, text: str, **kw) -> None:
+        self._say(text.replace("{p}", self.prefix), **kw)
+
+    def cooldown_remaining(self) -> float:
+        return max(0.0, self._cooldown_until - self.clock.mono())
+
+    def status(self) -> str | None:
+        if self.active is None:
+            return None
+        left = self.active.game.time_limit - (self.clock.mono() - self.active.start_mono)
+        return f"{self.active.game.name} ({max(0, math.ceil(left))}s left)"
+
+    def _guard(self, where: str, fn: Callable[[], Outcome | str | None]) -> tuple[bool, Outcome | str | None]:
+        """Run game code. On an exception: log it, end the round with no points, return (False, None)."""
+        try:
+            return True, fn()
+        except Exception as exc:
+            logger.exception("game error in %s", where)
+            self.log.write(
+                "error",
+                where=f"game:{where}",
+                type=type(exc).__name__,
+                message=str(exc),
+                traceback=traceback.format_exc(),
+            )
+            if self.active is not None:
+                self._end_without_points("stopped", "Game ended due to an error.")
+            return False, None
+
+    # commands
+
+    async def _start_command(self, ctx: CommandContext) -> None:
+        cls = self.games[ctx.name]
+        arg = ctx.args.strip().lower()
+        categories = cls.category_names(self.assets)
+        if arg == "categories":
+            ctx.reply(f"{cls.title} categories: {', '.join(categories)}")
+            return
+        if self.active is not None:
+            ctx.reply(f"A {self.active.game.name} game is already running.")
+            return
+        remaining = self.cooldown_remaining()
+        if remaining > 0:
+            ctx.reply(f"Next game in {math.ceil(remaining)}s.")
+            return
+        if categories and arg and arg not in categories:
+            ctx.reply(f"Unknown category. {cls.title} categories: {', '.join(categories)}")
+            return
+        category = (arg or self.rng.choice(categories)) if categories else None
+        try:
+            game = cls(category, self.rng, self.assets)
+            opening = game.start()
+        except Exception as exc:
+            logger.exception("could not start %s", cls.name)
+            self.log.write("error", where=f"game:{cls.name}.start", type=type(exc).__name__, message=str(exc))
+            ctx.reply("Couldn't start that game.")
+            return
+        self.stats.touch_user(ctx.msg.user_id, ctx.msg.login, ctx.msg.display_name, self.clock.now())
+        self.active = ActiveRound(
+            key=uuid.uuid4().hex[:8],
+            game=game,
+            category=category,
+            started_by=ctx.msg.user_id,
+            started_at=self.clock.now(),
+            start_mono=self.clock.mono(),
+        )
+        self.log.write(
+            "game_start", round=self.active.key, game=cls.name, category=category, started_by=ctx.msg.login
+        )
+        self.say(opening)
+
+    async def _skip_command(self, ctx: CommandContext) -> None:
+        active = self.active
+        if active is None or ctx.msg.user_id in active.skip_votes:
+            return
+        active.skip_votes.add(ctx.msg.user_id)
+        votes = len(active.skip_votes)
+        if votes >= self.skip_votes_needed:
+            ok, answer = self._guard("reveal", active.game.reveal)
+            if ok:
+                self._end_without_points("skipped", f"⏭️ Skipped! It was {answer}.")
+        else:
+            self.say(f"Skip {votes}/{self.skip_votes_needed}", coalesce_key="skip")
+
+    async def _game_command(self, ctx: CommandContext) -> None:
+        active = self.active
+        if active is None or ctx.name not in active.game.commands:
+            return
+        now = self.clock.now()
+        _, outcome = self._guard(
+            f"{active.game.name}.on_command", lambda: active.game.on_command(ctx.name, ctx.args, ctx.msg, now)
+        )
+        self._handle(ctx.msg, outcome)
+
+    # chat and time
+
+    def on_message(self, msg: ChatMessage) -> None:
+        active = self.active
+        if active is None:
+            return
+        now = self.clock.now()
+        _, outcome = self._guard(f"{active.game.name}.on_message", lambda: active.game.on_message(msg, now))
+        self._handle(msg, outcome)
+
+    def tick(self) -> None:
+        active = self.active
+        if active is None:
+            return
+        elapsed = self.clock.mono() - active.start_mono
+        if elapsed >= active.game.time_limit:
+            _, outcome = self._guard(f"{active.game.name}.on_timeout", active.game.on_timeout)
+        else:
+            _, outcome = self._guard(f"{active.game.name}.on_tick", lambda: active.game.on_tick(elapsed))
+        self._handle(None, outcome)
+
+    def stop(self) -> bool:
+        """End the current game with no points (?stopgame, ?bot off, shutdown)."""
+        active = self.active
+        if active is None:
+            return False
+        ok, answer = self._guard("reveal", active.game.reveal)
+        if ok:
+            self._end_without_points("stopped", f"🛑 Game stopped. It was {answer}.")
+        return True
+
+    # outcomes
+
+    def _handle(self, msg: ChatMessage | None, outcome: Outcome | str | None) -> None:
+        if not isinstance(outcome, Outcome) or self.active is None:
+            return
+        if msg is not None:
+            self.active.players[msg.user_id] = (msg.login, msg.display_name)
+        if outcome.finished:
+            self._finish(outcome.result or "won", outcome.messages, outcome.awards, outcome.winners)
+        else:
+            for text in outcome.messages:
+                self.say(text, coalesce_key=outcome.coalesce_key)
+
+    def _end_without_points(self, result: str, message: str) -> None:
+        self._finish(result, [message], {}, set())
+
+    def _finish(self, result: str, messages: list[str], awards: dict[str, int], winners: set[str]) -> None:
+        active = self.active
+        assert active is not None
+        self.active = None
+        self._cooldown_until = self.clock.mono() + self.cooldown_seconds
+        players = [
+            PlayerResult(uid, login, display, awards.get(uid, 0), uid in winners)
+            for uid, (login, display) in active.players.items()
+        ]
+        try:
+            self.stats.record_round(
+                RoundRecord(
+                    game=active.game.name,
+                    category=active.category,
+                    started_by=active.started_by,
+                    started_at=active.started_at,
+                    ended_at=self.clock.now(),
+                    outcome=result,
+                    players=players,
+                )
+            )
+        except Exception as exc:
+            logger.exception("could not record round")
+            self.log.write("error", where="stats.record_round", type=type(exc).__name__, message=str(exc))
+        names = {uid: login for uid, (login, _) in active.players.items()}
+        self.log.write(
+            "game_end",
+            round=active.key,
+            game=active.game.name,
+            outcome=result,
+            winners=sorted(names.get(uid, uid) for uid in winners),
+            awards={names.get(uid, uid): pts for uid, pts in awards.items()},
+        )
+        for text in messages:
+            self.say(text)
+```
+
+- [ ] **Step 5: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_manager.py -q`
+
+Expected: PASS (13 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add bot/games/__init__.py bot/games/manager.py tests/test_manager.py
+git commit -m "Add the game registry and GameManager"
+```
+
+### Task 11: HTTP client and fun commands
+
+`HttpClient.get_json` never raises. On a timeout (3 s), an HTTP error, or bad JSON, it returns `None`, and the command uses a bundled fallback line (spec §5). Facts are whitespace-cleaned, and anything over 400 characters falls back. All four API URLs and response shapes were checked live on 2026-10-04.
+
+`?cookie` rules:
+
+- One cookie per user per UTC day.
+- `?cookie give <user>` validates the name and checks that the account exists through the connector's `lookup_user`.
+- A rejected give doesn't use up the cookie.
+- Giving uses the giver's daily cookie; the recipient's own cookie is unaffected.
+
+`FakeHttp` goes into `tests/helpers.py` because Task 15 reuses it.
+
+**Files:**
+- Create: `bot/http.py`, `bot/fun.py`
+- Modify: `tests/helpers.py` (append `FakeHttp`)
+- Test: `tests/test_http.py`, `tests/test_fun.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_http.py`**
+
+```python
+import asyncio
+
+from aiohttp import web
+from aiohttp.test_utils import TestServer
+
+from bot.http import HttpClient
+
+
+async def serve(handler) -> TestServer:
+    app = web.Application()
+    app.router.add_get("/", handler)
+    server = TestServer(app)
+    await server.start_server()
+    return server
+
+
+async def test_get_json_returns_parsed_body():
+    async def ok(request):
+        assert request.headers["User-Agent"].startswith("offline-chat-bot")
+        return web.json_response({"fact": "cats sleep a lot"})
+
+    server = await serve(ok)
+    client = HttpClient(timeout=1)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) == {"fact": "cats sleep a lot"}
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_get_json_returns_none_on_timeout():
+    async def slow(request):
+        await asyncio.sleep(1)
+        return web.json_response({})
+
+    server = await serve(slow)
+    client = HttpClient(timeout=0.2)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) is None
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_get_json_returns_none_on_http_error():
+    async def broken(request):
+        return web.Response(status=500)
+
+    server = await serve(broken)
+    client = HttpClient(timeout=1)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) is None
+    finally:
+        await client.close()
+        await server.close()
+```
+
+- [ ] **Step 2: Write the failing test `tests/test_fun.py`**
+
+```python
+import random
+
+import pytest
+
+from bot.clock import FakeClock
+from bot.commands import CommandContext, CommandRegistry
+from bot.connectors.base import UserRef
+from bot.fun import register_fun
+from bot.stats import StatsStore
+from tests.helpers import FakeHttp, make_msg
+
+
+class Fun:
+    def __init__(self, assets, clock: FakeClock, http: FakeHttp | None = None):
+        self.http = http or FakeHttp()
+        self.stats = StatsStore(":memory:")
+        self.registry = CommandRegistry("?")
+        self.replies: list[str] = []
+        self.said: list[str] = []
+        self.known = {"bob": UserRef("id-bob", "bob", "Bob")}
+
+        async def lookup(login):
+            return self.known.get(login)
+
+        register_fun(
+            self.registry, assets=assets, rng=random.Random(1), http=self.http,
+            stats=self.stats, clock=clock, lookup_user=lookup,
+        )
+
+    async def run(self, text: str, login: str = "alice") -> None:
+        name, _, args = text.removeprefix("?").partition(" ")
+        ctx = CommandContext(
+            make_msg(text, login), name, args, "?",
+            lambda t, **kw: self.replies.append(t), lambda t, **kw: self.said.append(t),
+        )
+        await self.registry.get(name).handler(ctx)
+
+
+@pytest.fixture
+def fun(assets, clock) -> Fun:
+    return Fun(assets, clock)
+
+
+async def test_8ball_and_coinflip(fun: Fun):
+    await fun.run("?8ball will I win?")
+    await fun.run("?coinflip")
+    assert fun.replies[0] in ("🎱 Yes.", "🎱 No.")
+    assert fun.replies[1] in ("🪙 Heads", "🪙 Tails")
+
+
+async def test_facts_use_api_and_clean_whitespace(assets, clock):
+    http = FakeHttp({
+        "https://catfact.ninja/fact": {"fact": "Cats  have\nwhiskers."},
+        "https://dogapi.dog/api/v2/facts": {"data": [{"attributes": {"body": "Dogs bark."}}]},
+        "https://uselessfacts.jsph.pl/api/v2/facts/random?language=en": {"text": "Honey never spoils."},
+        "https://icanhazdadjoke.com/": {"joke": "I'm reading a book on anti-gravity."},
+    })
+    fun = Fun(assets, clock, http)
+    for name in ("catfact", "dogfact", "fact", "dadjoke"):
+        await fun.run(f"?{name}")
+    assert fun.replies == [
+        "🐱 Cats have whiskers.",
+        "🐶 Dogs bark.",
+        "💡 Honey never spoils.",
+        "😄 I'm reading a book on anti-gravity.",
+    ]
+    assert http.calls[3] == ("https://icanhazdadjoke.com/", {"Accept": "application/json"})
+
+
+async def test_fact_falls_back_when_api_fails_or_is_malformed_or_too_long(assets, clock):
+    http = FakeHttp({
+        "https://catfact.ninja/fact": None,
+        "https://dogapi.dog/api/v2/facts": {"unexpected": True},
+        "https://uselessfacts.jsph.pl/api/v2/facts/random?language=en": {"text": "x" * 401},
+    })
+    fun = Fun(assets, clock, http)
+    for name in ("catfact", "dogfact", "fact"):
+        await fun.run(f"?{name}")
+    assert fun.replies == [
+        "🐱 fallback catfacts line",
+        "🐶 fallback dogfacts line",
+        "💡 fallback facts line",
+    ]
+
+
+async def test_cookie_once_per_utc_day(fun: Fun, clock: FakeClock):
+    await fun.run("?cookie")
+    assert fun.replies[-1] == "🥠 Good things are coming."
+    await fun.run("?cookie")
+    assert fun.replies[-1] == "You already opened today's cookie. Next one in 12h 0m (00:00 UTC)."
+    clock.advance(12 * 3600)
+    await fun.run("?cookie")
+    assert fun.replies[-1] == "🥠 Good things are coming."
+
+
+async def test_cookie_give(fun: Fun):
+    await fun.run("?cookie give @Bob")
+    assert fun.said == ["🥠 @alice gave @Bob a fortune cookie: Good things are coming."]
+    await fun.run("?cookie")
+    assert fun.replies[-1].startswith("You already opened today's cookie.")
+    await fun.run("?cookie", "bob")  # the recipient's own cookie is unaffected
+    assert fun.replies[-1] == "🥠 Good things are coming."
+
+
+async def test_cookie_give_rejections_do_not_use_the_cookie(fun: Fun):
+    await fun.run("?cookie give")
+    await fun.run("?cookie give not/valid")
+    await fun.run("?cookie give alice")
+    await fun.run("?cookie give ghost_user")
+    assert fun.replies == [
+        "Usage: ?cookie give <username>",
+        "That's not a valid username.",
+        "You can't give a cookie to yourself.",
+        "Couldn't find a user named ghost_user.",
+    ]
+    await fun.run("?cookie")
+    assert fun.replies[-1] == "🥠 Good things are coming."
+```
+
+- [ ] **Step 3: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_http.py tests/test_fun.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.http'`
+
+- [ ] **Step 4: Append `FakeHttp` to the end of `tests/helpers.py`**
+
+```python
+class FakeHttp:
+    def __init__(self, responses: dict[str, object] | None = None):
+        self.responses = responses or {}
+        self.calls: list[tuple[str, dict | None]] = []
+
+    async def get_json(self, url, headers=None):
+        self.calls.append((url, headers))
+        return self.responses.get(url)
+
+    async def close(self):
+        pass
+```
+
+- [ ] **Step 5: Write `bot/http.py`**
+
+```python
+"""A small shared HTTP client for the fact and joke APIs. Never raises: failures return None."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import aiohttp
+
+logger = logging.getLogger(__name__)
+
+USER_AGENT = "offline-chat-bot/0.1 (Twitch chat bot)"
+
+
+class HttpClient:
+    def __init__(self, timeout: float = 3.0) -> None:
+        self.timeout = timeout
+        self._session: aiohttp.ClientSession | None = None
+
+    async def get_json(self, url: str, headers: dict[str, str] | None = None) -> Any | None:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout), headers={"User-Agent": USER_AGENT}
+            )
+        try:
+            async with self._session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning("GET %s -> HTTP %s", url, resp.status)
+                    return None
+                return await resp.json(content_type=None)
+        except Exception as exc:  # timeouts, DNS, bad JSON: all fall back
+            logger.warning("GET %s failed: %s", url, type(exc).__name__)
+            return None
+
+    async def close(self) -> None:
+        if self._session is not None:
+            await self._session.close()
+```
+
+- [ ] **Step 6: Write `bot/fun.py`**
+
+```python
+"""Quick one-shot commands: ?8ball ?coinflip ?catfact ?dogfact ?fact ?dadjoke ?cookie."""
+
+from __future__ import annotations
+
+import json
+import random
+from collections.abc import Awaitable, Callable
+from datetime import datetime, time, timedelta, timezone
+from typing import Any
+
+from bot.assets import Assets
+from bot.clock import Clock
+from bot.commands import Command, CommandContext, CommandRegistry
+from bot.connectors.base import UserRef
+from bot.http import HttpClient
+from bot.stats import StatsStore
+from bot.text import clean_username, format_duration
+
+MAX_FACT = 400
+
+LookupUser = Callable[[str], Awaitable[UserRef | None]]
+
+
+def _get(data: Any, *path: str | int) -> Any:
+    for key in path:
+        data = data[key]
+    return data
+
+
+# command name -> (emoji, url, path to the text in the JSON, extra headers, fallback file, help)
+FACT_SOURCES: dict[str, tuple[str, str, tuple[str | int, ...], dict[str, str], str, str]] = {
+    "catfact": ("🐱", "https://catfact.ninja/fact", ("fact",), {}, "fallback_catfacts", "Get a random cat fact."),
+    "dogfact": (
+        "🐶", "https://dogapi.dog/api/v2/facts", ("data", 0, "attributes", "body"), {},
+        "fallback_dogfacts", "Get a random dog fact.",
+    ),
+    "fact": (
+        "💡", "https://uselessfacts.jsph.pl/api/v2/facts/random?language=en", ("text",), {},
+        "fallback_facts", "Get a random fact.",
+    ),
+    "dadjoke": (
+        "😄", "https://icanhazdadjoke.com/", ("joke",), {"Accept": "application/json"},
+        "fallback_dadjokes", "Get a random dad joke.",
+    ),
+}
+
+
+def register_fun(
+    registry: CommandRegistry,
+    *,
+    assets: Assets,
+    rng: random.Random,
+    http: HttpClient,
+    stats: StatsStore,
+    clock: Clock,
+    lookup_user: LookupUser,
+) -> None:
+    async def eightball(ctx: CommandContext) -> None:
+        ctx.reply(f"🎱 {rng.choice(assets.lines('8ball'))}")
+
+    async def coinflip(ctx: CommandContext) -> None:
+        ctx.reply(f"🪙 {rng.choice(['Heads', 'Tails'])}")
+
+    registry.add(Command("8ball", eightball, "{p}8ball [question]", "Ask the magic 8-ball a question.", "Fun"))
+    registry.add(Command("coinflip", coinflip, "{p}coinflip", "Flip a coin.", "Fun"))
+
+    def fact_handler(emoji: str, url: str, path: tuple, headers: dict, fallback: str):
+        async def handler(ctx: CommandContext) -> None:
+            data = await http.get_json(url, headers=headers or None)
+            text = None
+            try:
+                text = " ".join(str(_get(data, *path)).split()) if data is not None else None
+            except (KeyError, IndexError, TypeError):
+                text = None
+            if not text or len(text) > MAX_FACT:
+                text = rng.choice(assets.lines(fallback))
+            ctx.reply(f"{emoji} {text}")
+
+        return handler
+
+    for name, (emoji, url, path, headers, fallback, help_text) in FACT_SOURCES.items():
+        registry.add(Command(name, fact_handler(emoji, url, path, headers, fallback), f"{{p}}{name}", help_text, "Fun"))
+
+    def already_message() -> str:
+        now = clock.now()
+        midnight = datetime.combine(now.date() + timedelta(days=1), time(0, 0), tzinfo=timezone.utc)
+        wait = format_duration((midnight - now).total_seconds())
+        return f"You already opened today's cookie. Next one in {wait} (00:00 UTC)."
+
+    async def cookie(ctx: CommandContext) -> None:
+        today = clock.now().date().isoformat()
+        uid = ctx.msg.user_id
+        argv = ctx.argv
+        if argv and argv[0].lower() == "give":
+            if len(argv) < 2:
+                ctx.reply(f"Usage: {ctx.prefix}cookie give <username>")
+                return
+            login = clean_username(argv[1])
+            if login is None:
+                ctx.reply("That's not a valid username.")
+                return
+            if login == ctx.msg.login:
+                ctx.reply("You can't give a cookie to yourself.")
+                return
+            if stats.get_daily(uid, "cookie", today) is not None:
+                ctx.reply(already_message())
+                return
+            target = await lookup_user(login)
+            if target is None:
+                ctx.reply(f"Couldn't find a user named {login}.")
+                return
+            fortune = rng.choice(assets.lines("fortunes"))
+            record = json.dumps({"gave_to": target.login, "fortune": fortune})
+            if not stats.claim_daily(uid, "cookie", today, record):
+                ctx.reply(already_message())
+                return
+            ctx.say(f"🥠 @{ctx.msg.display_name} gave @{target.display_name} a fortune cookie: {fortune}")
+            return
+        fortune = rng.choice(assets.lines("fortunes"))
+        if not stats.claim_daily(uid, "cookie", today, fortune):
+            ctx.reply(already_message())
+            return
+        ctx.reply(f"🥠 {fortune}")
+
+    registry.add(
+        Command(
+            "cookie",
+            cookie,
+            "{p}cookie | {p}cookie give <username>",
+            "Open your daily fortune cookie, or give it to someone. Resets at 00:00 UTC.",
+            "Fun",
+        )
+    )
+```
+
+- [ ] **Step 7: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_http.py tests/test_fun.py -q`
+
+Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add bot/http.py bot/fun.py tests/helpers.py tests/test_http.py tests/test_fun.py
+git commit -m "Add the HTTP client and fun commands"
+```
+
+### Task 12: ?leaderboard, ?gamestats, ?help
+
+Argument rules from spec §5:
+
+- `?leaderboard [game] [limit]` accepts its arguments in either order. The limit is clamped to 1 to 10, and the default is 5.
+- `?gamestats [game] [username]` treats the first argument as a game if it names one, and otherwise as a username. A leading `@` is stripped.
+- Unknown names are echoed only after username validation.
+- `?help <x>` echoes `x` only if it looks like a command name, so the bot never repeats arbitrary text.
+
+**Files:**
+- Create: `bot/stats_commands.py`, `bot/help.py`
+- Test: `tests/test_stats_help_commands.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_stats_help_commands.py`**
+
+```python
+from datetime import datetime, timezone
+
+import pytest
+
+from bot.commands import CommandContext, CommandRegistry
+from bot.help import register_help
+from bot.stats import PlayerResult, RoundRecord, StatsStore
+from bot.stats_commands import register_stats
+from tests.helpers import make_msg
+
+T0 = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
+
+
+class Cmds:
+    def __init__(self):
+        self.stats = StatsStore(":memory:")
+        self.registry = CommandRegistry("?")
+        register_stats(self.registry, stats=self.stats, game_names=["scramble", "hangman"])
+        register_help(self.registry)
+        self.replies: list[str] = []
+
+    def play(self, game: str, login: str, points: int, won: bool = True) -> None:
+        self.stats.touch_user(f"id-{login}", login, login.title(), T0)
+        self.stats.record_round(
+            RoundRecord(game, None, f"id-{login}", T0, T0, "won",
+                        [PlayerResult(f"id-{login}", login, login.title(), points, won)])
+        )
+
+    async def run(self, text: str, login: str = "alice") -> str:
+        name, _, args = text.removeprefix("?").partition(" ")
+        ctx = CommandContext(make_msg(text, login), name, args, "?", lambda t, **kw: self.replies.append(t), None)
+        await self.registry.get(name).handler(ctx)
+        return self.replies[-1]
+
+
+@pytest.fixture
+def c() -> Cmds:
+    cmds = Cmds()
+    cmds.play("scramble", "bob", 10)
+    cmds.play("scramble", "bob", 7)
+    cmds.play("scramble", "carol", 10)
+    cmds.play("hangman", "carol", 12)
+    cmds.play("hangman", "alice", 0, won=False)
+    return cmds
+
+
+async def test_leaderboard_overall_default(c: Cmds):
+    assert await c.run("?leaderboard") == "🏆 Top 2 overall: 1. Carol (22) 2. Bob (17)"
+
+
+async def test_leaderboard_game_and_limit_in_any_order(c: Cmds):
+    assert await c.run("?leaderboard scramble 1") == "🏆 Top 1 scramble: 1. Bob (17)"
+    assert await c.run("?leaderboard 1 hangman") == "🏆 Top 1 hangman: 1. Carol (12)"
+    assert await c.run("?leaderboard 99") == "🏆 Top 2 overall: 1. Carol (22) 2. Bob (17)"
+
+
+async def test_leaderboard_unknown_game_and_empty(c: Cmds):
+    assert await c.run("?leaderboard chess") == "Unknown game. Games: scramble, hangman"
+    empty = Cmds()
+    assert await empty.run("?leaderboard hangman") == "No hangman scores yet."
+
+
+async def test_gamestats_self_overall(c: Cmds):
+    assert await c.run("?gamestats", "carol") == (
+        "📊 carol: 22 pts, 2 wins, 2 played | hangman 1W/1P 12pts | scramble 1W/1P 10pts"
+    )
+
+
+async def test_gamestats_game_and_other_user(c: Cmds):
+    assert await c.run("?gamestats scramble @Bob") == "📊 Bob · scramble: 2 wins / 2 played · 17 pts · rank #1"
+    assert await c.run("?gamestats bob") == "📊 Bob: 17 pts, 2 wins, 2 played | scramble 2W/2P 17pts"
+
+
+async def test_gamestats_played_without_points_has_no_rank(c: Cmds):
+    assert await c.run("?gamestats hangman") == "📊 alice · hangman: 0 wins / 1 played · 0 pts"
+
+
+async def test_gamestats_missing(c: Cmds):
+    assert await c.run("?gamestats nobody_here") == "No stats for nobody_here yet."
+    assert await c.run("?gamestats bad/name") == "That's not a valid username."
+    assert await c.run("?gamestats hangman bob") == "No hangman stats for Bob yet."
+    assert await c.run("?gamestats", "dave") == "No stats for dave yet."
+
+
+async def test_help_overview_and_details(c: Cmds):
+    assert await c.run("?help") == "Stats: ?leaderboard ?gamestats · ?help <command> for details"
+    assert await c.run("?commands") == "Stats: ?leaderboard ?gamestats · ?help <command> for details"
+    assert await c.run("?help ?leaderboard") == (
+        "?leaderboard [game] [1-10] · Top players by points, overall or for one game."
+    )
+
+
+async def test_help_unknown_never_echoes_unsafe_text(c: Cmds):
+    assert await c.run("?help nope") == "No command named nope. Try ?help."
+    assert await c.run("?help <script>") == "No command. Try ?help."
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_stats_help_commands.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.help'`
+
+- [ ] **Step 3: Write `bot/stats_commands.py`**
+
+```python
+"""?leaderboard and ?gamestats."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+from bot.commands import Command, CommandContext, CommandRegistry
+from bot.stats import StatsStore
+from bot.text import clean_username
+
+DEFAULT_LIMIT = 5
+MAX_LIMIT = 10
+
+
+def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: Sequence[str]) -> None:
+    games = list(game_names)
+
+    async def leaderboard(ctx: CommandContext) -> None:
+        game: str | None = None
+        limit = DEFAULT_LIMIT
+        for arg in ctx.argv[:2]:
+            if arg.isdigit():
+                limit = max(1, min(MAX_LIMIT, int(arg)))
+            elif arg.lower() in games:
+                game = arg.lower()
+            else:
+                ctx.reply(f"Unknown game. Games: {', '.join(games)}")
+                return
+        rows = stats.leaderboard(game, limit)
+        label = game or "overall"
+        if not rows:
+            ctx.reply(f"No {label} scores yet.")
+            return
+        body = " ".join(f"{i}. {r.display_name} ({r.points})" for i, r in enumerate(rows, start=1))
+        ctx.reply(f"🏆 Top {len(rows)} {label}: {body}")
+
+    async def gamestats(ctx: CommandContext) -> None:
+        argv = ctx.argv
+        game: str | None = None
+        if argv and argv[0].lower() in games:
+            game = argv[0].lower()
+            argv = argv[1:]
+        if argv:
+            login = clean_username(argv[0])
+            if login is None:
+                ctx.reply("That's not a valid username.")
+                return
+            user = stats.find_user(login)
+            if user is None:
+                ctx.reply(f"No stats for {login} yet.")
+                return
+            user_id, name = user.user_id, user.display_name
+        else:
+            user_id, name = ctx.msg.user_id, ctx.msg.display_name
+        per_game = stats.user_stats(user_id)
+        if game is not None:
+            row = next((g for g in per_game if g.game == game), None)
+            if row is None:
+                ctx.reply(f"No {game} stats for {name} yet.")
+                return
+            rank = stats.rank(user_id, game)
+            rank_text = f" · rank #{rank}" if rank else ""
+            ctx.reply(f"📊 {name} · {game}: {row.wins} wins / {row.played} played · {row.points} pts{rank_text}")
+            return
+        if not per_game:
+            ctx.reply(f"No stats for {name} yet.")
+            return
+        points = sum(g.points for g in per_game)
+        wins = sum(g.wins for g in per_game)
+        played = sum(g.played for g in per_game)
+        parts = " | ".join(f"{g.game} {g.wins}W/{g.played}P {g.points}pts" for g in per_game)
+        ctx.reply(f"📊 {name}: {points} pts, {wins} wins, {played} played | {parts}")
+
+    registry.add(
+        Command(
+            "leaderboard",
+            leaderboard,
+            "{p}leaderboard [game] [1-10]",
+            "Top players by points, overall or for one game.",
+            "Stats",
+        )
+    )
+    registry.add(
+        Command(
+            "gamestats",
+            gamestats,
+            "{p}gamestats [game] [username]",
+            "Wins, games played, and points: yours or someone else's, overall or for one game.",
+            "Stats",
+        )
+    )
+```
+
+- [ ] **Step 4: Write `bot/help.py`**
+
+```python
+"""?help / ?commands, generated from the command registry."""
+
+from __future__ import annotations
+
+import re
+
+from bot.commands import Command, CommandContext, CommandRegistry
+
+_SAFE_NAME = re.compile(r"^[a-z0-9_]{1,20}$")
+
+
+def register_help(registry: CommandRegistry) -> None:
+    async def help_command(ctx: CommandContext) -> None:
+        if not ctx.argv:
+            ctx.reply(registry.help_overview())
+            return
+        name = ctx.argv[0].lower().removeprefix(ctx.prefix)
+        text = registry.help_for(name)
+        if text is None:
+            shown = f" named {name}" if _SAFE_NAME.fullmatch(name) else ""
+            text = f"No command{shown}. Try {ctx.prefix}help."
+        ctx.reply(text)
+
+    registry.add(
+        Command(
+            "help",
+            help_command,
+            "{p}help [command]",
+            "List commands, or explain one.",
+            "Info",
+            aliases=("commands",),
+            listed=False,
+        )
+    )
+```
+
+- [ ] **Step 5: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_stats_help_commands.py -q`
+
+Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add bot/stats_commands.py bot/help.py tests/test_stats_help_commands.py
+git commit -m "Add leaderboard, gamestats, and help commands"
+```
+
+### Task 13: Configuration
+
+`load_config` merges `config.toml` (settings) and the `.env` values (secrets) into a frozen `Config`. Every invalid value raises `ConfigError` naming the key; the CLI turns that into exit code 2 (spec §12). Console mode passes `require_twitch=False`. `data_dir` is the `data/` folder next to the config file.
+
+**Files:**
+- Create: `bot/config.py`, `config.toml`, `.env.example`
+- Test: `tests/test_config.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_config.py`**
+
+```python
+from pathlib import Path
+
+import pytest
+
+from bot.config import ConfigError, load_config
+
+ENV = {"TWITCH_CLIENT_ID": "cid", "TWITCH_CLIENT_SECRET": "secret", "BOT_ID": "123", "OWNER_IDS": "1, 2,"}
+
+
+def write(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_repo_config_file_is_valid():
+    cfg = load_config(Path(__file__).parent.parent / "config.toml", ENV)
+    assert cfg.prefix == "?" and cfg.enabled_games == ("scramble", "hangman")
+
+
+def test_defaults_and_env(tmp_path):
+    cfg = load_config(write(tmp_path, 'channel = "Robert_Channel"\n'), ENV)
+    assert cfg.channel == "robert_channel"
+    assert cfg.owner_ids == frozenset({"1", "2"})
+    assert (cfg.user_cooldown, cfg.global_cooldown, cfg.game_cooldown, cfg.skip_votes) == (10, 5, 30, 3)
+    assert cfg.data_dir == tmp_path / "data"
+
+
+@pytest.mark.parametrize(
+    "toml, message",
+    [
+        ('channel = "no spaces allowed"', "channel"),
+        ('channel = "ok_name"\nprefix = ""', "prefix"),
+        ('channel = "ok_name"\n[cooldowns]\nuser_seconds = -1', "cooldowns.user_seconds"),
+        ('channel = "ok_name"\n[cooldowns]\nskip_votes = 0', "cooldowns.skip_votes"),
+        ('channel = "ok_name"\n[games]\nenabled = ["chess"]', "chess"),
+        ('channel = "ok_name"\n[outbox]\nburst = 1.5', "outbox.burst"),
+        ("channel = ", "not valid TOML"),
+    ],
+)
+def test_invalid_values_name_the_key(tmp_path, toml, message):
+    with pytest.raises(ConfigError, match=message):
+        load_config(write(tmp_path, toml), ENV)
+
+
+def test_missing_secrets_fail_only_when_twitch_required(tmp_path):
+    path = write(tmp_path, 'channel = "ok_name"\n')
+    with pytest.raises(ConfigError, match="TWITCH_CLIENT_ID"):
+        load_config(path, {})
+    assert load_config(path, {}, require_twitch=False).bot_id == "console-bot"
+
+
+def test_bot_id_must_be_numeric(tmp_path):
+    with pytest.raises(ConfigError, match="BOT_ID"):
+        load_config(write(tmp_path, 'channel = "ok_name"\n'), {**ENV, "BOT_ID": "mybot"})
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_config.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.config'`
+
+- [ ] **Step 3: Write `bot/config.py`**
+
+```python
+"""Loads config.toml (settings) and .env values (secrets) into one validated Config."""
+
+from __future__ import annotations
+
+import re
+import tomllib
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from bot.games import ALL_GAMES
+
+_CHANNEL = re.compile(r"^[a-z0-9_]{3,25}$")
+
+
+class ConfigError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class Config:
+    client_id: str
+    client_secret: str
+    bot_id: str
+    owner_ids: frozenset[str]
+    channel: str
+    prefix: str
+    user_cooldown: float
+    global_cooldown: float
+    game_cooldown: float
+    skip_votes: int
+    enabled_games: tuple[str, ...]
+    outbox_rate: float
+    outbox_burst: int
+    outbox_max_queue: int
+    log_retention_days: int
+    data_dir: Path
+
+
+def _get(table: Mapping[str, Any], dotted: str, default: Any) -> Any:
+    node: Any = table
+    for part in dotted.split("."):
+        if not isinstance(node, Mapping) or part not in node:
+            return default
+        node = node[part]
+    return node
+
+
+def _number(table: Mapping[str, Any], key: str, default: float, *, integer: bool = False, minimum: float = 0) -> Any:
+    value = _get(table, key, default)
+    ok_type = isinstance(value, int) if integer else isinstance(value, (int, float))
+    if isinstance(value, bool) or not ok_type or value < minimum:
+        kind = "an integer" if integer else "a number"
+        raise ConfigError(f"{key} must be {kind} >= {minimum}, got {value!r}")
+    return value
+
+
+def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = True) -> Config:
+    try:
+        table = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ConfigError(f"config file not found: {path}") from None
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path} is not valid TOML: {exc}") from None
+
+    channel = str(_get(table, "channel", "")).strip().lower()
+    if not _CHANNEL.fullmatch(channel):
+        raise ConfigError(f"channel must be a Twitch username, got {channel!r}")
+
+    prefix = _get(table, "prefix", "?")
+    if not isinstance(prefix, str) or not 1 <= len(prefix) <= 3 or any(c.isspace() for c in prefix):
+        raise ConfigError(f"prefix must be 1-3 non-space characters, got {prefix!r}")
+
+    enabled = _get(table, "games.enabled", list(ALL_GAMES))
+    if not isinstance(enabled, list) or not all(isinstance(g, str) for g in enabled):
+        raise ConfigError("games.enabled must be a list of game names")
+    unknown = [g for g in enabled if g not in ALL_GAMES]
+    if unknown:
+        raise ConfigError(f"games.enabled has unknown games: {', '.join(unknown)} (known: {', '.join(ALL_GAMES)})")
+
+    client_id = env.get("TWITCH_CLIENT_ID", "").strip()
+    client_secret = env.get("TWITCH_CLIENT_SECRET", "").strip()
+    bot_id = env.get("BOT_ID", "").strip()
+    if require_twitch:
+        required = {"TWITCH_CLIENT_ID": client_id, "TWITCH_CLIENT_SECRET": client_secret, "BOT_ID": bot_id}
+        for key, value in required.items():
+            if not value:
+                raise ConfigError(f"{key} is missing from .env")
+        if not bot_id.isdigit():
+            raise ConfigError(f"BOT_ID must be a numeric Twitch user ID, got {bot_id!r}")
+    owner_ids = frozenset(part.strip() for part in env.get("OWNER_IDS", "").split(",") if part.strip())
+
+    return Config(
+        client_id=client_id,
+        client_secret=client_secret,
+        bot_id=bot_id or "console-bot",
+        owner_ids=owner_ids,
+        channel=channel,
+        prefix=prefix,
+        user_cooldown=_number(table, "cooldowns.user_seconds", 10),
+        global_cooldown=_number(table, "cooldowns.global_seconds", 5),
+        game_cooldown=_number(table, "cooldowns.game_cooldown_seconds", 30),
+        skip_votes=_number(table, "cooldowns.skip_votes", 3, integer=True, minimum=1),
+        enabled_games=tuple(enabled),
+        outbox_rate=_number(table, "outbox.rate_per_second", 1, minimum=0.1),
+        outbox_burst=_number(table, "outbox.burst", 3, integer=True, minimum=1),
+        outbox_max_queue=_number(table, "outbox.max_queue", 20, integer=True, minimum=1),
+        log_retention_days=_number(table, "logs.retention_days", 30, integer=True, minimum=1),
+        data_dir=path.parent / "data",
+    )
+```
+
+- [ ] **Step 4: Write `config.toml`**
+
+```toml
+# Non-secret settings. Secrets (client id/secret, bot id, owner ids) live in .env.
+
+channel = "your_channel"   # the Twitch channel to join; change to "jasontheween" to go live there
+prefix = "?"
+
+[cooldowns]
+user_seconds = 10           # per person, per command
+global_seconds = 5          # per command, across the whole chat
+game_cooldown_seconds = 30  # wait after a game ends before the next can start
+skip_votes = 3              # distinct ?skip votes needed to skip a word
+
+[games]
+enabled = ["scramble", "hangman"]
+
+[outbox]
+rate_per_second = 1         # sustained sending rate
+burst = 3                   # messages that can go out back to back
+max_queue = 20              # extra messages beyond this are dropped and logged
+
+[logs]
+retention_days = 30
+```
+
+- [ ] **Step 5: Write `.env.example`**
+
+```text
+# Copy to .env and fill in. Never commit .env.
+TWITCH_CLIENT_ID=
+TWITCH_CLIENT_SECRET=
+# Printed by `python -m bot auth` after you log in as the bot account.
+BOT_ID=
+# Comma-separated Twitch user IDs that can always control the bot (yours).
+OWNER_IDS=
+```
+
+- [ ] **Step 6: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_config.py -q`
+
+Expected: PASS (11 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add bot/config.py config.toml .env.example tests/test_config.py
+git commit -m "Add configuration loading and validation"
+```
+
+### Task 14: Console connector
+
+Lines look like `alice: ?scramble`, and a leading `@` marks a moderator. Users get IDs like `console-alice`, so `OWNER_IDS=console-robert` makes `robert` an owner in console mode. A scripted `lines=` list drives tests. Interactive mode reads stdin on a daemon thread, so `?bot shutdown` exits immediately instead of waiting for another Enter.
+
+**Files:**
+- Create: `bot/connectors/console.py`
+- Test: `tests/test_console.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_console.py`**
+
+```python
+from itertools import count
+
+from bot.clock import FakeClock
+from bot.connectors.console import ConsoleConnector, parse_console_line
+
+
+def test_parse_console_line_user_and_mod(clock: FakeClock):
+    ids = count(1)
+    msg = parse_console_line("alice: ?scramble animals", clock, ids)
+    assert (msg.login, msg.user_id, msg.text) == ("alice", "console-alice", "?scramble animals")
+    assert not msg.is_moderator
+    mod = parse_console_line("@Mod_Bob: ?bot off", clock, ids)
+    assert (mod.login, mod.display_name, mod.is_moderator) == ("mod_bob", "Mod_Bob", True)
+    assert msg.id != mod.id
+
+
+def test_parse_console_line_rejects_garbage(clock: FakeClock):
+    ids = count(1)
+    assert parse_console_line("no colon here", clock, ids) is None
+    assert parse_console_line("alice:", clock, ids) is None
+    assert parse_console_line("bad name!: hi", clock, ids) is None
+
+
+async def test_console_send_marks_replies(clock: FakeClock):
+    printed: list[str] = []
+    conn = ConsoleConnector(clock=clock, lines=["alice: hi"], out=printed.append)
+    seen = []
+
+    async def on_message(msg):
+        seen.append(msg)
+
+    async def on_ready(info):
+        assert info.is_mod
+
+    await conn.run(on_message, on_ready)
+    await conn.send("hello", reply_to=seen[0].id)
+    await conn.send("plain")
+    assert printed == ["bot → alice: hello", "bot: plain"]
+    assert conn.sent == ["hello", "plain"]
+
+
+async def test_console_lookup_user(clock: FakeClock):
+    conn = ConsoleConnector(clock=clock, lines=[])
+    assert (await conn.lookup_user("@Bob")).login == "bob"
+    assert await conn.lookup_user("x") is None
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_console.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.connectors.console'`
+
+- [ ] **Step 3: Write `bot/connectors/console.py`**
+
+```python
+"""Play with the bot in a terminal. Lines look like `alice: ?scramble`; a leading @ marks a mod."""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+import threading
+from collections.abc import Callable, Iterable, Iterator
+from itertools import count
+
+from bot.clock import Clock
+from bot.connectors.base import ChatMessage, OnMessage, OnReady, ReadyInfo, SendResult, UserRef
+from bot.text import clean_username
+
+BANNER = "Console mode. Type lines like `alice: ?scramble` (a leading @ makes the user a mod). Ctrl+D to quit."
+
+
+def parse_console_line(line: str, clock: Clock, ids: Iterator[int]) -> ChatMessage | None:
+    who, sep, text = line.strip().partition(":")
+    text = text.strip()
+    if not sep or not text:
+        return None
+    who = who.strip()
+    moderator = who.startswith("@")
+    display = who.lstrip("@")
+    login = clean_username(display)
+    if login is None:
+        return None
+    return ChatMessage(
+        id=f"console-{next(ids)}",
+        user_id=f"console-{login}",
+        login=login,
+        display_name=display,
+        text=text,
+        is_broadcaster=False,
+        is_moderator=moderator,
+        source_channel_id=None,
+        received_at=clock.now(),
+    )
+
+
+class ConsoleConnector:
+    channel_id = "console"
+
+    def __init__(
+        self,
+        *,
+        clock: Clock,
+        lines: Iterable[str] | None = None,
+        out: Callable[[str], None] = print,
+    ) -> None:
+        self._clock = clock
+        self._lines = lines
+        self._out = out
+        self._ids = count(1)
+        self._names: dict[str, str] = {}  # message id -> display name, for reply arrows
+        self._queue: asyncio.Queue[str | None] | None = None
+        self._closed = False
+        self.sent: list[str] = []
+
+    async def _deliver(self, line: str, on_message: OnMessage) -> None:
+        msg = parse_console_line(line, self._clock, self._ids)
+        if msg is not None:
+            self._names[msg.id] = msg.display_name
+            await on_message(msg)
+
+    async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
+        await on_ready(ReadyInfo("console", self.channel_id, True))
+        if self._lines is not None:
+            for line in self._lines:
+                if self._closed:
+                    return
+                await self._deliver(line, on_message)
+                await asyncio.sleep(0)
+            return
+        self._out(BANNER)
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._queue = queue
+
+        def read_stdin() -> None:  # daemon thread, so a blocked read never keeps the process alive
+            for raw in sys.stdin:
+                loop.call_soon_threadsafe(queue.put_nowait, raw)
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        threading.Thread(target=read_stdin, daemon=True).start()
+        while not self._closed:
+            line = await queue.get()
+            if line is None:
+                return
+            await self._deliver(line, on_message)
+
+    async def send(self, text: str, reply_to: str | None = None) -> SendResult:
+        self.sent.append(text)
+        name = self._names.get(reply_to or "")
+        self._out(f"bot → {name}: {text}" if name else f"bot: {text}")
+        return SendResult(True)
+
+    async def lookup_user(self, login: str) -> UserRef | None:
+        clean = clean_username(login)
+        return UserRef(f"console-{clean}", clean, clean) if clean else None
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._queue is not None:
+            self._queue.put_nowait(None)
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_console.py -q`
+
+Expected: PASS (4 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add bot/connectors/console.py tests/test_console.py
+git commit -m "Add the console connector"
+```
+
+### Task 15: Admin commands and BotCore
+
+The heart of the bot. `BotCore.on_message` applies spec §3's filter in order:
+
+1. Ignore everything once shutdown has started.
+2. Ignore the bot's own messages.
+3. Ignore shared-chat messages from other channels.
+4. While paused, accept only `?bot ...` from a controller.
+5. Route commands; anything else goes to the active game.
+
+`_dispatch` checks permission, then cooldowns, then touches the user, logs `command`, and runs the handler. Handler exceptions are logged and never crash the bot.
+
+`run()` starts the connector, the outbox loop, and the 1 s tick loop. It returns an exit code:
+
+- 0 for `?bot shutdown`, a signal, or the end of console input;
+- 2 for a `ConfigError` raised by the connector, such as a channel that doesn't exist;
+- 3 for `AuthRequired`;
+- 1 for any other connector failure.
+
+Before returning, it drains the outbox, closes the connector, and logs `shutdown`.
+
+The paused flag is read from the database at startup, so it survives restarts. The full-flow tests are spec §14.2.
+
+**Files:**
+- Create: `bot/admin.py`, `bot/core.py`
+- Modify: `tests/helpers.py` (append `make_config`)
+- Test: `tests/test_flows.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_flows.py`**
+
+```python
+"""End-to-end flows: BotCore driven through console-style chat lines, with a fake clock."""
+
+import asyncio
+import json
+import random
+from itertools import count
+
+import pytest
+
+from bot.activity_log import ActivityLog
+from bot.config import ConfigError
+from bot.connectors.base import AuthRequired, ReadyInfo
+from bot.connectors.console import ConsoleConnector, parse_console_line
+from bot.core import BotCore
+from bot.stats import StatsStore
+from tests.helpers import FakeHttp, make_config, make_msg
+
+
+class Bot:
+    def __init__(self, tmp_path, clock, assets, *, db=":memory:", lines=None, connector=None, http=None):
+        self.clock = clock
+        self.ids = count(1)
+        self.connector = connector or ConsoleConnector(clock=clock, lines=lines, out=lambda s: None)
+        self.log = ActivityLog(tmp_path / "logs", clock)
+        self.core = BotCore(
+            config=make_config(tmp_path),
+            connector=self.connector,
+            stats=StatsStore(db),
+            log=self.log,
+            clock=clock,
+            assets=assets,
+            http=http or FakeHttp(),
+            rng=random.Random(1),
+        )
+
+    async def say(self, line: str) -> None:
+        await self.core.on_message(parse_console_line(line, self.clock, self.ids))
+        await self.core.outbox.flush_ready()
+
+    async def wait(self, seconds: float) -> None:
+        self.clock.advance(seconds)
+        self.core.tick()
+        await self.core.outbox.flush_ready()
+
+    @property
+    def out(self) -> list[str]:
+        return self.connector.sent
+
+    def events(self) -> list[dict]:
+        path = self.log.path_for(self.clock.now().date())
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+@pytest.fixture
+def bot(tmp_path, clock, assets) -> Bot:
+    return Bot(tmp_path, clock, assets)
+
+
+async def test_scramble_round_to_leaderboard(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    assert bot.out[-1].startswith("🔤 Unscramble (animals): ")
+    await bot.say("bob: crocodile")
+    await bot.say("bob: alligator")
+    assert bot.out[-1] == "✅ bob got it: ALLIGATOR (+10)"
+    await bot.say("carol: ?leaderboard")
+    assert bot.out[-1] == "🏆 Top 1 overall: 1. bob (10)"
+    await bot.say("bob: ?gamestats")
+    assert bot.out[-1] == "📊 bob: 10 pts, 1 wins, 1 played | scramble 1W/1P 10pts"
+
+
+async def test_hangman_win_through_g_and_plain_letters_ignored(bot: Bot):
+    await bot.say("alice: ?hangman animals")
+    answer = bot.core.games.active.game.answer
+    assert "guess with ?g <letter> or ?g <answer>" in bot.out[-1]
+    sent_before = len(bot.out)
+    await bot.say("bob: W")
+    assert len(bot.out) == sent_before and bot.core.games.active.game.wrong == []
+    await bot.say(f"bob: ?g {answer.lower()}")
+    assert bot.out[-1] == f"🎉 bob solved it: {answer} (+10)"
+
+
+async def test_hangman_loss(bot: Bot):
+    await bot.say("alice: ?hangman animals")
+    game = bot.core.games.active.game
+    misses = [c for c in "ZQXJKVWYUBDF" if c not in game.answer][:6]
+    for i, letter in enumerate(misses):
+        await bot.say(f"user{i}: ?g {letter}")
+    assert bot.out[-1] == f"💀 Out of lives! The word was {game.answer}."
+    assert bot.core.games.active is None
+
+
+async def test_three_skip_votes(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    for name in ("voter1", "voter2", "voter3"):
+        await bot.say(f"{name}: ?skip")
+    assert bot.out[-1] == "⏭️ Skipped! It was ALLIGATOR."
+
+
+async def test_game_times_out_with_hints(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    await bot.wait(15)
+    assert bot.out[-1].startswith("💡 Hint: ")
+    await bot.wait(30)
+    assert bot.out[-1] == "⏰ Time's up! It was ALLIGATOR."
+
+
+async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
+    await bot.say("random: ?bot shutdown")
+    await bot.say("random: ?bot off")
+    assert bot.out == [] and not bot.core.paused
+    await bot.say("alice: ?scramble animals")
+    await bot.say("@mod: ?bot off")
+    assert bot.core.paused
+    assert "🛑 Game stopped. It was ALLIGATOR." in bot.out
+    assert "Bot paused by mod. ?bot on to resume." in bot.out
+    before = len(bot.out)
+    bot.clock.advance(60)
+    await bot.say("alice: ?scramble animals")
+    await bot.say("alice: ?8ball hi")
+    assert len(bot.out) == before
+    await bot.say("@mod: ?bot status")
+    assert bot.out[-1].startswith("PAUSED · up 1m · game: none · v")
+    await bot.say("@mod: ?bot on")
+    assert bot.out[-1] == "Bot resumed by mod."
+    await bot.say("alice: ?coinflip")
+    assert bot.out[-1] in ("🪙 Heads", "🪙 Tails")
+
+
+async def test_owner_can_control_without_mod_badge(bot: Bot):
+    await bot.say("robert: ?bot off")
+    assert bot.core.paused
+
+
+async def test_paused_state_survives_restart(tmp_path, clock, assets):
+    db = tmp_path / "data" / "bot.db"
+    first = Bot(tmp_path, clock, assets, db=db)
+    await first.say("@mod: ?bot off")
+    first.core.stats.close()
+    second = Bot(tmp_path, clock, assets, db=db)
+    assert second.core.paused
+    await second.say("alice: ?8ball hi")
+    assert second.out == []
+
+
+async def test_shared_chat_and_own_messages_are_ignored(bot: Bot):
+    await bot.core.on_message(make_msg("?bot off", "othermod", mod=True, source_channel_id="other-channel"))
+    await bot.core.on_message(make_msg("?coinflip", "me", user_id="console-bot"))
+    await bot.core.on_message(make_msg("?coinflip", "local", source_channel_id="console"))
+    await bot.core.outbox.flush_ready()
+    assert not bot.core.paused
+    assert len(bot.out) == 1  # only the message whose source is our own channel
+
+
+async def test_cookie_daily_limit_across_midnight(bot: Bot):
+    await bot.say("alice: ?cookie")
+    assert bot.out[-1] == "🥠 Good things are coming."
+    bot.clock.advance(11)
+    await bot.say("alice: ?cookie")
+    assert bot.out[-1].startswith("You already opened today's cookie. Next one in 11h 59m")
+    await bot.wait(12 * 3600)
+    await bot.say("alice: ?cookie")
+    assert bot.out[-1] == "🥠 Good things are coming."
+
+
+async def test_fact_api_failure_falls_back(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets, http=FakeHttp({}))
+    await bot.say("alice: ?catfact")
+    assert bot.out[-1] == "🐱 fallback catfacts line"
+
+
+async def test_quick_commands_have_user_and_global_cooldowns(bot: Bot):
+    await bot.say("alice: ?coinflip")
+    await bot.say("alice: ?coinflip")
+    await bot.say("bob: ?coinflip")
+    assert len(bot.out) == 1
+    bot.clock.advance(5)
+    await bot.say("bob: ?coinflip")
+    assert len(bot.out) == 2
+
+
+async def test_help_overview_lists_real_commands_under_500_chars(bot: Bot):
+    await bot.say("alice: ?help")
+    text = bot.out[-1]
+    assert text == (
+        "Games: ?scramble ?hangman ?skip | Stats: ?leaderboard ?gamestats | "
+        "Fun: ?8ball ?coinflip ?catfact ?dogfact ?fact ?dadjoke ?cookie · ?help <command> for details"
+    )
+    for cmd in bot.core.registry.all():
+        assert cmd.usage and cmd.description
+        assert len(bot.core.registry.help_for(cmd.name)) <= 500
+    bot.clock.advance(5)  # ?help has a 5 s global cooldown
+    await bot.say("bob: ?help hangman")
+    assert "?g <letter>" in bot.out[-1]
+
+
+async def test_command_logged_and_handler_error_does_not_crash(bot: Bot):
+    async def broken(ctx):
+        raise ValueError("bad handler")
+
+    from bot.commands import Command
+
+    bot.core.registry.add(Command("broken", broken, "{p}broken", "Breaks.", "Fun"))
+    await bot.say("alice: ?broken")
+    await bot.say("alice: ?coinflip")
+    events = bot.events()
+    assert any(e["event"] == "command" and e["command"] == "broken" for e in events)
+    assert any(e["event"] == "error" and e["where"] == "command:broken" for e in events)
+    assert bot.out[-1] in ("🪙 Heads", "🪙 Tails")
+
+
+async def test_run_shutdown_from_chat_exits_zero(tmp_path, clock, assets):
+    lines = ["alice: ?scramble animals", "@mod: ?bot shutdown", "alice: ?coinflip"]
+    bot = Bot(tmp_path, clock, assets, lines=lines)
+    code = await asyncio.wait_for(bot.core.run(), timeout=5)
+    assert code == 0
+    assert bot.out[1:] == ["Shutting down (requested by mod).", "🛑 Game stopped. It was ALLIGATOR."]
+    assert not any(t in bot.out for t in ("🪙 Heads", "🪙 Tails"))  # ignored after shutdown
+    events = bot.events()
+    assert events[0]["event"] == "startup" and events[0]["is_mod"] is True
+    assert events[-1] == {**events[-1], "event": "shutdown", "by": "mod", "exit_code": 0}
+
+
+async def test_run_ends_cleanly_when_console_input_ends(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets, lines=["alice: ?coinflip"])
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == 0
+    assert bot.out[0] in ("🪙 Heads", "🪙 Tails")
+
+
+class FailingConnector:
+    channel_id = "x"
+
+    def __init__(self, exc: Exception):
+        self.exc = exc
+        self.sent: list[str] = []
+
+    async def run(self, on_message, on_ready):
+        await on_ready(ReadyInfo("x", "x", False))
+        raise self.exc
+
+    async def send(self, text, reply_to=None):
+        self.sent.append(text)
+
+    async def lookup_user(self, login):
+        return None
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.parametrize(
+    "exc, code",
+    [(AuthRequired("token revoked"), 3), (ConfigError("channel not found"), 2), (RuntimeError("socket died"), 1)],
+)
+async def test_run_maps_connector_failures_to_exit_codes(tmp_path, clock, assets, exc, code):
+    bot = Bot(tmp_path, clock, assets, connector=FailingConnector(exc))
+    assert await asyncio.wait_for(bot.core.run(), timeout=5) == code
+    assert bot.events()[-1]["exit_code"] == code
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_flows.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.core'`
+
+- [ ] **Step 3: Append `make_config` to the end of `tests/helpers.py`**
+
+```python
+def make_config(tmp_path, **overrides):
+    from dataclasses import replace
+
+    from bot.config import Config
+
+    base = Config(
+        client_id="",
+        client_secret="",
+        bot_id="console-bot",
+        owner_ids=frozenset({"console-robert"}),
+        channel="test_channel",
+        prefix="?",
+        user_cooldown=10,
+        global_cooldown=5,
+        game_cooldown=30,
+        skip_votes=3,
+        enabled_games=("scramble", "hangman"),
+        outbox_rate=100,
+        outbox_burst=100,
+        outbox_max_queue=100,
+        log_retention_days=30,
+        data_dir=tmp_path / "data",
+    )
+    return replace(base, **overrides)
+```
+
+- [ ] **Step 4: Write `bot/admin.py`**
+
+```python
+"""Control commands for the broadcaster, mods, and owners: ?bot off/on/status/shutdown, ?stopgame."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from bot.commands import Command, CommandContext, CommandRegistry
+
+if TYPE_CHECKING:
+    from bot.core import BotCore
+
+
+def register_admin(registry: CommandRegistry, core: BotCore) -> None:
+    async def bot_command(ctx: CommandContext) -> None:
+        sub = ctx.argv[0].lower() if ctx.argv else ""
+        who = ctx.msg.display_name
+        if sub == "off":
+            if core.paused:
+                ctx.reply("Already paused.", priority=True)
+                return
+            core.log.write("admin", user_id=ctx.msg.user_id, login=ctx.msg.login, action="off")
+            core.games.stop()
+            core.set_paused(True)
+            ctx.reply(f"Bot paused by {who}. {ctx.prefix}bot on to resume.", priority=True)
+        elif sub == "on":
+            if not core.paused:
+                ctx.reply("Already on.", priority=True)
+                return
+            core.log.write("admin", user_id=ctx.msg.user_id, login=ctx.msg.login, action="on")
+            core.set_paused(False)
+            ctx.reply(f"Bot resumed by {who}.", priority=True)
+        elif sub == "status":
+            ctx.reply(core.status_line(), priority=True)
+        elif sub == "shutdown":
+            core.log.write("admin", user_id=ctx.msg.user_id, login=ctx.msg.login, action="shutdown")
+            ctx.reply(f"Shutting down (requested by {who}).", priority=True)
+            core.request_shutdown(by=ctx.msg.login)
+        else:
+            ctx.reply(f"Usage: {ctx.prefix}bot off|on|status|shutdown", priority=True)
+
+    async def stopgame(ctx: CommandContext) -> None:
+        if core.games.active is None:
+            ctx.reply("No game is running.")
+            return
+        core.log.write("admin", user_id=ctx.msg.user_id, login=ctx.msg.login, action="stopgame")
+        core.games.stop()
+
+    registry.add(
+        Command(
+            "bot",
+            bot_command,
+            "{p}bot off|on|status|shutdown",
+            "Pause, resume, check, or shut down the bot. Shutdown really stops it until someone restarts it.",
+            "Control",
+            controller_only=True,
+            cooldown=False,
+            listed=False,
+        )
+    )
+    registry.add(
+        Command(
+            "stopgame",
+            stopgame,
+            "{p}stopgame",
+            "End the current game with no points.",
+            "Control",
+            controller_only=True,
+            cooldown=False,
+            listed=False,
+        )
+    )
+```
+
+- [ ] **Step 5: Write `bot/core.py`**
+
+```python
+"""BotCore: filters incoming chat, routes commands and game input, owns the background loops."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+import traceback
+
+from bot import __version__
+from bot.activity_log import ActivityLog
+from bot.admin import register_admin
+from bot.assets import Assets
+from bot.clock import Clock
+from bot.commands import Command, CommandContext, CommandRegistry, parse_command
+from bot.config import Config, ConfigError
+from bot.connectors.base import AuthRequired, ChatMessage, Connector, ReadyInfo
+from bot.cooldowns import Cooldowns
+from bot.fun import register_fun
+from bot.games import ALL_GAMES
+from bot.games.manager import GameManager
+from bot.help import register_help
+from bot.http import HttpClient
+from bot.outbox import Outbox
+from bot.permissions import is_controller
+from bot.stats import StatsStore
+from bot.stats_commands import register_stats
+from bot.text import format_duration
+
+logger = logging.getLogger(__name__)
+
+EXIT_OK, EXIT_CRASH, EXIT_CONFIG, EXIT_AUTH = 0, 1, 2, 3
+
+
+class BotCore:
+    def __init__(
+        self,
+        *,
+        config: Config,
+        connector: Connector,
+        stats: StatsStore,
+        log: ActivityLog,
+        clock: Clock,
+        assets: Assets,
+        http: HttpClient,
+        rng: random.Random,
+    ) -> None:
+        self.config = config
+        self.connector = connector
+        self.stats = stats
+        self.log = log
+        self.clock = clock
+        self.http = http
+        self.started_mono = clock.mono()
+        self.outbox = Outbox(
+            connector.send,
+            clock,
+            log,
+            rate=config.outbox_rate,
+            burst=config.outbox_burst,
+            max_queue=config.outbox_max_queue,
+        )
+        self.cooldowns = Cooldowns(clock)
+        self.registry = CommandRegistry(config.prefix)
+        games = {name: ALL_GAMES[name] for name in config.enabled_games}
+        self.games = GameManager(
+            games=games,
+            stats=stats,
+            log=log,
+            clock=clock,
+            assets=assets,
+            rng=rng,
+            say=self.outbox.enqueue,
+            prefix=config.prefix,
+            cooldown_seconds=config.game_cooldown,
+            skip_votes=config.skip_votes,
+        )
+        self.games.register(self.registry)
+        register_stats(self.registry, stats=stats, game_names=list(games))
+        register_fun(
+            self.registry,
+            assets=assets,
+            rng=rng,
+            http=http,
+            stats=stats,
+            clock=clock,
+            lookup_user=connector.lookup_user,
+        )
+        register_help(self.registry)
+        register_admin(self.registry, self)
+        self.paused = stats.get_state("paused", "0") == "1"
+        self.exit_code = EXIT_OK
+        self.shutdown_by: str | None = None
+        self._stop = asyncio.Event()
+
+    # state
+
+    def is_controller(self, msg: ChatMessage) -> bool:
+        return is_controller(msg, self.config.owner_ids)
+
+    def set_paused(self, paused: bool) -> None:
+        self.paused = paused
+        self.stats.set_state("paused", "1" if paused else "0")
+
+    def status_line(self) -> str:
+        state = "PAUSED" if self.paused else "ON"
+        uptime = format_duration(self.clock.mono() - self.started_mono).replace(" ", "")
+        game = self.games.status() or "none"
+        return f"{state} · up {uptime} · game: {game} · v{__version__}"
+
+    def request_shutdown(self, by: str, exit_code: int = EXIT_OK) -> None:
+        if self.shutdown_by is None:
+            self.shutdown_by = by
+            self.exit_code = exit_code
+        self.games.stop()
+        self._stop.set()
+
+    # incoming chat
+
+    async def on_message(self, msg: ChatMessage) -> None:
+        if self._stop.is_set():  # shutting down: ignore anything still arriving
+            return
+        if msg.user_id == self.config.bot_id:
+            return
+        if msg.source_channel_id is not None and msg.source_channel_id != self.connector.channel_id:
+            return
+        parsed = parse_command(msg.text, self.config.prefix)
+        if self.paused:
+            if parsed is not None and parsed[0] == "bot" and self.is_controller(msg):
+                await self._dispatch(self.registry.get("bot"), msg, *parsed)
+            return
+        if parsed is not None:
+            cmd = self.registry.get(parsed[0])
+            if cmd is not None:
+                await self._dispatch(cmd, msg, *parsed)
+            return
+        self.games.on_message(msg)
+
+    def _context(self, msg: ChatMessage, name: str, args: str) -> CommandContext:
+        def reply(text: str, priority: bool = False) -> None:
+            self.outbox.enqueue(text, reply_to=msg.id, priority=priority)
+
+        def say(text: str, priority: bool = False, coalesce_key: str | None = None) -> None:
+            self.outbox.enqueue(text, priority=priority, coalesce_key=coalesce_key)
+
+        return CommandContext(msg, name, args, self.config.prefix, reply, say)
+
+    async def _dispatch(self, cmd: Command | None, msg: ChatMessage, name: str, args: str) -> None:
+        if cmd is None:
+            return
+        if cmd.controller_only and not self.is_controller(msg):
+            return
+        if cmd.cooldown and not self.cooldowns.check_command(
+            cmd.name, msg.user_id, self.config.user_cooldown, self.config.global_cooldown
+        ):
+            return
+        self.stats.touch_user(msg.user_id, msg.login, msg.display_name, self.clock.now())
+        self.log.write("command", user_id=msg.user_id, login=msg.login, command=cmd.name, args=args[:100])
+        try:
+            await cmd.handler(self._context(msg, name, args))
+        except Exception as exc:
+            logger.exception("command %s failed", cmd.name)
+            self.log.write(
+                "error",
+                where=f"command:{cmd.name}",
+                type=type(exc).__name__,
+                message=str(exc),
+                traceback=traceback.format_exc(),
+            )
+
+    # background loops
+
+    def tick(self) -> None:
+        try:
+            self.games.tick()
+        except Exception as exc:
+            logger.exception("tick failed")
+            self.log.write("error", where="tick", type=type(exc).__name__, message=str(exc))
+        self.log.maybe_rollover()
+
+    async def _tick_loop(self) -> None:
+        while not self._stop.is_set():
+            await asyncio.sleep(1)
+            self.tick()
+
+    async def _on_ready(self, info: ReadyInfo) -> None:
+        self.log.write("startup", version=__version__, channel=info.channel_login, is_mod=info.is_mod)
+        if not info.is_mod:
+            logger.warning(
+                "The bot is not a mod in %s: no Chat Bot badge, 1 msg/s, slow mode applies.", info.channel_login
+            )
+
+    async def run(self) -> int:
+        """Run until shutdown or a fatal connector error. Returns the process exit code."""
+        self.log.prune()
+        connector_task = asyncio.create_task(self.connector.run(self.on_message, self._on_ready))
+        outbox_task = asyncio.create_task(self.outbox.run(self._stop))
+        tick_task = asyncio.create_task(self._tick_loop())
+        stop_task = asyncio.create_task(self._stop.wait())
+        try:
+            await asyncio.wait({connector_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+            if connector_task.done():
+                connector_task.result()  # re-raises a connector failure
+                self.request_shutdown(by="connector closed")
+        except ConfigError as exc:
+            logger.error("Setup problem: %s", exc)
+            self.log.write("error", where="setup", type="ConfigError", message=str(exc))
+            self.request_shutdown(by="config", exit_code=EXIT_CONFIG)
+        except AuthRequired as exc:
+            logger.error("Twitch login needed: re-run `python -m bot auth`. (%s)", exc)
+            self.log.write("error", where="auth", type="AuthRequired", message=str(exc))
+            self.request_shutdown(by="auth", exit_code=EXIT_AUTH)
+        except Exception as exc:
+            logger.exception("connector crashed")
+            self.log.write(
+                "error", where="connector", type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc()
+            )
+            self.request_shutdown(by="crash", exit_code=EXIT_CRASH)
+        finally:
+            self._stop.set()
+            for task in (tick_task, outbox_task, stop_task):
+                task.cancel()
+            await asyncio.gather(tick_task, outbox_task, stop_task, return_exceptions=True)
+            await self.outbox.drain(3.0)
+            await self.connector.close()
+            if not connector_task.done():
+                connector_task.cancel()
+            await asyncio.gather(connector_task, return_exceptions=True)
+            await self.http.close()
+        self.log.write("shutdown", by=self.shutdown_by or "signal", exit_code=self.exit_code)
+        return self.exit_code
+```
+
+- [ ] **Step 6: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_flows.py -q`
+
+Expected: PASS (19 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add bot/admin.py bot/core.py tests/helpers.py tests/test_flows.py
+git commit -m "Add admin commands and the bot core"
+```
+
+### Task 16: Twitch connector and login flow
+
+This follows the TwitchIO 3.3.2 source, which was read while writing the plan.
+
+- **Startup:**
+  1. The `_Client` subclass loads only the bot's token from `data/.tio.tokens.json`. A missing or unrefreshable token raises `AuthRequired`, which becomes exit 3.
+  2. In `setup_hook` it resolves the channel and checks `fetch_moderated_channels`. A channel that doesn't exist raises `ConfigError` (exit 2, so systemd doesn't restart-loop). A failed mod check logs a warning and continues.
+  3. It subscribes to `channel.chat.message` over WebSocket with the bot token (`as_bot=True`).
+- **Sending:** through Helix with the **app token** (`token_for=None`), which gives a modded bot the Chat Bot badge. `MessageRejectedError` becomes `SendResult(False, code, message)`.
+- **Connection events:** the first `websocket_welcome` logs `connected` and later ones log `reconnected`. `websocket_closed` logs `disconnected`.
+- **Revocation:** a revoked subscription is fatal (`AuthRequired`).
+- **Token file safety:** tokens are saved on close only if they loaded. A startup failure would otherwise overwrite the token file with nothing and force a needless re-login.
+- **`authorize()`:** runs TwitchIO's built-in web adapter on `localhost:4343`. Its default callback is `http://localhost:4343/oauth/callback`, which must match the app registration.
+
+Only the pure parts are unit-tested here. The live behavior is verified in Task 20.
+
+**Files:**
+- Create: `bot/connectors/twitch.py`
+- Test: `tests/test_twitch_mapping.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_twitch_mapping.py`**
+
+```python
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from bot.clock import FakeClock
+from bot.connectors.base import AuthRequired
+from bot.connectors.twitch import AUTH_URL, read_bot_token, to_chat_message
+
+
+def fake_payload(source=None, **chatter):
+    defaults = dict(id="42", name="Alice", display_name="Alice", broadcaster=False, moderator=False)
+    defaults.update(chatter)
+    return SimpleNamespace(id="m1", text="?scramble", chatter=SimpleNamespace(**defaults), source_broadcaster=source)
+
+
+def test_to_chat_message_maps_fields(clock: FakeClock):
+    msg = to_chat_message(fake_payload(moderator=True), clock)
+    assert (msg.id, msg.user_id, msg.login, msg.display_name, msg.text) == ("m1", "42", "alice", "Alice", "?scramble")
+    assert msg.is_moderator and not msg.is_broadcaster
+    assert msg.source_channel_id is None
+    assert msg.received_at == clock.now()
+
+
+def test_to_chat_message_shared_chat_source(clock: FakeClock):
+    msg = to_chat_message(fake_payload(source=SimpleNamespace(id=999)), clock)
+    assert msg.source_channel_id == "999"
+
+
+def test_read_bot_token(tmp_path):
+    path = tmp_path / ".tio.tokens.json"
+    with pytest.raises(AuthRequired, match="no token file"):
+        read_bot_token(path, "123")
+    path.write_text("{not json")
+    with pytest.raises(AuthRequired, match="corrupt"):
+        read_bot_token(path, "123")
+    path.write_text(json.dumps({"999": {"token": "t", "refresh": "r"}}))
+    with pytest.raises(AuthRequired, match="no token for bot user 123"):
+        read_bot_token(path, "123")
+    path.write_text(json.dumps({"123": {"user_id": "123", "token": "t", "refresh": "r"}}))
+    assert read_bot_token(path, "123") == ("t", "r")
+
+
+def test_auth_url_requests_all_bot_scopes():
+    assert AUTH_URL == (
+        "http://localhost:4343/oauth?scopes=user:read:chat%20user:write:chat%20user:bot%20user:read:moderated_channels"
+    )
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_twitch_mapping.py -q`
+
+Expected: FAIL. `ModuleNotFoundError: No module named 'bot.connectors.twitch'`
+
+- [ ] **Step 3: Write `bot/connectors/twitch.py`**
+
+```python
+"""Twitch connector: reads chat over EventSub WebSocket, sends through Helix with the app token."""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+import twitchio
+from twitchio import eventsub
+
+from bot.activity_log import ActivityLog
+from bot.clock import Clock
+from bot.config import Config, ConfigError
+from bot.connectors.base import AuthRequired, ChatMessage, OnMessage, OnReady, ReadyInfo, SendResult, UserRef
+
+logger = logging.getLogger(__name__)
+
+BOT_SCOPES = ("user:read:chat", "user:write:chat", "user:bot", "user:read:moderated_channels")
+REDIRECT_URI = "http://localhost:4343/oauth/callback"  # register this exact URL on the Twitch app
+AUTH_URL = "http://localhost:4343/oauth?scopes=" + "%20".join(BOT_SCOPES)
+
+
+def to_chat_message(payload: Any, clock: Clock) -> ChatMessage:
+    """Map a twitchio.ChatMessage to our platform-neutral ChatMessage."""
+    chatter = payload.chatter
+    source = payload.source_broadcaster
+    return ChatMessage(
+        id=payload.id,
+        user_id=str(chatter.id),
+        login=(chatter.name or "").lower(),
+        display_name=chatter.display_name or chatter.name or "",
+        text=payload.text,
+        is_broadcaster=bool(chatter.broadcaster),
+        is_moderator=bool(chatter.moderator),
+        source_channel_id=str(source.id) if source is not None else None,
+        received_at=clock.now(),
+    )
+
+
+def read_bot_token(path: Path, bot_id: str) -> tuple[str, str]:
+    """Return (access token, refresh token) for the bot from TwitchIO's token file."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise AuthRequired(f"no token file at {path}") from None
+    except json.JSONDecodeError:
+        raise AuthRequired(f"token file {path} is corrupt") from None
+    entry = data.get(bot_id)
+    if not entry:
+        raise AuthRequired(f"no token for bot user {bot_id} in {path}")
+    return entry["token"], entry["refresh"]
+
+
+class _Client(twitchio.Client):
+    def __init__(self, connector: TwitchConnector) -> None:
+        cfg = connector.config
+        super().__init__(client_id=cfg.client_id, client_secret=cfg.client_secret, bot_id=cfg.bot_id)
+        self.connector = connector
+        self._tokens_loaded = False
+
+    async def load_tokens(self, path: str | None = None) -> None:
+        token, refresh = read_bot_token(self.connector.token_path, self.connector.config.bot_id)
+        try:
+            await self.add_token(token, refresh)
+        except twitchio.InvalidTokenException as exc:
+            raise AuthRequired("the saved bot token is invalid and could not be refreshed") from exc
+        self._tokens_loaded = True
+
+    async def save_tokens(self, path: str | None = None) -> None:
+        # TwitchIO saves on close. If startup failed before the token loaded, saving would
+        # overwrite the token file with nothing and force a needless re-login.
+        if self._tokens_loaded:
+            await super().save_tokens(str(self.connector.token_path))
+
+    async def setup_hook(self) -> None:
+        await self.connector._setup(self)
+
+    async def event_message(self, payload: twitchio.ChatMessage) -> None:
+        await self.connector._incoming(payload)
+
+    async def event_websocket_welcome(self, payload: Any) -> None:
+        self.connector._welcomed()
+
+    async def event_websocket_closed(self, payload: Any) -> None:
+        self.connector.log.write("disconnected")
+
+    async def event_subscription_revoked(self, payload: Any) -> None:
+        await self.connector._fail(AuthRequired(f"chat subscription revoked: {getattr(payload, 'reason', '?')}"))
+
+
+class TwitchConnector:
+    def __init__(self, config: Config, log: ActivityLog, clock: Clock) -> None:
+        self.config = config
+        self.log = log
+        self.clock = clock
+        self.token_path = config.data_dir / ".tio.tokens.json"
+        self.channel_id = ""
+        self._client: _Client | None = None
+        self._on_message: OnMessage | None = None
+        self._on_ready: OnReady | None = None
+        self._fatal: BaseException | None = None
+        self._welcomes = 0
+
+    async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
+        self._on_message, self._on_ready = on_message, on_ready
+        self._client = _Client(self)
+        async with self._client:
+            await self._client.start(with_adapter=False)
+        if self._fatal is not None:
+            raise self._fatal
+
+    async def _setup(self, client: _Client) -> None:
+        users = await client.fetch_users(logins=[self.config.channel])
+        if not users:
+            raise ConfigError(f"Twitch channel {self.config.channel!r} not found")
+        channel = users[0]
+        self.channel_id = str(channel.id)
+        is_mod = self.channel_id == self.config.bot_id
+        if not is_mod:
+            try:
+                bot = client.create_partialuser(user_id=self.config.bot_id)
+                async for ch in bot.fetch_moderated_channels(first=100, token_for=self.config.bot_id):
+                    if str(ch.id) == self.channel_id:
+                        is_mod = True
+                        break
+            except twitchio.HTTPException as exc:
+                logger.warning("could not check moderator status: %s", exc)
+        await client.subscribe_websocket(
+            eventsub.ChatMessageSubscription(broadcaster_user_id=self.channel_id, user_id=self.config.bot_id),
+            as_bot=True,
+        )
+        assert self._on_ready is not None
+        await self._on_ready(ReadyInfo(self.config.channel, self.channel_id, is_mod))
+
+    def _welcomed(self) -> None:
+        self._welcomes += 1
+        self.log.write("connected" if self._welcomes == 1 else "reconnected")
+
+    async def _incoming(self, payload: twitchio.ChatMessage) -> None:
+        if self._on_message is not None:
+            await self._on_message(to_chat_message(payload, self.clock))
+
+    async def _fail(self, exc: BaseException) -> None:
+        self._fatal = exc
+        await self.close()
+
+    async def send(self, text: str, reply_to: str | None = None) -> SendResult:
+        assert self._client is not None
+        channel = self._client.create_partialuser(user_id=self.channel_id)
+        try:
+            await channel.send_message(
+                text, sender=self.config.bot_id, token_for=None, reply_to_message_id=reply_to
+            )
+        except twitchio.MessageRejectedError as exc:
+            return SendResult(False, exc.code, exc.message)
+        return SendResult(True)
+
+    async def lookup_user(self, login: str) -> UserRef | None:
+        assert self._client is not None
+        try:
+            users = await self._client.fetch_users(logins=[login])
+        except twitchio.HTTPException:
+            return None
+        if not users:
+            return None
+        user = users[0]
+        return UserRef(str(user.id), user.name or login, user.display_name or user.name or login)
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+
+
+async def authorize(config: Config) -> UserRef:
+    """One-time login: serve http://localhost:4343, wait for the bot account to approve, save the token."""
+    import asyncio
+
+    done: asyncio.Future[UserRef] = asyncio.get_running_loop().create_future()
+    token_path = config.data_dir / ".tio.tokens.json"
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+
+    class AuthClient(twitchio.Client):
+        async def event_oauth_authorized(self, payload: Any) -> None:
+            valid = await self.add_token(payload.access_token, payload.refresh_token)
+            await self.save_tokens(str(token_path))
+            if not done.done():
+                done.set_result(UserRef(str(valid.user_id), valid.login or "", valid.login or ""))
+
+    client = AuthClient(client_id=config.client_id, client_secret=config.client_secret)
+    async with client:
+        await client.login(load_tokens=False, save_tokens=False)
+        await client.adapter.run()
+        print(f"Open this URL in a browser where you're logged in as the BOT account:\n\n  {AUTH_URL}\n")
+        user = await done
+    return user
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_twitch_mapping.py -q`
+
+Expected: PASS (4 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 5: Smoke-test the login page wiring (no real credentials needed)**
+
+Run:
+
+```bash
+.venv/bin/python - <<'EOF'
+import asyncio, aiohttp, twitchio
+from bot.connectors.twitch import AUTH_URL
+async def main():
+    c = twitchio.Client(client_id="dummyclientid", client_secret="x")
+    await c.adapter.run()
+    await asyncio.sleep(0.3)
+    async with aiohttp.ClientSession() as s:
+        async with s.get(AUTH_URL, allow_redirects=False) as r:
+            print(r.status, r.headers.get("Location"))
+    await c.close()
+asyncio.run(main())
+EOF
+```
+
+Expected: `308 https://id.twitch.tv/oauth2/authorize?client_id=dummyclientid&redirect_uri=http://localhost:4343/oauth/callback&response_type=code&scope=...` with all four scopes (`user:read:chat`, `user:write:chat`, `user:bot`, `user:read:moderated_channels`) present in `scope=`, in any order.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add bot/connectors/twitch.py tests/test_twitch_mapping.py
+git commit -m "Add the Twitch connector and login flow"
+```
+
+### Task 17: Command-line entry point
+
+`python -m bot` runs on Twitch, `python -m bot auth` does the one-time login, and `python -m bot console` plays in the terminal using `data/console/`.
+
+- `.env` is read from next to the config file. Real environment variables win.
+- SIGINT and SIGTERM call `request_shutdown("signal")`, which stops cleanly with exit 0 (spec §13).
+- A logging filter hides TwitchIO's irrelevant "install starlette" hint.
+
+The CLI tests run the real process, the way a person would.
+
+**Files:**
+- Create: `bot/__main__.py`
+- Test: `tests/test_cli.py`
+
+- [ ] **Step 1: Write the failing test `tests/test_cli.py`**
+
+```python
+"""Runs the real `python -m bot` process, the way a person would."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).parent.parent
+
+
+def write_config(tmp_path: Path) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text('channel = "test_channel"\n[outbox]\nrate_per_second = 50\nburst = 50\n', encoding="utf-8")
+    return path
+
+
+def run_bot(*args: str, stdin: str = "", env_file: str | None = None, tmp_path: Path) -> subprocess.CompletedProcess:
+    if env_file is not None:
+        (tmp_path / ".env").write_text(env_file, encoding="utf-8")
+    clean_env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    return subprocess.run(
+        [sys.executable, "-m", "bot", *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        cwd=ROOT,
+        env=clean_env,
+    )
+
+
+def test_console_mode_plays_and_shuts_down(tmp_path):
+    config = write_config(tmp_path)
+    result = run_bot(
+        "console", "--config", str(config),
+        stdin="alice: ?coinflip\nbob: ?help\n@mod: ?bot shutdown\n",
+        tmp_path=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "bot → alice: 🪙" in result.stdout
+    assert "bot → bob: Games: ?scramble ?hangman ?skip" in result.stdout
+    assert "bot → mod: Shutting down (requested by mod)." in result.stdout
+    assert (tmp_path / "data" / "console" / "bot.db").exists()
+    assert list((tmp_path / "data" / "console" / "logs").glob("activity-*.jsonl"))
+
+
+def test_run_without_secrets_exits_2(tmp_path):
+    result = run_bot("--config", str(write_config(tmp_path)), env_file="", tmp_path=tmp_path)
+    assert result.returncode == 2
+    assert "TWITCH_CLIENT_ID is missing" in result.stderr
+
+
+def test_auth_without_client_credentials_exits_2(tmp_path):
+    result = run_bot("auth", "--config", str(write_config(tmp_path)), env_file="", tmp_path=tmp_path)
+    assert result.returncode == 2
+    assert "TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET" in result.stderr
+
+
+def test_bad_config_exits_2(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('channel = "has spaces"\n', encoding="utf-8")
+    result = run_bot("console", "--config", str(path), tmp_path=tmp_path)
+    assert result.returncode == 2
+    assert "channel must be a Twitch username" in result.stderr
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_cli.py -q`
+
+Expected: FAIL. the console test fails (`No module named bot.__main__`, so the return code is 1)
+
+- [ ] **Step 3: Write `bot/__main__.py`**
+
+```python
+"""Command line: `python -m bot` (run on Twitch), `python -m bot auth`, `python -m bot console`."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import dataclasses
+import logging
+import os
+import random
+import signal
+import sys
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+from bot.activity_log import ActivityLog
+from bot.assets import Assets
+from bot.clock import Clock
+from bot.config import Config, ConfigError, load_config
+from bot.core import EXIT_CONFIG, BotCore
+from bot.http import HttpClient
+from bot.stats import StatsStore
+
+
+class _HideStarletteHint(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "StarletteAdapter" not in record.getMessage()
+
+
+def _setup_logging() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("twitchio.client").addFilter(_HideStarletteHint())
+
+
+async def _serve(config: Config, *, console: bool) -> int:
+    clock = Clock()
+    log = ActivityLog(config.data_dir / "logs", clock, config.log_retention_days)
+    stats = StatsStore(config.data_dir / "bot.db")
+    if console:
+        from bot.connectors.console import ConsoleConnector
+
+        connector = ConsoleConnector(clock=clock)
+    else:
+        from bot.connectors.twitch import TwitchConnector
+
+        connector = TwitchConnector(config, log, clock)
+    core = BotCore(
+        config=config,
+        connector=connector,
+        stats=stats,
+        log=log,
+        clock=clock,
+        assets=Assets(),
+        http=HttpClient(),
+        rng=random.Random(),
+    )
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, core.request_shutdown, "signal")
+    try:
+        return await core.run()
+    finally:
+        stats.close()
+
+
+async def _auth(config: Config) -> int:
+    from bot.connectors.twitch import authorize
+
+    user = await authorize(config)
+    print(f"\nAuthorized as {user.login} (user id {user.user_id}).")
+    print(f"Put this line in .env:  BOT_ID={user.user_id}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m bot", description="Offline chat bot")
+    parser.add_argument("mode", nargs="?", default="run", choices=["run", "auth", "console"])
+    parser.add_argument("--config", type=Path, default=Path("config.toml"))
+    args = parser.parse_args(argv)
+    _setup_logging()
+
+    env = {**dotenv_values(args.config.parent / ".env"), **os.environ}
+    env = {k: v for k, v in env.items() if v is not None}
+    try:
+        if args.mode == "run":
+            config = load_config(args.config, env)
+        else:
+            config = load_config(args.config, env, require_twitch=False)
+            if args.mode == "auth" and not (config.client_id and config.client_secret):
+                raise ConfigError("TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET must be set in .env")
+    except ConfigError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+
+    if args.mode == "auth":
+        return asyncio.run(_auth(config))
+    if args.mode == "console":
+        config = dataclasses.replace(config, data_dir=config.data_dir / "console")
+    return asyncio.run(_serve(config, console=args.mode == "console"))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `.venv/bin/pytest tests/test_cli.py -q`
+
+Expected: PASS (4 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+
+- [ ] **Step 5: Play a round by hand**
+
+Run: `.venv/bin/python -m bot console`, then type:
+
+```text
+alice: ?help
+alice: ?coinflip
+@mod: ?bot status
+@mod: ?bot shutdown
+```
+
+Expected: replies like `bot → alice: Games: ?scramble ?hangman ?skip | ...`, then `bot → mod: ON · up 0s · game: none · v0.1.0`, then `bot → mod: Shutting down (requested by mod).`, and the process exits on its own (`echo $?` prints `0`). Games can't start yet: the word lists arrive in Task 18.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add bot/__main__.py tests/test_cli.py
+git commit -m "Add the command-line entry point"
+```
+
+### Task 18: Bundled content (word lists, 8-ball, fortunes, fallbacks)
+
+This is content, not code, so this task gives exact rules plus a test that enforces them,
+instead of listing every word.
+
+**The streamer and game lists need extra care.** Robert asked to review them because made-up
+entries are a real risk:
+- Every entry in `streamers.txt` and `games.txt` must be checked against a public source while
+  you write it. Don't take any name from memory alone.
+- Record each entry's source in `bot/content/words/SOURCES.md`; the test enforces a row per
+  entry.
+- Robert signs off on both files in Task 20 before the bot goes live anywhere (spec §7, review
+  gate).
+
+**Files:**
+- Test: `tests/test_content.py`
+- Create:
+  - `bot/content/8ball.txt` and `bot/content/fortunes.txt`
+  - `bot/content/fallback_catfacts.txt`, `fallback_dogfacts.txt`, `fallback_facts.txt`, and
+    `fallback_dadjokes.txt`
+  - `bot/content/words/{animals,countries,food,games,general,streamers}.txt`
+  - `bot/content/words/SOURCES.md`
+
+- [ ] **Step 1: Write the failing test `tests/test_content.py`**
+
+```python
+"""Rules for the bundled content files. These run against the real bot/content folder."""
+
+import re
+
+import pytest
+
+from bot.assets import Assets
+from bot.games.hangman import _valid as hangman_valid
+from bot.games.scramble import _valid as scramble_valid
+
+CATEGORIES = ["animals", "countries", "food", "games", "general", "streamers"]
+REAL = Assets()
+
+
+def test_categories_are_exactly_the_approved_six():
+    assert REAL.categories() == CATEGORIES
+
+
+@pytest.mark.parametrize("category", CATEGORIES)
+def test_word_lists(category):
+    words = REAL.words(category)
+    assert len(words) >= 100, f"{category}: need at least 100 entries, have {len(words)}"
+    lowered = [w.lower() for w in words]
+    dupes = sorted({w for w in lowered if lowered.count(w) > 1})
+    assert not dupes, f"{category}: duplicates {dupes}"
+    bad = [w for w in words if not hangman_valid(w)]
+    assert not bad, f"{category}: entries Hangman can't use (letters, spaces, - and ' only; 3+ letters): {bad}"
+    scramble = [w for w in words if scramble_valid(w)]
+    assert len(scramble) >= 40, f"{category}: need 40+ single words of 4-10 letters for Scramble, have {len(scramble)}"
+
+
+@pytest.mark.parametrize("category", ["games", "streamers"])
+def test_every_game_and_streamer_has_a_recorded_source(category):
+    sources = (REAL.root / "words" / "SOURCES.md").read_text(encoding="utf-8").lower()
+    missing = [w for w in REAL.words(category) if f"| {w.lower()} |" not in sources]
+    assert not missing, f"{category}: no source row in words/SOURCES.md for {missing}"
+
+
+def test_8ball_has_20_answers():
+    assert len(REAL.lines("8ball")) == 20
+
+
+@pytest.mark.parametrize("name, minimum", [
+    ("fortunes", 50), ("fallback_catfacts", 50), ("fallback_dogfacts", 50),
+    ("fallback_facts", 50), ("fallback_dadjokes", 50),
+])
+def test_text_lists(name, minimum):
+    lines = REAL.lines(name)
+    assert len(lines) >= minimum
+    assert len(set(lines)) == len(lines), f"{name} has duplicate lines"
+    too_long = [line for line in lines if len(line) > 400]
+    assert not too_long, f"{name}: lines over 400 characters: {too_long}"
+    assert all(not re.search(r"https?://", line) for line in lines), f"{name}: no links in chat content"
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+Run: `.venv/bin/pytest tests/test_content.py -q`
+
+Expected: FAIL (`FileNotFoundError` for the missing content files; `categories()` returns `[]`).
+
+- [ ] **Step 3: Write `bot/content/8ball.txt`**: the 20 classic Magic 8-Ball answers, one per line
+
+```text
+It is certain.
+It is decidedly so.
+Without a doubt.
+Yes, definitely.
+You may rely on it.
+As I see it, yes.
+Most likely.
+Outlook good.
+Yes.
+Signs point to yes.
+Reply hazy, try again.
+Ask again later.
+Better not tell you now.
+Cannot predict now.
+Concentrate and ask again.
+Don't count on it.
+My reply is no.
+My sources say no.
+Outlook not so good.
+Very doubtful.
+```
+
+- [ ] **Step 4: Write the four general word lists**
+
+Write `animals.txt`, `countries.txt`, `food.txt`, and `general.txt` in `bot/content/words/`,
+with one entry per line.
+
+**What goes in each file:**
+
+| File | Contents |
+|---|---|
+| `animals` | Well-known animals anyone would recognize (`alligator`, `penguin`, `giraffe`, `sea lion`). |
+| `countries` | Countries of the world (`france`, `brazil`, `japan`, `south korea`). |
+| `food` | Everyday food plus snack and fast-food items: `ramen`, `pizza`, `takis`, `boba`, `wingstop`, `chipotle`, `hot cheetos`. Brand names are fine if they're widely known in the US. |
+| `general` | Common, recognizable English nouns (`window`, `guitar`, `thunder`, `backpack`). Avoid obscure words; chat should be able to solve them. |
+
+**Rules for every word file (the test checks most of these):**
+- At least 100 entries.
+- At least 40 single words of 4 to 10 letters, so Scramble has enough.
+- Lowercase.
+- ASCII letters, spaces, hyphens, and apostrophes only.
+- 3+ letters and at most 30 characters.
+- No duplicates.
+- Nothing sexual, no slurs, nothing that's an insult when scrambled or revealed.
+
+- [ ] **Step 5: Research and write `streamers.txt`, `games.txt`, and `SOURCES.md`**
+
+Follow the same rules as Step 4, plus these:
+
+**`streamers.txt`:**
+- Well-known streamers (Twitch or YouTube or Kick), written as the name chat actually uses:
+  `xqc`, `ludwig`, `pokimane`, `shroud`, `kai cenat`.
+- Keep spaces as spaces and drop other symbols. A name with digits isn't allowed, so leave it out.
+- Skip anyone best known for a scandal.
+
+**`games.txt`:** popular and commonly streamed video games, for example `minecraft`, `valorant`,
+`geoguessr`, `balatro`, `lethal company`, `elden ring`.
+
+**Verifying entries:**
+- **Streamers:** confirm the person exists and the spelling, using Wikipedia,
+  TwitchTracker/StreamsCharts, or their official channel page.
+- **Games:** confirm the title and spelling on Wikipedia, Steam, or the publisher's site.
+
+**`SOURCES.md` format:** one table row per entry. The entry goes lowercase, exactly as in the
+`.txt` file, between `| ` and ` |`:
+
+```markdown
+# Sources for streamers.txt and games.txt
+
+Every entry was checked against the linked page on <date>. Robert reviews this file before go-live.
+
+## streamers
+
+| entry | source |
+|---|---|
+| xqc | https://en.wikipedia.org/wiki/XQc |
+
+## games
+
+| entry | source |
+|---|---|
+| minecraft | https://en.wikipedia.org/wiki/Minecraft |
+```
+
+- [ ] **Step 6: Write `fortunes.txt` and the four fallback files**
+
+| File | Contents |
+|---|---|
+| `fortunes.txt` | 50+ short, upbeat fortune-cookie lines in the classic style ("A pleasant surprise is waiting for you."). One sentence each, no emoji, nothing negative. |
+| `fallback_catfacts.txt`, `fallback_dogfacts.txt`, `fallback_facts.txt` | 50+ well-established facts each, one per line, under 400 characters, no links. These are the backups for when an API is down. Only use facts you're confident are true; if unsure, leave it out. |
+| `fallback_dadjokes.txt` | 50+ clean dad jokes, one per line, setup and punchline on the same line. |
+
+- [ ] **Step 7: Run the content test and the full suite**
+
+Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
+Expected: `15 passed`, then all 162 tests pass.
+
+- [ ] **Step 8: Play every game by hand in console mode**
+
+Run: `.venv/bin/python -m bot console`, then play `?scramble`, `?scramble categories`,
+`?hangman streamers` (guess with `?g`), `?skip` from three different names, `?cookie`, and
+`?leaderboard`. Expected: words come from the new lists, and the bot never reveals a blank or
+garbled word.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add bot/content tests/test_content.py
+git commit -m "Add bundled word lists, fortunes, 8-ball answers, and fallbacks"
+```
+
+
+### Task 19: README and systemd unit
+
+Covers spec §15 and §16 ("A README covers setup, the commands, and the server move"). The service file encodes the restart rules: restart after a crash, stay down after `?bot shutdown` (exit 0), never restart on exit 2 or 3, and give up after 5 restarts in 10 minutes.
+
+**Files:**
+- Create: `README.md`, `deploy/offline-chat-bot.service`
+
+- [ ] **Step 1: Write `deploy/offline-chat-bot.service`**
+
+```ini
+[Unit]
+Description=Offline chat bot (Twitch)
+After=network-online.target
+Wants=network-online.target
+# At most 5 automatic restarts in 10 minutes, then systemd gives up.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+User=chatbot
+WorkingDirectory=/opt/offline-chat-bot
+ExecStart=/opt/offline-chat-bot/.venv/bin/python -m bot
+# Restart after a crash, but not after ?bot shutdown (exit 0),
+# a config error (exit 2), or a needed re-login (exit 3).
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=2 3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+- [ ] **Step 2: Write `README.md`**
+
+````markdown
+# Offline Chat Bot
+
+A Twitch chat bot for jasontheween's offline chat: chat games (Scramble, Hangman), quick fun
+commands, per-game points with leaderboards, mod controls (pause, resume, shut down), and a
+daily activity log. Design: `docs/superpowers/specs/2026-10-04-offline-chat-bot-design.md`.
+
+## Commands
+
+| Command | Who | What it does |
+|---|---|---|
+| `?help` / `?commands`, `?help <command>` | anyone | List commands, or explain one |
+| `?scramble [category]`, `?scramble categories` | anyone | Unscramble a word; 10/7/4 points depending on hints |
+| `?hangman [category]`, `?hangman categories` | anyone | Hangman; guess with `?g <letter>` or `?g <answer>` |
+| `?skip` | anyone | Vote to skip the current word (3 votes) |
+| `?leaderboard [game] [1-10]` | anyone | Top players by points |
+| `?gamestats [game] [username]` | anyone | Wins, games played, points |
+| `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke` | anyone | Quick fun |
+| `?cookie`, `?cookie give <username>` | anyone | Daily fortune cookie (resets 00:00 UTC) |
+| `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check |
+| `?bot shutdown` | mods, broadcaster, owners | Stop the bot process. Only someone with access to the machine can start it again |
+| `?stopgame` | mods, broadcaster, owners | End the current game with no points |
+
+Categories: animals, countries, food, games, general, streamers.
+
+## Try it without Twitch
+
+```
+python3.12 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m bot console
+```
+
+Type lines like `alice: ?scramble animals`. A leading `@` makes the user a mod (`@mod: ?bot off`).
+Console mode keeps its own database under `data/console/`, separate from the real one.
+
+## Set up on Twitch (one time)
+
+1. **Bot account:** create a new Twitch account for the bot and verify its email.
+2. **Twitch app:** at https://dev.twitch.tv/console, register an application.
+   - OAuth Redirect URL: `http://localhost:4343/oauth/callback` (exactly).
+   - Category: Chat Bot. Client type: Confidential.
+   - Copy the Client ID and create a Client Secret.
+3. **Secrets:** `cp .env.example .env`, then fill in `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, and
+   your own Twitch user ID in `OWNER_IDS`.
+4. **Log the bot in:** run `.venv/bin/python -m bot auth`. Open the printed URL in a browser where
+   you're logged in as the **bot** account and approve. Put the printed `BOT_ID=...` line in `.env`.
+   The login is saved in `data/.tio.tokens.json`. Never share or commit that file.
+5. **Channel:** set `channel` in `config.toml` to the channel the bot should join.
+6. **Mod the bot** in that channel (`/mod <botaccount>` in its chat). Without mod status the bot
+   still runs, but it can only send 1 message per second, slow mode applies, and it won't show
+   the Chat Bot badge. The startup log says `is_mod` either way.
+
+## Run
+
+```
+.venv/bin/python -m bot
+```
+
+- Ctrl+C stops it cleanly.
+- `?bot shutdown` from a mod also stops it, with exit code 0.
+
+**Exit codes:**
+- 0: stopped on purpose.
+- 1: crashed.
+- 2: config problem (the message names the setting).
+- 3: the Twitch login needs redoing (`python -m bot auth`).
+
+## Settings
+
+- `config.toml` holds the non-secret settings: channel, prefix, cooldowns, enabled games, send
+  rate, and log retention.
+- `.env` holds the secrets.
+- The word lists are plain text in `bot/content/words/`, one entry per line. Adding a file adds
+  a category.
+- `bot/content/words/SOURCES.md` records where each streamer and game name was verified.
+
+## Data and logs
+
+- `data/bot.db` (SQLite) holds points, rounds, daily cookies, and the paused flag. The paused
+  flag survives restarts.
+- `data/logs/activity-YYYY-MM-DD.jsonl` is one file per UTC day. It records commands, game
+  starts and ends, admin actions (who paused or shut down the bot), connection events, and
+  errors. Ordinary chat is never logged. Files older than 30 days are deleted.
+
+## Move to a server
+
+1. Copy the project folder to the server (for example `/opt/offline-chat-bot`), including
+   `.env` and `data/.tio.tokens.json`.
+2. On the server: `python3.12 -m venv .venv && .venv/bin/pip install -e .`
+3. Create a user for the bot (`sudo useradd -r chatbot`) and give it the folder
+   (`sudo chown -R chatbot /opt/offline-chat-bot`).
+4. `sudo cp deploy/offline-chat-bot.service /etc/systemd/system/`, then
+   `sudo systemctl daemon-reload && sudo systemctl enable --now offline-chat-bot`.
+5. **How it behaves on the server:**
+   - **After a crash:** restarts after 5 seconds, at most 5 times in 10 minutes.
+   - **After `?bot shutdown`:** stays down until someone with server access runs
+     `sudo systemctl start offline-chat-bot`.
+   - **Logs:** `journalctl -u offline-chat-bot -f`.
+6. **Run only one copy of the bot at a time.** If it's running on both your laptop and the
+   server, every command is answered twice.
+
+## Go live in jasontheween's chat
+
+1. A channel mod runs `/mod <botaccount>` there.
+2. Set `channel = "jasontheween"` in `config.toml`.
+3. Restart the bot.
+
+## Tests
+
+```
+.venv/bin/pytest
+```
+````
+
+- [ ] **Step 3: Full verification**
+
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (162).
+
+Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add README.md deploy/offline-chat-bot.service
+git commit -m "Add README and systemd unit"
+```
+
+- [ ] **Step 5: Update the workspace project profile**
+
+In the outer workspace (`../projects/offline-chat-bot.md`):
+
+- set Status to "Phase 1 built, awaiting live test" with the date;
+- set the Run and Test commands to the real ones;
+- add `README.md` under Authoritative Files.
+
+Commit in the outer repo: `git -C .. add projects/offline-chat-bot.md && git -C .. commit -m "offline-chat-bot: Phase 1 built"`.
+
+### Task 20: Live test on Twitch with Robert (manual)
+
+This is spec §14.3 and the last items of §16. It needs Robert at the keyboard, because only he
+can create accounts and approve logins. The agent walks him through it and records the results.
+
+**Setup (Robert):**
+- [ ] **Step 1:** Create the bot's Twitch account and verify its email.
+- [ ] **Step 2:** Register the app at https://dev.twitch.tv/console:
+  - redirect URL `http://localhost:4343/oauth/callback`;
+  - category Chat Bot;
+  - client type Confidential.
+- [ ] **Step 3:** Fill in `.env` (`cp .env.example .env`), including his own user ID in
+  `OWNER_IDS`.
+- [ ] **Step 4:** Run `.venv/bin/python -m bot auth` and approve as the **bot** account. Copy
+  the printed `BOT_ID=` line into `.env`.
+- [ ] **Step 5:** Set `channel` in `config.toml` to Robert's channel. In his chat, type
+  `/mod <botaccount>`.
+- [ ] **Step 6:** Have a second, non-mod Twitch account ready, or a friend.
+
+**Checklist** (run `.venv/bin/python -m bot`; check each item off):
+- [ ] **Step 7:** The startup log shows `startup ... "is_mod": true`, and the bot's chat
+  messages show the purple Chat Bot badge.
+- [ ] **Step 8:** Scramble ends three ways: won, timed out (wait 45 s), and skipped (three
+  `?skip`s). Hangman ends three ways too: won with `?g`, lost on 6 wrong letters, and timed
+  out. Typing a plain "W" during Hangman does nothing.
+- [ ] **Step 9:** `?gamestats`, `?gamestats hangman <name>`, `?leaderboard`, and
+  `?leaderboard scramble 3` show the right numbers.
+- [ ] **Step 10:** Every quick command answers: `?8ball`, `?coinflip`, `?catfact`, `?dogfact`,
+  `?fact`, `?dadjoke`, `?cookie`, `?cookie give <second account>`, `?help`, `?help hangman`.
+- [ ] **Step 11:** The non-mod account's `?bot off` and `?stopgame` do nothing.
+- [ ] **Step 12:** A mod's `?bot off` works: games are ignored. `?bot status` shows PAUSED.
+  Restart the bot and it's still paused. `?bot on` resumes.
+- [ ] **Step 13:** `?bot shutdown` posts "Shutting down (requested by ...)" and the process exits.
+  `echo $?` prints `0`.
+- [ ] **Step 14:** `data/logs/activity-<today>.jsonl` contains the following, and no ordinary
+  chat lines:
+  - `startup`, `connected`, `command`, `game_start`, `game_end`;
+  - `admin` (off, on, shutdown, each with who did it);
+  - `shutdown`.
+- [ ] **Step 15:** Robert reviews `bot/content/words/streamers.txt`, `games.txt`, and
+  `SOURCES.md`, and approves them or lists changes. Make the changes, rerun
+  `.venv/bin/pytest tests/test_content.py`, and commit.
+- [ ] **Step 16:** Record the results (date, what passed, anything changed) in the Execution log
+  below. Then commit: `git add docs/superpowers/plans && git commit -m "Record Phase 1 live test results"`.
+
+Phase 1 is done when every box above is checked (spec §16). Going live in jasontheween's chat
+is then a config change: the contact mods the bot, `channel = "jasontheween"`, restart.
+
+## Execution log
+
+Record here anything that changes during execution: review findings, deviations from this
+plan, and the live test results.
