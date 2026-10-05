@@ -6,7 +6,7 @@ import math
 import re
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ _SCHEMA: dict[str, set[str] | None] = {
     "games": {"enabled", "max_running", "cooldown_seconds", "busy_queue"},
     "outbox": {"rate_per_second", "burst", "max_queue"},
     "logs": {"retention_days"},
+    "rng": {"meme_badges"},
 }
 
 
@@ -50,6 +51,7 @@ class Config:
     outbox_max_queue: int
     log_retention_days: int
     data_dir: Path
+    rng_meme_badges: bool = True  # ?rng's 69/420 badges
 
 
 def _get(table: Mapping[str, Any], dotted: str, default: Any) -> Any:
@@ -161,6 +163,10 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         log_retention_days=_number(table, "logs.retention_days", 30, integer=True, minimum=1),
         data_dir=path.parent / "data",
     )
+    meme_badges = _get(table, "rng.meme_badges", True)
+    if not isinstance(meme_badges, bool):
+        raise ConfigError(f"rng.meme_badges must be true or false, got {meme_badges!r}")
+    config = replace(config, rng_meme_badges=meme_badges)
     if config.busy_queue > config.outbox_max_queue:
         raise ConfigError(
             f"games.busy_queue ({config.busy_queue}) can't be larger than outbox.max_queue ({config.outbox_max_queue})"

@@ -53,6 +53,7 @@ def test_defaults_and_env(tmp_path):
         ('channel = "ok_name"\n[games]\nenabled = []', "at least one game"),
         ("channel = 123", "channel must be a Twitch username"),
         ('channel = "ok_name"\n[games]\nbusy_queue = 40', "can't be larger than outbox.max_queue"),
+        ('channel = "ok_name"\n[rng]\nmeme_badges = "yes"', "rng.meme_badges must be true or false"),
     ],
 )
 def test_invalid_values_name_the_key(tmp_path, toml, message):
@@ -82,3 +83,9 @@ def test_duplicate_games_are_dropped(tmp_path):
 def test_bot_id_must_be_numeric(tmp_path):
     with pytest.raises(ConfigError, match="BOT_ID"):
         load_config(write(tmp_path, 'channel = "ok_name"\n'), {**ENV, "BOT_ID": "mybot"})
+
+
+def test_rng_meme_badges_default_on_and_can_be_turned_off(tmp_path):
+    assert load_config(write(tmp_path, 'channel = "ok_name"'), ENV).rng_meme_badges is True
+    off = load_config(write(tmp_path, 'channel = "ok_name"\n[rng]\nmeme_badges = false'), ENV)
+    assert off.rng_meme_badges is False

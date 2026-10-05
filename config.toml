@@ -20,3 +20,6 @@ max_queue = 30              # extra messages beyond this are dropped and logged
 
 [logs]
 retention_days = 30
+
+[rng]
+meme_badges = true          # ?rng's 69 and 420 badges; false turns them off
