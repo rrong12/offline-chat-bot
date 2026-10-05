@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from bot.commands import Command, CommandContext, CommandRegistry
@@ -10,16 +11,17 @@ from bot.text import clean_username
 
 DEFAULT_LIMIT = 5
 MAX_LIMIT = 10
+_NUMBER = re.compile(r"-?[0-9]+")  # ASCII only: str.isdigit() accepts "²", which int() rejects
 
 
 def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: Sequence[str]) -> None:
-    games = list(game_names)
+    games = [g.lower() for g in game_names]
 
     async def leaderboard(ctx: CommandContext) -> None:
         game: str | None = None
         limit = DEFAULT_LIMIT
         for arg in ctx.argv[:2]:
-            if arg.isdigit():
+            if _NUMBER.fullmatch(arg):
                 limit = max(1, min(MAX_LIMIT, int(arg)))
             elif arg.lower() in games:
                 game = arg.lower()
@@ -37,6 +39,7 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
     async def gamestats(ctx: CommandContext) -> None:
         argv = ctx.argv
         game: str | None = None
+        # A first argument that names a game is the game, even if someone's login is the same word.
         if argv and argv[0].lower() in games:
             game = argv[0].lower()
             argv = argv[1:]

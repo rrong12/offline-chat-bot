@@ -54,6 +54,13 @@ async def test_leaderboard_game_and_limit_in_any_order(c: Cmds):
     assert await c.run("?leaderboard 99") == "🏆 Top 2 overall: 1. Carol (22) 2. Bob (17)"
 
 
+async def test_leaderboard_limit_edge_cases(c: Cmds):
+    assert await c.run("?leaderboard 0") == "🏆 Top 1 overall: 1. Carol (22)"
+    assert await c.run("?leaderboard -5") == "🏆 Top 1 overall: 1. Carol (22)"
+    assert await c.run("?leaderboard " + chr(0xB2)) == "Unknown game. Games: scramble, hangman"  # superscript two
+    assert await c.run("?leaderboard SCRAMBLE 1 extra words") == "🏆 Top 1 scramble: 1. Bob (17)"
+
+
 async def test_leaderboard_unknown_game_and_empty(c: Cmds):
     assert await c.run("?leaderboard chess") == "Unknown game. Games: scramble, hangman"
     empty = Cmds()
@@ -78,6 +85,7 @@ async def test_gamestats_played_without_points_has_no_rank(c: Cmds):
 async def test_gamestats_missing(c: Cmds):
     assert await c.run("?gamestats nobody_here") == "No stats for that user yet."
     assert await c.run("?gamestats bad/name") == "That's not a valid username."
+    assert await c.run("?gamestats @") == "That's not a valid username."
     assert await c.run("?gamestats hangman bob") == "No hangman stats for Bob yet."
     assert await c.run("?gamestats", "dave") == "No stats for dave yet."
 
@@ -90,6 +98,6 @@ async def test_help_overview_and_details(c: Cmds):
     )
 
 
-async def test_help_unknown_never_echoes_unsafe_text(c: Cmds):
-    assert await c.run("?help nope") == "No command named nope. Try ?help."
-    assert await c.run("?help <script>") == "No command. Try ?help."
+async def test_help_unknown_never_echoes_what_was_typed(c: Cmds):
+    assert await c.run("?help nope") == "No command by that name. Try ?help."
+    assert await c.run("?help jason_is_trash") == "No command by that name. Try ?help."

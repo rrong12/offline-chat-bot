@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import re
-
 from bot.commands import Command, CommandContext, CommandRegistry
-
-_SAFE_NAME = re.compile(r"^[a-z0-9_]{1,20}$")
 
 
 def register_help(registry: CommandRegistry) -> None:
@@ -14,12 +10,9 @@ def register_help(registry: CommandRegistry) -> None:
         if not ctx.argv:
             ctx.reply(registry.help_overview())
             return
-        name = ctx.argv[0].lower().removeprefix(ctx.prefix)
-        text = registry.help_for(name)
-        if text is None:
-            shown = f" named {name}" if _SAFE_NAME.fullmatch(name) else ""
-            text = f"No command{shown}. Try {ctx.prefix}help."
-        ctx.reply(text)
+        text = registry.help_for(ctx.argv[0].lower().removeprefix(ctx.prefix))
+        # Never repeat what was typed: an unknown name could be any phrase a troll chose.
+        ctx.reply(text or f"No command by that name. Try {ctx.prefix}help.")
 
     registry.add(
         Command(
