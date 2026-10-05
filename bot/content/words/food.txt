@@ -1,0 +1,152 @@
+apple
+apple pie
+avocado
+bacon
+bagel
+baked potato
+banana
+barbecue
+biscuit
+blueberry
+boba
+breadsticks
+broccoli
+brownie
+burger
+burger king
+burrito
+butter
+caesar salad
+cake
+carrot
+cereal
+cheddar
+cheese
+cheeseburger
+cheesecake
+cheetos
+chick-fil-a
+chicken nuggets
+chicken wings
+chili
+chipotle
+chocolate
+churro
+cinnamon roll
+coffee
+cookie
+corn
+corn dog
+cotton candy
+croissant
+cupcake
+curry
+domino's
+donut
+doritos
+dumplings
+dunkin
+egg roll
+empanada
+enchilada
+falafel
+five guys
+fortune cookie
+french fries
+french toast
+fried chicken
+fried rice
+garlic bread
+grilled cheese
+guacamole
+gummy bears
+hamburger
+honey
+hot cheetos
+hot chocolate
+hot dog
+hummus
+ice cream
+in-n-out
+jelly beans
+kfc
+kimchi
+kit kat
+krispy kreme
+lemon
+lemonade
+lettuce
+lime
+mac and cheese
+mango
+maple syrup
+marshmallow
+mashed potatoes
+mcdonald's
+meatball
+meatloaf
+milkshake
+mochi
+mozzarella sticks
+muffin
+mushroom
+nachos
+noodles
+oatmeal
+omelet
+onion rings
+orange
+orange chicken
+pad thai
+pancakes
+panda express
+pasta
+peanut butter
+pepperoni
+pho
+pickle
+pineapple
+pizza
+pizza hut
+popeyes
+potato
+pretzel
+pringles
+pudding
+pumpkin pie
+quesadilla
+ramen
+raspberry
+ravioli
+reese's
+rice
+salad
+salsa
+sandwich
+shrimp
+skittles
+smoothie
+snickers
+soup
+spaghetti
+spring roll
+starbucks
+steak
+strawberry
+subway
+sushi
+taco
+taco bell
+takis
+tamale
+tater tots
+tiramisu
+toast
+tomato
+tortilla
+twix
+waffles
+watermelon
+wendy's
+wingstop
+yogurt
