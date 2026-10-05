@@ -106,3 +106,76 @@ def test_text_lists(name, minimum):
     too_long = [line for line in lines if len(line) > 400]
     assert not too_long, f"{name}: lines over 400 characters: {too_long}"
     assert all(not re.search(r"https?://", line) for line in lines), f"{name}: no links in chat content"
+
+
+# Phase 2 content: trivia (Open Trivia DB), riddles (written for the bot), Higher or Lower (Wikipedia views).
+TRIVIA_CATEGORIES = ["anime", "animals", "games", "general", "geography", "history", "movies", "music",
+                     "science", "sports", "tv"]
+
+
+def test_trivia_bank():
+    from bot.games.trivia import Trivia, opening
+
+    questions = REAL.json("trivia")["questions"]
+    assert len(questions) >= 1000
+    assert len({q["id"] for q in questions}) == len(questions)
+    assert Trivia.category_names(REAL) == sorted(TRIVIA_CATEGORIES)
+    blocked = BlockedWords.load(REAL)
+    for category in TRIVIA_CATEGORIES:
+        assert sum(q["category"] == category for q in questions) >= 30, category
+    for q in questions:
+        assert q["difficulty"] in ("easy", "medium", "hard"), q["id"]
+        texts = [q["question"], q["answer"], *q.get("wrong", [])]
+        assert not any(blocked.found_in(t) for t in texts), q["id"]
+        if q["difficulty"] == "easy":
+            assert len(q["wrong"]) == 3 and q["answer"] not in q["wrong"], q["id"]
+            options = [q["answer"], *q["wrong"]]
+        else:
+            assert len(q["answer"].split()) <= 3 and len(q["answer"]) <= 25, q["id"]
+            options = []
+        assert len(opening(q["category"], q["difficulty"], q["question"], options, 30)) <= 480, q["id"]
+
+
+def test_trivia_is_credited():
+    credits = (REAL.root / "TRIVIA_CREDITS.md").read_text(encoding="utf-8")
+    assert "Open Trivia DB" in credits and "CC BY-SA 4.0" in credits
+
+
+def _stems(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def test_riddles():
+    riddles = REAL.json("riddles")
+    assert len(riddles) >= 150
+    texts = [r["riddle"] for r in riddles]
+    assert len(set(texts)) == len(texts)
+    blocked = BlockedWords.load(REAL)
+    for r in riddles:
+        assert len(r["riddle"]) <= 300 and r["clue"], r["riddle"]
+        assert r["answers"] and all(re.fullmatch(r"[a-z0-9]+( [a-z0-9]+){0,2}", a) for a in r["answers"]), r["riddle"]
+        # guesses lose a leading article before matching, so an answer must not start with one
+        assert not any(re.match(r"(a|an|the) ", a) for a in r["answers"]), r["riddle"]
+        clue_words = _stems(r["clue"])
+        answer_words = {w for a in r["answers"] for w in a.split()}
+        for cw in clue_words:
+            for aw in answer_words:
+                assert cw != aw, (r["riddle"], aw)
+                if len(cw) >= 4 and len(aw) >= 4:
+                    assert cw[:4] != aw[:4], (r["riddle"], aw)  # the clue mustn't give the answer away
+        assert not any(blocked.found_in(t) for t in (r["riddle"], r["clue"], *r["answers"])), r["riddle"]
+
+
+def test_higherlower_terms():
+    from bot.games.higherlower import MIN_RATIO
+
+    terms = REAL.json("higherlower")["terms"]
+    assert len(terms) >= 300
+    names = [t["name"] for t in terms]
+    assert len(set(names)) == len(names)
+    blocked = BlockedWords.load(REAL)
+    for t in terms:
+        assert isinstance(t["views"], int) and t["views"] > 0, t["name"]
+        assert len(t["name"]) <= 30 and not blocked.found_in(t["name"]), t["name"]
+        partners = sum(max(o["views"], t["views"]) >= MIN_RATIO * min(o["views"], t["views"]) for o in terms)
+        assert partners >= 50, t["name"]
