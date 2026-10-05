@@ -6,6 +6,7 @@ import re
 from collections.abc import Sequence
 
 from bot.commands import Command, CommandContext, CommandRegistry
+from bot.games import ALL_GAMES
 from bot.stats import StatsStore
 from bot.text import clean_username
 
@@ -20,6 +21,13 @@ def _plural(count: int, word: str) -> str:
 
 def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: Sequence[str]) -> None:
     games = [g.lower() for g in game_names]
+    # a game's aliases work here too: "?leaderboard hl" means higherlower
+    aliases = {a: cls.name for cls in ALL_GAMES.values() if cls.name in games for a in cls.aliases}
+
+    def game_name(word: str) -> str | None:
+        word = word.lower()
+        word = aliases.get(word, word)
+        return word if word in games else None
 
     async def leaderboard(ctx: CommandContext) -> None:
         game: str | None = None
@@ -27,8 +35,8 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
         for arg in ctx.argv[:2]:
             if _NUMBER.fullmatch(arg):
                 limit = max(1, min(MAX_LIMIT, int(arg)))
-            elif arg.lower() in games:
-                game = arg.lower()
+            elif game_name(arg):
+                game = game_name(arg)
             else:
                 ctx.reply(f"Unknown game. Games: {', '.join(games)}")
                 return
@@ -44,8 +52,8 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
         argv = ctx.argv
         game: str | None = None
         # A first argument that names a game is the game, even if someone's login is the same word.
-        if argv and argv[0].lower() in games:
-            game = argv[0].lower()
+        if argv and game_name(argv[0]):
+            game = game_name(argv[0])
             argv = argv[1:]
         if argv:
             login = clean_username(argv[0])

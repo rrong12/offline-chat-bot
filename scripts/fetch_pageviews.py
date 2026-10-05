@@ -26,6 +26,8 @@ OUT = ROOT / "bot" / "content" / "higherlower.json"
 USER_AGENT = "offline-chat-bot/0.1 (https://github.com/rrong12/offline-chat-bot)"
 ACTION_API = "https://en.wikipedia.org/w/api.php"
 VIEWS_API = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user"
+REVIEW_BELOW = 3000  # monthly views this low usually mean the wrong article
+MIN_TERMS = 100
 
 
 def get(url: str) -> dict:
@@ -37,8 +39,13 @@ def get(url: str) -> dict:
         except urllib.error.HTTPError as exc:
             if exc.code != 429 or attempt == 5:
                 raise
-            wait = int(exc.headers.get("Retry-After") or 0) or 5 * 2**attempt  # rate limited: back off
+            retry_after = exc.headers.get("Retry-After") or ""
+            wait = int(retry_after) if retry_after.isdigit() else 5 * 2**attempt  # rate limited: back off
             time.sleep(min(wait, 120))
+        except (urllib.error.URLError, TimeoutError):  # dropped connection: try again
+            if attempt == 5:
+                raise
+            time.sleep(5 * 2**attempt)
     raise AssertionError("unreachable")
 
 
@@ -52,13 +59,17 @@ def resolve(titles: list[str]) -> dict[str, str | None]:
     result: dict[str, str | None] = {}
     for i in range(0, len(titles), 50):
         batch = titles[i : i + 50]
-        query = urllib.parse.urlencode(
-            {"action": "query", "format": "json", "redirects": 1, "titles": "|".join(batch)}
-        )
+        query = urllib.parse.urlencode({
+            "action": "query", "format": "json", "redirects": 1, "titles": "|".join(batch),
+            "prop": "pageprops", "ppprop": "disambiguation",  # a disambiguation page is the wrong article
+        })
         data = get(f"{ACTION_API}?{query}")["query"]
         step = {n["from"]: n["to"] for n in data.get("normalized", [])}
         step.update({r["from"]: r["to"] for r in data.get("redirects", [])})
-        missing = {p["title"] for p in data["pages"].values() if "missing" in p or "invalid" in p}
+        missing = {
+            p["title"] for p in data["pages"].values()
+            if "missing" in p or "invalid" in p or "disambiguation" in p.get("pageprops", {})
+        }
         for title in batch:
             current = title
             for _ in range(3):  # normalized, then redirected
@@ -86,7 +97,7 @@ def main() -> None:
     for name, title, category in rows:
         real = canonical.get(title)
         if real is None:
-            problems.append(f"missing page: {title}")
+            problems.append(f"missing or disambiguation page: {title}")
             continue
         try:
             views = monthly_views(real, start, end)
@@ -94,7 +105,13 @@ def main() -> None:
             problems.append(f"no views ({exc.code}): {real}")
             continue
         terms.append({"name": name, "article": real, "category": category, "views": views})
+        if real != title or views < REVIEW_BELOW:
+            problems.append(f"check by hand: {name} -> {real} ({views} views)")
         time.sleep(1.0)  # stay well under Wikimedia's rate limit
+    for problem in problems:
+        print("  " + problem)
+    if len(terms) < MIN_TERMS:  # don't overwrite good data with a failed run
+        sys.exit(f"only {len(terms)} terms found; {OUT} left unchanged")
     payload = {
         "source": "English Wikipedia page views (Wikimedia REST API), user agents only",
         "month": f"{start:%Y-%m}",
@@ -102,9 +119,6 @@ def main() -> None:
     }
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
     print(f"wrote {len(terms)} terms for {start:%Y-%m} to {OUT}")
-    for problem in problems:
-        print("  " + problem)
-    sys.exit(1 if len(terms) < 100 else 0)
 
 
 if __name__ == "__main__":

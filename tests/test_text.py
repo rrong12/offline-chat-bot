@@ -117,6 +117,10 @@ def test_typo_match():
     assert not typo_match("1950s", "1940s")
     assert not typo_match("jupitor saturnn", "jupiter saturn")  # one typo in total
     assert not typo_match("cat", "car")  # too short for a typo
+    assert not typo_match("wario", "mario")  # a typo never changes the first letter
+    assert not typo_match("louis xvii", "louis xviii")  # a 5-letter Roman numeral is still exact
+    assert not typo_match("1 38 billion", "13 8 billion")  # digit groups must match, not just digits
+    assert typo_match("shaquile oneal", "shaquille o neal")  # split differently, still one typo
 
 
 def test_within_one_edit():

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, TypeVar
 
 from bot.assets import Assets
 from bot.connectors.base import ChatMessage
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -43,14 +46,22 @@ class Game(ABC):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
         self.category = category
         self.rng = rng
         self.assets = assets
         self.level = level  # one of `levels`, or None to let the game pick
-        self.avoid = avoid  # ids of questions this player saw recently
+        self.recent = recent  # ids of questions this player saw lately, oldest first
         self.item_id: str | None = None  # id of the question shown, so the manager can avoid repeats
+
+    def pick_unseen(self, items: list[T], item_id: Callable[[T], str]) -> T:
+        """A random item the player hasn't seen lately; if they've seen them all, the one seen longest ago."""
+        seen = {key: age for age, key in enumerate(self.recent)}  # lower = seen longer ago
+        fresh = [item for item in items if item_id(item) not in seen]
+        if fresh:
+            return self.rng.choice(fresh)
+        return min(items, key=lambda item: seen[item_id(item)])
 
     @classmethod
     def category_names(cls, assets: Assets) -> list[str]:

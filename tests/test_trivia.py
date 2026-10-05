@@ -6,8 +6,8 @@ from bot.games.trivia import Trivia
 from tests.helpers import make_msg
 
 
-def make(assets, category="science", level=None, seed=1, avoid=frozenset()) -> Trivia:
-    return Trivia(category, random.Random(seed), assets, level=level, avoid=avoid)
+def make(assets, category="science", level=None, seed=1, recent=()) -> Trivia:
+    return Trivia(category, random.Random(seed), assets, level=level, recent=recent)
 
 
 def g(game: Trivia, text: str, login: str = "alice"):
@@ -68,14 +68,14 @@ def test_typed_forgives_one_typo_on_long_answers(assets):
 
 
 def test_numbers_must_be_exact(assets):
-    game = make(assets, category="history", level="hard", avoid=frozenset({"h2"}))
+    game = make(assets, category="history", level="hard", recent=("h2",))
     assert game.answer == "1945"
     assert g(game, "1946").messages == ["❌ Not it, 2 guesses left."]
     assert g(game, "1945").awards == {"id-alice": 15}
 
 
 def test_articles_spaces_and_punctuation_are_ignored(assets):
-    game = make(assets, category="history", level="hard", avoid=frozenset({"h1"}))
+    game = make(assets, category="history", level="hard", recent=("h1",))
     assert game.answer == "Leonardo da Vinci"
     assert g(game, "leonardo davinci").result == "won"
 
@@ -89,7 +89,7 @@ def test_three_wrong_guesses_lose(assets):
 
 
 def test_hints_lower_the_points(assets):
-    game = make(assets, category="history", level="hard", avoid=frozenset({"h1"}))
+    game = make(assets, category="history", level="hard", recent=("h1",))
     hint = lambda: game.on_command("hint", "", make_msg("?hint"), None)  # noqa: E731
     assert hint().messages == ["💡 3 words, 15 letters, starts with L"]
     second = hint().messages[0]
@@ -103,10 +103,10 @@ def test_level_is_random_when_not_given_and_falls_back_when_missing(assets):
     assert make(assets, category="history", level="easy").level == "hard"
 
 
-def test_avoid_skips_recent_questions(assets):
-    assert make(assets, category="history", level="hard", avoid=frozenset({"h1"})).item_id == "h2"
-    both = frozenset({"h1", "h2"})
-    assert make(assets, category="history", level="hard", avoid=both).item_id in {"h1", "h2"}
+def test_recent_questions_are_skipped_and_the_oldest_comes_back_first(assets):
+    assert make(assets, category="history", level="hard", recent=("h1",)).item_id == "h2"
+    assert make(assets, category="history", level="hard", recent=("h2", "h1")).item_id == "h2"  # seen longest ago
+    assert make(assets, category="history", level="hard", recent=("h1", "h2")).item_id == "h1"
 
 
 def test_timeout_and_reveal(assets):
@@ -127,7 +127,7 @@ def one_question(tmp_path, answer: str, difficulty: str = "medium") -> Trivia:
     from bot.assets import Assets
 
     root = tmp_path / "content"
-    root.mkdir(exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
     q = {"id": "x", "category": "general", "difficulty": difficulty, "question": "Q?", "answer": answer}
     (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
     return Trivia("general", random.Random(1), Assets(root), level=difficulty)
@@ -148,3 +148,83 @@ def one_question(tmp_path, answer: str, difficulty: str = "medium") -> Trivia:
 def test_typed_matching_rules(tmp_path, answer, guess, right):
     out = g(one_question(tmp_path, answer), guess)
     assert (out.result == "won") is right
+
+
+@pytest.mark.parametrize("answer, guess", [
+    ("Cupertino, California", "Cupertino"),
+    ("88 mph", "88"),
+    ("Three", "3"),
+    ("8", "eight"),
+    ("World War II", "world war 2"),
+    ("September 23rd, 1889", "september 23 1889"),
+    ("Hydrogen & Helium", "hydrogen and helium"),
+    ("Harry S. Truman", "harry truman"),
+    ("Mt. Everest", "everest"),
+    ("Mt. Everest", "mount everest"),
+    ("Paris (France)", "paris"),
+    ("Φ (phi)", "phi"),
+])
+def test_natural_variants_of_the_answer_count(tmp_path, answer, guess):
+    assert g(one_question(tmp_path, answer), guess).result == "won"
+
+
+def test_hints_lower_points_without_using_guesses(tmp_path):
+    game = one_question(tmp_path, "Leonardo da Vinci", "medium")
+    game.on_command("hint", "", make_msg("?hint"), None)
+    second = game.on_command("hint", "", make_msg("?hint"), None).messages[0]
+    assert sum(ch.isalpha() for ch in second.removeprefix("💡 ")) == 2 + 6  # ends plus about half the middle
+    assert game.guesses_left == 3
+    assert g(game, "leonardo da vinci").awards == {"id-alice": 4}  # medium: 10, 7, 4
+
+
+def test_one_hint_lowers_medium_points_to_7(tmp_path):
+    game = one_question(tmp_path, "Jupiter", "medium")
+    game.on_command("hint", "", make_msg("?hint"), None)
+    assert g(game, "jupiter").awards == {"id-alice": 7}
+
+
+@pytest.mark.parametrize("answer, hint", [("8", "💡 A 1-digit number"), ("1,000", "💡 A 4-digit number"),
+                                          ("Ra", "💡 2 letters")])
+def test_short_answers_get_one_hint_that_gives_nothing_away(tmp_path, answer, hint):
+    game = one_question(tmp_path, answer)
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages == [hint]
+    assert game.on_command("hint", "", make_msg("?hint"), None) is None
+
+
+def test_hint_ignores_the_bracketed_part_and_symbols(tmp_path):
+    game = one_question(tmp_path, "Shawn Crahan (Clown)")
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages == ["💡 2 words, 11 letters, starts with S"]
+    game = one_question(tmp_path / "second", "Hydrogen & Helium")  # content is cached per path
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages[0].startswith("💡 2 words, 14 letters")
+
+
+def test_options_that_read_alike_need_the_letter(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir(exist_ok=True)
+    q = {"id": "x", "category": "general", "difficulty": "easy", "question": "Q?", "answer": "Lord Genome",
+         "wrong": ["Lordgenome", "Kingloname", "King Loname"]}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    game = Trivia("general", random.Random(1), Assets(root), level="easy")
+    assert g(game, "lord genome").messages == ["Answer with {p}g and a letter, A to D."]
+
+
+def test_who_questions_accept_the_surname(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir()
+    q = {"id": "x", "category": "general", "difficulty": "medium", "question": "Who directed Spirited Away?",
+         "answer": "Hayao Miyazaki"}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    game = Trivia("general", random.Random(1), Assets(root), level="medium")
+    assert g(game, "miyazaki").result == "won"
+
+
+def test_help_credits_open_trivia_db():
+    assert "Open Trivia DB, CC BY-SA 4.0" in Trivia.description

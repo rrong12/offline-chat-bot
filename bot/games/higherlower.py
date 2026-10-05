@@ -36,9 +36,9 @@ class HigherLower(Game):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        super().__init__(category, rng, assets, level=level, recent=recent)
         self.terms: list[dict[str, Any]] = assets.json("higherlower")["terms"]
         self.used: set[str] = set()
         self.streak = 0

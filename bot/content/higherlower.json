@@ -567,12 +567,6 @@
 "views": 2133
 },
 {
-"name": "Bugha",
-"article": "Buğa",
-"category": "streamers",
-"views": 34
-},
-{
 "name": "Tfue",
 "article": "Tfue",
 "category": "streamers",
@@ -2212,9 +2206,9 @@
 },
 {
 "name": "Moana",
-"article": "Moana",
+"article": "Moana (2016 film)",
 "category": "movies",
-"views": 2190
+"views": 85150
 },
 {
 "name": "Coco",
@@ -2223,7 +2217,7 @@
 "views": 75368
 },
 {
-"name": "Up",
+"name": "Up (the movie)",
 "article": "Up (2009 film)",
 "category": "movies",
 "views": 56840
@@ -2242,9 +2236,9 @@
 },
 {
 "name": "Ratatouille",
-"article": "Ratatouille",
+"article": "Ratatouille (film)",
 "category": "movies",
-"views": 26598
+"views": 71964
 },
 {
 "name": "WALL-E",
@@ -2272,9 +2266,9 @@
 },
 {
 "name": "Iron Man",
-"article": "Ironman",
+"article": "Iron Man (2008 film)",
 "category": "movies",
-"views": 1232
+"views": 106282
 },
 {
 "name": "Joker",
@@ -2283,16 +2277,16 @@
 "views": 75222
 },
 {
-"name": "It",
+"name": "It (the movie)",
 "article": "It (2017 film)",
 "category": "movies",
 "views": 111472
 },
 {
 "name": "Venom",
-"article": "Venom (disambiguation)",
+"article": "Venom (2018 film)",
 "category": "movies",
-"views": 931
+"views": 47774
 },
 {
 "name": "The Super Mario Bros. Movie",

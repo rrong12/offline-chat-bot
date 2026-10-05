@@ -54,9 +54,9 @@ class Hangman(Game):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        super().__init__(category, rng, assets, level=level, recent=recent)
         assert category is not None
         self.answer = rng.choice([w for w in assets.words(category) if _valid(w)]).upper()
         self.guessed: set[str] = set()

@@ -58,9 +58,9 @@ class Scramble(Game):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        super().__init__(category, rng, assets, level=level, recent=recent)
         assert category is not None
         blocked = _blocked_fragments(assets)
         candidates = [w.upper() for w in assets.words(category) if _valid(w)]

@@ -114,7 +114,15 @@ TRIVIA_CATEGORIES = ["anime", "animals", "games", "general", "geography", "histo
 
 
 def test_trivia_bank():
-    from bot.games.trivia import Trivia, opening
+    import importlib.util
+
+    from bot.games.trivia import Trivia, accepted_answers, opening
+
+    script = REAL.root.parent.parent / "scripts" / "fetch_trivia.py"
+    spec = importlib.util.spec_from_file_location("fetch_trivia", script)
+    fetch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fetch)
+    clear_options, typeable = fetch.clear_options, fetch.typeable
 
     questions = REAL.json("trivia")["questions"]
     assert len(questions) >= 1000
@@ -128,10 +136,12 @@ def test_trivia_bank():
         texts = [q["question"], q["answer"], *q.get("wrong", [])]
         assert not any(blocked.found_in(t) for t in texts), q["id"]
         if q["difficulty"] == "easy":
-            assert len(q["wrong"]) == 3 and q["answer"] not in q["wrong"], q["id"]
             options = [q["answer"], *q["wrong"]]
+            assert len(q["wrong"]) == 3 and len({o.lower() for o in options}) == 4, q["id"]
+            assert clear_options(options), q["id"]  # options don't read alike, and none is a lone letter
         else:
-            assert len(q["answer"].split()) <= 3 and len(q["answer"]) <= 25, q["id"]
+            assert typeable(q["question"], q["answer"]), q["id"]  # short, typeable, no symbols like C++ or 13.8
+            assert accepted_answers(q["answer"]), q["id"]
             options = []
         assert len(opening(q["category"], q["difficulty"], q["question"], options, 30)) <= 480, q["id"]
 
@@ -179,3 +189,10 @@ def test_higherlower_terms():
         assert len(t["name"]) <= 30 and not blocked.found_in(t["name"]), t["name"]
         partners = sum(max(o["views"], t["views"]) >= MIN_RATIO * min(o["views"], t["views"]) for o in terms)
         assert partners >= 50, t["name"]
+
+
+def test_no_game_has_a_category_named_like_a_level():
+    from bot.games import ALL_GAMES
+
+    for cls in ALL_GAMES.values():  # "?trivia easy" must mean the difficulty, unambiguously
+        assert not set(cls.category_names(REAL)) & set(cls.levels), cls.name

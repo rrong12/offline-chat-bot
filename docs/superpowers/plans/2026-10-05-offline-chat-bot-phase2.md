@@ -40,6 +40,7 @@
 | `bot/games/riddle.py` | 4 |
 | `bot/games/scramble.py` | 2 |
 | `bot/games/trivia.py` | 3 |
+| `bot/stats_commands.py` | 6 |
 | `bot/text.py` | 1 |
 | `config.toml` | 6 |
 | `pyproject.toml` | 6 |
@@ -56,6 +57,7 @@
 | `tests/test_manager.py` | 2 |
 | `tests/test_riddle.py` | 4 |
 | `tests/test_scramble.py` | 2 |
+| `tests/test_stats_help_commands.py` | 6 |
 | `tests/test_text.py` | 1 |
 | `tests/test_trivia.py` | 3 |
 
@@ -255,6 +257,10 @@ def test_typo_match():
     assert not typo_match("1950s", "1940s")
     assert not typo_match("jupitor saturnn", "jupiter saturn")  # one typo in total
     assert not typo_match("cat", "car")  # too short for a typo
+    assert not typo_match("wario", "mario")  # a typo never changes the first letter
+    assert not typo_match("louis xvii", "louis xviii")  # a 5-letter Roman numeral is still exact
+    assert not typo_match("1 38 billion", "13 8 billion")  # digit groups must match, not just digits
+    assert typo_match("shaquile oneal", "shaquille o neal")  # split differently, still one typo
 
 
 def test_within_one_edit():
@@ -377,6 +383,7 @@ def format_duration(seconds: float) -> str:
 
 _LEADING_ARTICLE = re.compile(r"(?i)^\s*(?:a|an|the)\s+(?=\S)")
 _ROMAN = re.compile(r"[ivxlcdm]+")
+_DIGITS = re.compile(r"\d+")
 
 
 def strip_article(text: str) -> str:
@@ -409,22 +416,39 @@ def within_one_edit(a: str, b: str) -> bool:
 
 
 def typo_match(guess: str, answer: str, min_letters: int = 5) -> bool:
-    """Do two normalized answers match? Equal ignoring spaces, or the same words except for one
-    word of `min_letters`+ letters that is one edit off. Numbers ("Apollo 13"), short words
-    ("A minor") and Roman numerals ("Louis XIV") must match exactly: one character is the answer there."""
+    """Do two normalized answers match? Equal ignoring spaces, or off by one typo in a word of
+    `min_letters`+ letters that keeps its first letter (so Mario isn't Wario). Numbers must be the same
+    groups of digits ("1 38" isn't "13 8", "Apollo 13" isn't 11), and short words ("A minor") and Roman
+    numerals ("Louis XIV") must match exactly: there one character is the whole answer."""
+    if _DIGITS.findall(guess) != _DIGITS.findall(answer):
+        return False
     if guess.replace(" ", "") == answer.replace(" ", ""):
         return True
     guess_words, answer_words = guess.split(), answer.split()
-    if len(guess_words) != len(answer_words):
+    if len(guess_words) == len(answer_words):
+        typos = 0
+        for g, a in zip(guess_words, answer_words, strict=True):
+            if g == a:
+                continue
+            if not _typo_ok(g, a, min_letters):
+                return False
+            typos += 1
+        return typos <= 1
+    # split differently ("shaquile oneal" for "shaquille o neal"): one typo over the whole answer
+    joined_guess, joined_answer = guess.replace(" ", ""), answer.replace(" ", "")
+    if any(_ROMAN.fullmatch(a) and len(a) > 1 for a in answer_words) or len(joined_answer) < 2 * min_letters:
         return False
-    typos = 0
-    for g, a in zip(guess_words, answer_words, strict=True):
-        if g == a:
-            continue
-        if not a.isalpha() or len(a) < min_letters or _ROMAN.fullmatch(a) or not within_one_edit(g, a):
-            return False
-        typos += 1
-    return typos <= 1
+    return _typo_ok(joined_guess, joined_answer, min_letters)
+
+
+def _typo_ok(guess: str, answer: str, min_letters: int) -> bool:
+    return (
+        answer.isalpha()
+        and len(answer) >= min_letters
+        and not _ROMAN.fullmatch(answer)
+        and guess[:1] == answer[:1]
+        and within_one_edit(guess, answer)
+    )
 
 
 def short_number(n: int) -> str:
@@ -510,11 +534,12 @@ git commit -m "Phase 2: text helpers (articles, typo tolerance, short numbers) a
 Framework changes from spec §6, all backwards compatible with Scramble and Hangman:
 
 - **`Outcome.restart_timer`:** when an unfinished outcome sets it, the manager resets the session's start time, so streak games give each answer a fresh time limit.
-- **Start options:** a game may declare `levels` (Trivia's difficulties) and a `levels_label`. The manager reads up to one category and one level from the start command, in either order (`?trivia hard science`). Any other word gets "Unknown option." ("Unknown category." for games without levels) plus the option list, never repeating the word. `?<game> categories` lists the levels too.
-- **No repeats:** a game may set `item_id` for the question it picked. The manager keeps each player's last 50 ids per game (in memory; the least recently active of 10,000 players are forgotten) and passes them to the game as `avoid`.
+- **Start options:** a game may declare `levels` (Trivia's difficulties) and a `levels_label`. The manager reads up to one category and one level from the start command, in either order and in any case (`?trivia HARD science`; a repeated word is fine). Any other word gets "Unknown option." ("Unknown category." for games without levels) plus the option list, never repeating the word. `?<game> categories` lists the levels too. A game with neither categories nor levels ignores extra words, as in Phase 1 (`?hl lets go` just starts), and `?riddle categories` says it has no options. (A content test in Task 10 checks that no category shares a name with a level, since `?trivia easy` would be ambiguous.)
+- **No repeats:** a game may set `item_id` (a string) for the question it picked. The manager keeps each player's last 50 ids per game (in memory since the bot started; the least recently active of 10,000 players are forgotten) and passes them, oldest first, as `recent`. `Game.pick_unseen` picks a random unseen item, or, once all have been seen, the one seen longest ago, so a small pool never repeats back to back.
+- **A broken time limit** (not a finite number) ends only that game, with "Game ended due to an error.", instead of raising in the 1-second tick and freezing every timer.
 - **Aliases:** a game's `aliases` become aliases of its start command (`?hl`).
 - **Shared help:** an in-game command declared by more than one game (`?g`, `?hint`) gets generic help text ("Guess in your current game."); a command only one game uses keeps that game's text.
-- **Game constructor:** `Game.__init__(category, rng, assets, *, level=None, avoid=frozenset())`. `time_limit` is now a plain class attribute a game may change for one round (Trivia's easy questions get 20 s).
+- **Game constructor:** `Game.__init__(category, rng, assets, *, level=None, recent=())`. `time_limit` is now a plain class attribute a game may change for one round (Trivia's easy questions get 20 s).
 - **Scramble accepts `?g <word>`** too, so `?g` works in every game. A wrong `?g` stays silent, like a wrong plain-chat guess.
 
 - [ ] **Step 1: Write `tests/test_manager.py`**
@@ -619,9 +644,9 @@ class Quiz(Boom):
     def category_names(cls, assets):
         return ["science", "history"]
 
-    def __init__(self, category, rng, assets, *, level=None, avoid=frozenset()):
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
-        self.item_id = next((i for i in self.ITEMS if i not in avoid), self.ITEMS[0])
+    def __init__(self, category, rng, assets, *, level=None, recent=()):
+        super().__init__(category, rng, assets, level=level, recent=recent)
+        self.item_id = next((i for i in self.ITEMS if i not in recent), None) or min(self.ITEMS, key=recent.index)
 
     def start(self) -> str:
         return f"quiz {self.category} {self.level} {self.item_id}"
@@ -644,7 +669,7 @@ class Streak(Boom):
 
 
 class Harness:
-    def __init__(self, tmp_path, clock: FakeClock, assets, max_games: int = 25):
+    def __init__(self, tmp_path, clock: FakeClock, assets, max_games: int = 25, extra_games=None):
         self.clock = clock
         self.said: list[tuple[str, dict]] = []  # everything the manager sent: (text, kwargs)
         self.replies: list[str] = []  # direct command replies (ctx.reply)
@@ -654,7 +679,7 @@ class Harness:
         self.manager = GameManager(
             games={"scramble": Scramble, "hangman": Hangman, "boom": Boom, "stubborn": Stubborn,
                    "noresult": NoResult, "anycommand": AnyCommand, "brokenstart": BrokenStart,
-                   "quiz": Quiz, "streak": Streak},
+                   "quiz": Quiz, "streak": Streak, **(extra_games or {})},
             stats=self.stats,
             log=self.log,
             clock=clock,
@@ -985,7 +1010,7 @@ async def test_recent_questions_are_not_repeated_for_that_player(h: Harness):
         seen.append(h.texts()[-1].split()[-1])
         await h.command("?skip")
         h.clock.advance(10)
-    assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the game falls back to any question
+    assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the one seen longest ago comes back
 
 
 async def test_each_player_has_their_own_question_history(h: Harness):
@@ -1014,6 +1039,72 @@ async def test_restart_timer_gives_a_fresh_time_limit(h: Harness):
     h.clock.advance(2)
     h.manager.tick()
     assert h.manager.sessions == {}
+
+
+class Plain(Boom):
+    """No categories and no levels, like Riddle and Higher or Lower."""
+
+    name = "plain"
+    title = "Plain"
+
+    def on_message(self, msg, now):
+        return None
+
+
+async def test_extra_words_are_ignored_by_a_game_without_options(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"plain": Plain})
+    await h.command("?plain lets go")
+    assert "id-alice" in h.manager.sessions
+    await h.command("?plain categories", "bob")
+    assert h.replies == ["Plain has no options."]
+
+
+async def test_duplicate_and_uppercase_words_are_fine(h: Harness):
+    await h.command("?quiz HARD hard Science")
+    assert h.texts()[-1] == "quiz science hard q1"
+
+
+async def test_a_broken_time_limit_ends_only_that_game(h: Harness):
+    await h.command("?scramble animals", "alice")
+    await h.command("?hangman animals", "bob")
+    h.manager.sessions["id-alice"].game.time_limit = float("nan")
+    h.manager.tick()
+    assert set(h.manager.sessions) == {"id-bob"}
+    assert h.texts()[-1] == "Game ended due to an error."
+    h.clock.advance(200)
+    h.manager.tick()  # bob's game still times out normally
+    assert h.manager.sessions == {}
+
+
+async def test_remembered_questions_are_bounded(h: Harness, monkeypatch):
+    import bot.games.manager as manager_module
+
+    monkeypatch.setattr(manager_module, "RECENT_ITEMS", 2)
+    monkeypatch.setattr(manager_module, "RECENT_PLAYERS", 2)
+    for login in ("alice", "bob", "carol"):
+        for _ in range(3):
+            await h.command("?quiz science", login)
+            await h.command("?skip", login)
+            h.clock.advance(10)
+    assert list(h.manager._recent) == [("quiz", "id-bob"), ("quiz", "id-carol")]  # alice, the oldest, is gone
+    assert all(len(ids) == 2 for ids in h.manager._recent.values())
+
+
+class Sticky(Streak):
+    """Asks for more time when it times out."""
+
+    name = "sticky"
+
+    def on_timeout(self):
+        return Outcome(messages=["one more?"], restart_timer=True)
+
+
+async def test_a_restart_timer_from_on_timeout_cannot_extend_a_game(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"sticky": Sticky})
+    await h.command("?sticky")
+    h.clock.advance(10)
+    h.manager.tick()
+    assert h.manager.sessions == {}  # force-finished anyway
 ```
 
 - [ ] **Step 2: Write `tests/test_scramble.py`**
@@ -1156,12 +1247,15 @@ from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, TypeVar
 
 from bot.assets import Assets
 from bot.connectors.base import ChatMessage
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -1195,14 +1289,22 @@ class Game(ABC):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
         self.category = category
         self.rng = rng
         self.assets = assets
         self.level = level  # one of `levels`, or None to let the game pick
-        self.avoid = avoid  # ids of questions this player saw recently
+        self.recent = recent  # ids of questions this player saw lately, oldest first
         self.item_id: str | None = None  # id of the question shown, so the manager can avoid repeats
+
+    def pick_unseen(self, items: list[T], item_id: Callable[[T], str]) -> T:
+        """A random item the player hasn't seen lately; if they've seen them all, the one seen longest ago."""
+        seen = {key: age for age, key in enumerate(self.recent)}  # lower = seen longer ago
+        fresh = [item for item in items if item_id(item) not in seen]
+        if fresh:
+            return self.rng.choice(fresh)
+        return min(items, key=lambda item: seen[item_id(item)])
 
     @classmethod
     def category_names(cls, assets: Assets) -> list[str]:
@@ -1389,10 +1491,12 @@ class GameManager:
 
     @staticmethod
     def _options(cls: type[Game], categories: list[str]) -> str:
-        text = f"{cls.title} categories: {', '.join(categories)}"
+        parts = []
+        if categories:
+            parts.append(f"categories: {', '.join(categories)}")
         if cls.levels:
-            text += f" · {cls.levels_label}: {', '.join(cls.levels)}"
-        return text
+            parts.append(f"{cls.levels_label}: {', '.join(cls.levels)}")
+        return f"{cls.title} {' · '.join(parts)}" if parts else f"{cls.title} has no options."
 
     async def _start(self, cls: type[Game], ctx: CommandContext) -> None:
         tokens = ctx.args.lower().split()
@@ -1411,12 +1515,14 @@ class GameManager:
         if len(self.sessions) >= self.max_games or self._is_busy():
             self._notice(ctx, cls, "Too many games running right now, try again in a moment.")
             return
+        if not categories and not cls.levels:
+            tokens = []  # nothing to choose, so extra words ("?hl lets go") are ignored, as in Phase 1
         category: str | None = None
         level: str | None = None
         for token in tokens:
-            if token in categories and category is None:
+            if token in categories and category in (None, token):
                 category = token
-            elif token in cls.levels and level is None:
+            elif token in cls.levels and level in (None, token):
                 level = token
             else:  # never repeat the unknown word: it could be anything
                 kind = "option" if cls.levels else "category"
@@ -1425,9 +1531,8 @@ class GameManager:
         if categories and category is None:
             category = self.rng.choice(categories)
         recent_key = (cls.name, uid)
-        avoid = frozenset(self._recent.get(recent_key, ()))
         try:
-            game = cls(category, self.rng, self.assets, level=level, avoid=avoid)
+            game = cls(category, self.rng, self.assets, level=level, recent=tuple(self._recent.get(recent_key, ())))
             opening = game.start()
         except Exception as exc:
             logger.exception("could not start %s", cls.name)
@@ -1446,7 +1551,7 @@ class GameManager:
             reply_to=ctx.msg.id,
         )
         self.sessions[uid] = session
-        if game.item_id is not None:
+        if isinstance(game.item_id, str):
             self._remember(recent_key, game.item_id)
         self.log.write("game_start", round=session.key, game=cls.name, category=category, player=ctx.msg.login)
         self._reply(session, opening)
@@ -1491,13 +1596,26 @@ class GameManager:
         outcome = self._guard(session, f"{session.game.name}.on_message", lambda: session.game.on_message(msg, now))
         self._handle(session, outcome)
 
+    def _expired(self, session: Session, elapsed: float) -> bool | None:
+        """Is the game past its time limit? None (and the game is ended) if the limit isn't a usable number."""
+        limit = session.game.time_limit
+        if isinstance(limit, (int, float)) and not isinstance(limit, bool) and math.isfinite(limit):
+            return elapsed >= limit
+        self.log.write("error", where=f"game:{session.game.name}.time_limit", type="ValueError",
+                       message=f"time_limit is {limit!r}")
+        self._finish(session, "stopped", ["Game ended due to an error."], {}, set())
+        return None
+
     def tick(self) -> None:
         for session in list(self.sessions.values()):
             if self.sessions.get(session.user_id) is not session:
                 continue
             elapsed = self.clock.mono() - session.start_mono
             game = session.game
-            if elapsed >= game.time_limit:
+            expired = self._expired(session, elapsed)
+            if expired is None:
+                continue
+            if expired:
                 outcome = self._guard(session, f"{game.name}.on_timeout", game.on_timeout)
                 self._handle(session, outcome, default_result="timeout")
                 if self.sessions.get(session.user_id) is session:  # the game didn't end itself: force it
@@ -1626,9 +1744,9 @@ class Scramble(Game):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        super().__init__(category, rng, assets, level=level, recent=recent)
         assert category is not None
         blocked = _blocked_fragments(assets)
         candidates = [w.upper() for w in assets.words(category) if _valid(w)]
@@ -1761,9 +1879,9 @@ class Hangman(Game):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        super().__init__(category, rng, assets, level=level, recent=recent)
         assert category is not None
         self.answer = rng.choice([w for w in assets.words(category) if _valid(w)]).upper()
         self.guessed: set[str] = set()
@@ -1848,7 +1966,7 @@ class Hangman(Game):
 - [ ] **Step 8: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_manager.py tests/test_scramble.py -q`, then `.venv/bin/pytest -q`.
-Expected: `51 passed`, then the whole suite passes (320 passed).
+Expected: `56 passed`, then the whole suite passes (325 passed).
 
 - [ ] **Step 9: Commit**
 
@@ -1864,9 +1982,11 @@ git commit -m "Phase 2: game options, repeat avoidance, timer restarts, aliases,
 
 Spec §3. Questions come from `content/trivia.json` (built in Task 7). Each has an `id`, `category`, `difficulty`, `question`, `answer`, and, for easy ones, three `wrong` options.
 
-- **Starting:** the category comes from the manager. A missing difficulty, or one this category has no questions for, becomes a random available one. Recently seen ids are avoided when possible.
-- **Easy:** the four options are shuffled once and lettered A-D, 20 s. One guess: a letter or the option's text. Right: 5 points; wrong ends the game showing the right option. Nonsense gets one "Answer with ?g and a letter" reminder, then silence. No hints.
-- **Medium and hard:** typed, 30 s, 3 guesses. A guess matches if `typo_match` accepts it against the answer, compared with and without a leading article (on both sides), with accents folded, and with any parenthetical in the answer dropped. Two hints: word and letter count with the first letter, then about half the letters in place. Points: medium 10/7/4, hard 15/10/6 by hints used.
+- **Starting:** the category comes from the manager. A missing difficulty, or one this category has no questions for, becomes a random available one. Recently seen questions are skipped (`pick_unseen`).
+- **Easy:** the four options are shuffled once and lettered A-D, 20 s. One guess: a letter or the option's text (if the text matches two options that read alike, the player is asked for the letter). Right: 5 points; wrong ends the game showing the right option. Nonsense gets one "Answer with ?g and a letter" reminder, then silence. No hints.
+- **Medium and hard:** typed, 30 s, 3 guesses. A guess matches if `typo_match` accepts it against any accepted form of the answer (`accepted_answers`): with and without a leading article, accents folded, "&" read as "and", number words, Roman numerals II-XX and ordinals as digits ("World War II" = "world war 2", "Three" = "3"), the part before a comma ("Cupertino, California"), a number without its unit ("88 mph"), a name without its middle initial, "Mt." as "mount" or left out, the answer without a parenthetical (or the parenthetical itself when the rest can't be typed, "Φ (phi)"), and for "Who..." questions the surname alone.
+- **Hints:** word and letter count with the first letter, then about half the letters in place, both ignoring a parenthetical and counting "characters" when there are digits. A number, or an answer of 1-2 characters, gets one hint that gives nothing away ("A 2-digit number"). Points: medium 10/7/4, hard 15/10/6 by hints used; hints never use up guesses.
+- `?help trivia` credits Open Trivia DB and its CC BY-SA 4.0 license, since chat can't see the credits file.
 - `opening()` builds the question message; the content test (Task 10) uses it to check every question fits in one chat message.
 
 - [ ] **Step 1: Write `tests/test_trivia.py`**
@@ -1880,8 +2000,8 @@ from bot.games.trivia import Trivia
 from tests.helpers import make_msg
 
 
-def make(assets, category="science", level=None, seed=1, avoid=frozenset()) -> Trivia:
-    return Trivia(category, random.Random(seed), assets, level=level, avoid=avoid)
+def make(assets, category="science", level=None, seed=1, recent=()) -> Trivia:
+    return Trivia(category, random.Random(seed), assets, level=level, recent=recent)
 
 
 def g(game: Trivia, text: str, login: str = "alice"):
@@ -1942,14 +2062,14 @@ def test_typed_forgives_one_typo_on_long_answers(assets):
 
 
 def test_numbers_must_be_exact(assets):
-    game = make(assets, category="history", level="hard", avoid=frozenset({"h2"}))
+    game = make(assets, category="history", level="hard", recent=("h2",))
     assert game.answer == "1945"
     assert g(game, "1946").messages == ["❌ Not it, 2 guesses left."]
     assert g(game, "1945").awards == {"id-alice": 15}
 
 
 def test_articles_spaces_and_punctuation_are_ignored(assets):
-    game = make(assets, category="history", level="hard", avoid=frozenset({"h1"}))
+    game = make(assets, category="history", level="hard", recent=("h1",))
     assert game.answer == "Leonardo da Vinci"
     assert g(game, "leonardo davinci").result == "won"
 
@@ -1963,7 +2083,7 @@ def test_three_wrong_guesses_lose(assets):
 
 
 def test_hints_lower_the_points(assets):
-    game = make(assets, category="history", level="hard", avoid=frozenset({"h1"}))
+    game = make(assets, category="history", level="hard", recent=("h1",))
     hint = lambda: game.on_command("hint", "", make_msg("?hint"), None)  # noqa: E731
     assert hint().messages == ["💡 3 words, 15 letters, starts with L"]
     second = hint().messages[0]
@@ -1977,10 +2097,10 @@ def test_level_is_random_when_not_given_and_falls_back_when_missing(assets):
     assert make(assets, category="history", level="easy").level == "hard"
 
 
-def test_avoid_skips_recent_questions(assets):
-    assert make(assets, category="history", level="hard", avoid=frozenset({"h1"})).item_id == "h2"
-    both = frozenset({"h1", "h2"})
-    assert make(assets, category="history", level="hard", avoid=both).item_id in {"h1", "h2"}
+def test_recent_questions_are_skipped_and_the_oldest_comes_back_first(assets):
+    assert make(assets, category="history", level="hard", recent=("h1",)).item_id == "h2"
+    assert make(assets, category="history", level="hard", recent=("h2", "h1")).item_id == "h2"  # seen longest ago
+    assert make(assets, category="history", level="hard", recent=("h1", "h2")).item_id == "h1"
 
 
 def test_timeout_and_reveal(assets):
@@ -2001,7 +2121,7 @@ def one_question(tmp_path, answer: str, difficulty: str = "medium") -> Trivia:
     from bot.assets import Assets
 
     root = tmp_path / "content"
-    root.mkdir(exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
     q = {"id": "x", "category": "general", "difficulty": difficulty, "question": "Q?", "answer": answer}
     (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
     return Trivia("general", random.Random(1), Assets(root), level=difficulty)
@@ -2022,6 +2142,86 @@ def one_question(tmp_path, answer: str, difficulty: str = "medium") -> Trivia:
 def test_typed_matching_rules(tmp_path, answer, guess, right):
     out = g(one_question(tmp_path, answer), guess)
     assert (out.result == "won") is right
+
+
+@pytest.mark.parametrize("answer, guess", [
+    ("Cupertino, California", "Cupertino"),
+    ("88 mph", "88"),
+    ("Three", "3"),
+    ("8", "eight"),
+    ("World War II", "world war 2"),
+    ("September 23rd, 1889", "september 23 1889"),
+    ("Hydrogen & Helium", "hydrogen and helium"),
+    ("Harry S. Truman", "harry truman"),
+    ("Mt. Everest", "everest"),
+    ("Mt. Everest", "mount everest"),
+    ("Paris (France)", "paris"),
+    ("Φ (phi)", "phi"),
+])
+def test_natural_variants_of_the_answer_count(tmp_path, answer, guess):
+    assert g(one_question(tmp_path, answer), guess).result == "won"
+
+
+def test_hints_lower_points_without_using_guesses(tmp_path):
+    game = one_question(tmp_path, "Leonardo da Vinci", "medium")
+    game.on_command("hint", "", make_msg("?hint"), None)
+    second = game.on_command("hint", "", make_msg("?hint"), None).messages[0]
+    assert sum(ch.isalpha() for ch in second.removeprefix("💡 ")) == 2 + 6  # ends plus about half the middle
+    assert game.guesses_left == 3
+    assert g(game, "leonardo da vinci").awards == {"id-alice": 4}  # medium: 10, 7, 4
+
+
+def test_one_hint_lowers_medium_points_to_7(tmp_path):
+    game = one_question(tmp_path, "Jupiter", "medium")
+    game.on_command("hint", "", make_msg("?hint"), None)
+    assert g(game, "jupiter").awards == {"id-alice": 7}
+
+
+@pytest.mark.parametrize("answer, hint", [("8", "💡 A 1-digit number"), ("1,000", "💡 A 4-digit number"),
+                                          ("Ra", "💡 2 letters")])
+def test_short_answers_get_one_hint_that_gives_nothing_away(tmp_path, answer, hint):
+    game = one_question(tmp_path, answer)
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages == [hint]
+    assert game.on_command("hint", "", make_msg("?hint"), None) is None
+
+
+def test_hint_ignores_the_bracketed_part_and_symbols(tmp_path):
+    game = one_question(tmp_path, "Shawn Crahan (Clown)")
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages == ["💡 2 words, 11 letters, starts with S"]
+    game = one_question(tmp_path / "second", "Hydrogen & Helium")  # content is cached per path
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages[0].startswith("💡 2 words, 14 letters")
+
+
+def test_options_that_read_alike_need_the_letter(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir(exist_ok=True)
+    q = {"id": "x", "category": "general", "difficulty": "easy", "question": "Q?", "answer": "Lord Genome",
+         "wrong": ["Lordgenome", "Kingloname", "King Loname"]}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    game = Trivia("general", random.Random(1), Assets(root), level="easy")
+    assert g(game, "lord genome").messages == ["Answer with {p}g and a letter, A to D."]
+
+
+def test_who_questions_accept_the_surname(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir()
+    q = {"id": "x", "category": "general", "difficulty": "medium", "question": "Who directed Spirited Away?",
+         "answer": "Hayao Miyazaki"}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    game = Trivia("general", random.Random(1), Assets(root), level="medium")
+    assert g(game, "miyazaki").result == "won"
+
+
+def test_help_credits_open_trivia_db():
+    assert "Open Trivia DB, CC BY-SA 4.0" in Trivia.description
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2050,16 +2250,59 @@ from bot.text import fold_accents, normalize, strip_article, typo_match
 
 LETTERS = "ABCD"
 TYPO_MIN_LETTERS = 5  # words this long forgive one typo; shorter words and numbers must be exact
-_PARENTHETICAL = re.compile(r"\s*\([^)]*\)")
+_PARENTHETICAL = re.compile(r"\s*\(([^)]*)\)")
+_NUMBER_WITH_UNIT = re.compile(r"^\s*(\d[\d,]*)\s+[A-Za-z][A-Za-z.]*(?:\s+[A-Za-z.]+)?\s*$")  # "88 mph"
+_ORDINAL = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
+# Same meaning, different spelling: number words, Roman numerals II-XX (single letters are too ambiguous).
+_CANONICAL = {
+    **{w: str(n) for n, w in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+        "sixteen seventeen eighteen nineteen twenty".split())},
+    **{r: str(n) for n, r in enumerate(
+        "_ _ ii iii iv _ vi vii viii ix _ xi xii xiii xiv xv xvi xvii xviii xix xx".split()) if r != "_"},
+    "mt": "mount",
+}
 
 
 def _questions(assets: Assets) -> list[dict[str, Any]]:
     return assets.json("trivia")["questions"]
 
 
+def _canonical(text: str) -> str:
+    words = fold_accents(normalize(text.replace("&", " and "))).split()
+    words = [_CANONICAL.get(w, w) for w in words]
+    return " ".join(m.group(1) if (m := _ORDINAL.match(w)) else w for w in words)
+
+
 def _forms(text: str) -> set[str]:
-    """Comparable forms of raw text: normalized and accent-folded, with and without a leading article."""
-    return {fold_accents(normalize(t)) for t in (text, strip_article(text))}
+    """Comparable forms of raw text: with and without a leading article, accents folded, "&" read as
+    "and", and numbers, Roman numerals and ordinals written as plain digits ("World War II" = "world war 2")."""
+    return {_canonical(t) for t in (text, strip_article(text))} - {""}
+
+
+def accepted_answers(answer: str, question: str = "") -> set[str]:
+    """Every form of a typed answer that counts as right."""
+    outside = _PARENTHETICAL.sub("", answer).strip()
+    variants = {answer, outside}
+    inner = _PARENTHETICAL.search(answer)
+    if inner and not re.search(r"[A-Za-z0-9]", outside):  # "Φ (phi)": the bracket is the typeable part
+        variants.add(inner.group(1))
+    if "," in outside:  # "Cupertino, California" -> "Cupertino"
+        variants.add(outside.split(",")[0])
+    if m := _NUMBER_WITH_UNIT.match(outside):  # "88 mph" -> "88"
+        variants.add(m.group(1).replace(",", ""))
+    forms = set().union(*(_forms(v) for v in variants))
+    for form in list(forms):
+        words = form.split()
+        if len(words) >= 3:  # "harry s truman" -> "harry truman"
+            forms.add(" ".join([words[0], *(w for w in words[1:-1] if len(w) > 1), words[-1]]))
+        if words[:1] == ["mount"] and len(words) > 1:  # "Mt. Everest" -> "everest"
+            forms.add(" ".join(words[1:]))
+    person = re.match(r"(?i)\s*who\b", question)
+    name_words = _PARENTHETICAL.sub("", answer).split()
+    if person and 2 <= len(name_words) <= 3 and len(name_words[-1]) >= 4:  # "Who directed ...?" -> "miyazaki"
+        forms |= _forms(name_words[-1])
+    return forms
 
 
 def opening(category: str, level: str, question: str, options: list[str], seconds: int) -> str:
@@ -2082,7 +2325,8 @@ class Trivia(Game):
     description = (
         "Your own trivia question. Easy: multiple choice, answer with {p}g A-D (5 points). "
         "Medium and hard: type the answer with {p}g, 3 guesses, {p}hint for help "
-        "(10 or 15 points, fewer with hints). {p}trivia categories lists topics."
+        "(10 or 15 points, fewer with hints). {p}trivia categories lists topics. "
+        "Questions: Open Trivia DB, CC BY-SA 4.0."
     )
     time_limit = 30
     EASY_TIME = 20
@@ -2106,9 +2350,9 @@ class Trivia(Game):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        super().__init__(category, rng, assets, level=level, recent=recent)
         in_category = [q for q in _questions(assets) if q["category"] == category]
         if not in_category:
             raise ValueError(f"no trivia questions in {category!r}")
@@ -2117,8 +2361,7 @@ class Trivia(Game):
             level = rng.choice(available)
         self.level = level
         pool = [q for q in in_category if q["difficulty"] == level]
-        fresh = [q for q in pool if q["id"] not in avoid] or pool
-        q = rng.choice(fresh)
+        q = self.pick_unseen(pool, lambda question: question["id"])
         self.item_id = q["id"]
         self.question: str = q["question"]
         self.answer: str = q["answer"]
@@ -2127,11 +2370,12 @@ class Trivia(Game):
             self.options = [self.answer, *q["wrong"]]
             rng.shuffle(self.options)
             self.time_limit = self.EASY_TIME
-        self._accepted = _forms(self.answer) | _forms(_PARENTHETICAL.sub("", self.answer))
+        self._accepted = accepted_answers(self.answer, self.question)
         self.guesses_left = self.GUESSES
         self.hints_used = 0
         self._told_how = False  # the "answer with A-D" reminder is sent at most once
-        letters = [i for i, ch in enumerate(self.answer) if ch.isalnum()]
+        self._hint_text = _PARENTHETICAL.sub("", self.answer).strip() or self.answer  # hints skip "(Clown)"
+        letters = [i for i, ch in enumerate(self._hint_text) if ch.isalnum()]
         middle = letters[1:-1]
         rng.shuffle(middle)
         self._reveal_order = middle
@@ -2172,7 +2416,8 @@ class Trivia(Game):
         index = LETTERS.lower().find(guess) if len(guess) == 1 else -1
         if index < 0 or index >= len(self.options):
             said = {f.replace(" ", "") for f in _forms(args)}
-            index = next((i for i, o in enumerate(self.options) if said & {f.replace(" ", "") for f in _forms(o)}), -1)
+            matches = [i for i, o in enumerate(self.options) if said & {f.replace(" ", "") for f in _forms(o)}]
+            index = matches[0] if len(matches) == 1 else -1  # two options that read alike: ask for the letter
         if index < 0:
             if self._told_how:
                 return None
@@ -2194,18 +2439,25 @@ class Trivia(Game):
         return Outcome(messages=[f"❌ Not it, {_plural(self.guesses_left, 'guess')} left."])
 
     def _hint(self) -> Outcome | None:
-        if self.easy or self.hints_used >= len(self.POINTS[self.level]) - 1:
+        text = self._hint_text
+        chars = [ch for ch in text if ch.isalnum()]
+        short = len(chars) <= 2 or text.replace(",", "").isdigit()  # "starts with 8" would give these away
+        if self.easy or self.hints_used >= (1 if short else len(self.POINTS[self.level]) - 1):
             return None
         self.hints_used += 1
-        letters = [ch for ch in self.answer if ch.isalnum()]
+        kind = "letter" if all(ch.isalpha() for ch in chars) else "character"
         if self.hints_used == 1:
-            words = len(self.answer.split())
+            if text.replace(",", "").isdigit():
+                return Outcome(messages=[f"💡 A {len(chars)}-digit number"])
+            if short:
+                return Outcome(messages=[f"💡 {_plural(len(chars), kind)}"])
+            words = sum(any(ch.isalnum() for ch in w) for w in text.split())  # "&" isn't a word
             prefix = f"{_plural(words, 'word')}, " if words > 1 else ""
-            return Outcome(messages=[f"💡 {prefix}{_plural(len(letters), 'letter')}, starts with {letters[0].upper()}"])
-        alnum = [i for i, ch in enumerate(self.answer) if ch.isalnum()]
+            return Outcome(messages=[f"💡 {prefix}{_plural(len(chars), kind)}, starts with {chars[0].upper()}"])
+        alnum = [i for i, ch in enumerate(text) if ch.isalnum()]
         shown = {alnum[0], alnum[-1]} | set(self._reveal_order[: max(0, math.ceil(len(alnum) / 2) - 2)])
         cells = []
-        for i, ch in enumerate(self.answer):
+        for i, ch in enumerate(text):
             if ch == " ":
                 cells.append("/")
             elif not ch.isalnum():
@@ -2224,7 +2476,7 @@ class Trivia(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_trivia.py -q`, then `.venv/bin/pytest -q`.
-Expected: `26 passed`, then the whole suite passes (346 passed).
+Expected: `47 passed`, then the whole suite passes (372 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2241,24 +2493,27 @@ git commit -m "Phase 2: Trivia game"
 Spec §4. Riddles come from `content/riddles.json` (Task 8): `riddle`, `answers` (main answer first), and `clue`.
 
 - **Start:** `🧩 <riddle> · 60s · ?g <answer> · ?hint`. The id is a hash of the riddle text, so it survives reordering the file.
-- **Guesses:** 3. After normalizing and dropping a leading article, a guess wins if it contains an accepted answer as whole words ("is it a clock"); the last word may differ by a plural "s"/"es". A guess longer than the longest answer plus 3 words is a list, not an answer: it costs a guess ("One answer per guess"). Apostrophes are removed before normalizing, so "I'm" can't leave a lone "m" that wins the letter riddles; then a leading article is dropped from the raw guess and it is normalized.
-- **Hints:** the clue, then the main answer's word and letter count and first letter. Points 10/7/4.
+- **Guesses:** 3. Guess and answers are compared as words: apostrophes removed (all kinds, after NFKC), so "I'm" can't leave a lone "m" that wins the letter riddles; a leading article dropped; accents folded. A guess wins if it contains an accepted answer, preferring the longest one it contains. Spacing may differ by one word ("rain bow") and the answer may be plural ("es" only after s, x, z, ch or sh, so "pin" never matches "pines").
+- **Not a win:** a list (more than 2 words beyond the answer, not counting filler like "I think it's a" or words from the riddle itself; any either-or with "or"), which costs a guess as "One answer per guess"; a negation right before the answer ("not a clock"); a different number ("3-2=1" when the answer is 2); and, for single-letter answers, any other letter in the guess ("a, e, i").
+- **Hints:** the clue, then the main answer's word and letter count and first letter (no first letter for a 1-2 letter answer, which it would give away). Points 10/7/4.
 
 - [ ] **Step 1: Write `tests/test_riddle.py`**
 
 ```python
 import random
 
+import pytest
+
 from bot.games.riddle import Riddle, riddle_id
 from tests.helpers import make_msg
 
 
-def make(assets, seed=1, avoid=frozenset()) -> Riddle:
-    game = Riddle(None, random.Random(seed), assets, avoid=avoid)
+def make(assets, seed=1, recent=()) -> Riddle:
+    game = Riddle(None, random.Random(seed), assets, recent=recent)
     if game.answers[0] != "clock":  # the tests below use the clock riddle
         clock_id = next(riddle_id(r) for r in assets.json("riddles") if r["answers"][0] == "clock")
-        others = frozenset(riddle_id(r) for r in assets.json("riddles")) - {clock_id}
-        game = Riddle(None, random.Random(seed), assets, avoid=others)
+        others = tuple(riddle_id(r) for r in assets.json("riddles") if riddle_id(r) != clock_id)
+        game = Riddle(None, random.Random(seed), assets, recent=others)
     return game
 
 
@@ -2310,9 +2565,9 @@ def test_empty_guess_is_ignored(assets):
     assert g(make(assets), "  ?! ") is None
 
 
-def test_avoid_skips_recent_riddles(assets):
+def test_recent_riddles_are_skipped(assets):
     clock_id = riddle_id({"riddle": "What has hands but can't clap?"})
-    assert Riddle(None, random.Random(1), assets, avoid=frozenset({clock_id})).answers == ["towel"]
+    assert Riddle(None, random.Random(1), assets, recent=(clock_id,)).answers == ["towel"]
 
 
 def test_timeout_and_reveal(assets):
@@ -2334,6 +2589,74 @@ def test_apostrophes_are_removed_not_split(tmp_path):
     game = Riddle(None, random.Random(1), Assets(root))
     assert g(game, "I'm guessing time").messages == ["❌ Not it, 2 guesses left."]  # not a lone "m"
     assert g(game, "the letter M").result == "won"
+
+
+def riddle(tmp_path, text: str, answers: list[str]) -> Riddle:
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir(exist_ok=True)
+    entry = {"riddle": text, "answers": answers, "clue": "A clue."}
+    (root / "riddles.json").write_text(json.dumps([entry]), encoding="utf-8")
+    return Riddle(None, random.Random(1), Assets(root))
+
+
+def outcome(game: Riddle, guess: str) -> str:
+    out = g(game, guess)
+    if out.result == "won":
+        return "won"
+    return "list" if "One answer per guess" in out.messages[0] else "wrong"
+
+
+@pytest.mark.parametrize("answers, guess, expected", [
+    (["clock"], "I think it's a clock", "won"),  # filler words don't make a sentence a list
+    (["clock"], "could it be a big clock?", "won"),
+    (["clock"], "map towel clock egg", "list"),
+    (["clock"], "clock or watch", "list"),  # either-or is two guesses
+    (["clock"], "not a clock", "wrong"),
+    (["rainbow"], "rain bow", "won"),  # spacing may differ by a word
+    (["tea pot"], "teapot", "won"),
+    (["matches"], "a match", "won"),
+    (["pines"], "a pin", "wrong"),  # "es" plurals only after s, x, z, ch, sh
+    (["shoes"], "sho", "wrong"),
+    (["pokemon"], "Pokémon!", "won"),  # accents don't matter
+    (["problems", "too many problems"], "because it had too many problems", "won"),  # the longest answer counts
+])
+def test_matching_rules(tmp_path, answers, guess, expected):
+    assert outcome(riddle(tmp_path, "What is it?", answers), guess) == expected
+
+
+def test_words_from_the_riddle_are_not_extra_answers(tmp_path):
+    game = riddle(tmp_path, "A rooster lays an egg on a barn roof. Which way does it roll?", ["dont lay", "no egg"])
+    assert outcome(game, "roosters don't lay eggs silly") == "won"
+
+
+def test_a_different_number_is_wrong(tmp_path):
+    game = riddle(tmp_path, "You have three apples and take away two. How many do you have?", ["two", "2"])
+    assert outcome(game, "3-2=1") == "wrong"
+    assert outcome(game, "2 apples") == "won"
+
+
+def test_letter_answers_reject_hedges(tmp_path):
+    text = "What comes once in a minute and twice in a moment?"
+    assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "is it a m?") == "won"
+    assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "the letter M") == "won"
+    assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "m or n") == "list"
+    assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "n m t") == "list"
+
+
+def test_short_answers_get_no_first_letter_hint(tmp_path):
+    game = riddle(tmp_path, "What comes once in a minute?", ["m"])
+    game.on_command("hint", "", make_msg("?hint"), None)
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages == ["💡 1 letter"]
+
+
+def test_multi_word_hint(tmp_path):
+    game = riddle(tmp_path, "What do you call a deer with no eyes?", ["no idea"])
+    game.on_command("hint", "", make_msg("?hint"), None)
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages == ["💡 2 words, 6 letters, starts with N"]
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2351,20 +2674,41 @@ from __future__ import annotations
 import hashlib
 import random
 import re
+import unicodedata
 from datetime import datetime
+from functools import cache
 from typing import Any
 
 from bot.assets import Assets
 from bot.connectors.base import ChatMessage
 from bot.games.base import Game, Outcome
-from bot.text import normalize, strip_article
+from bot.text import fold_accents, normalize, strip_article
 
-EXTRA_WORDS = 3  # a guess may wrap the answer in this many extra words ("is it a clock")
-_APOSTROPHES = re.compile("['\u2019]")  # removed, not spaced: "I'm" must not leave a lone "m"
+EXTRA_WORDS = 2  # besides filler words, a guess may hold this many words beyond the answer
+# Apostrophes are removed, not spaced, so "I'm" can't leave a lone "m" (checked after NFKC folds fullwidth ones).
+_APOSTROPHES = re.compile("['\u2018\u2019\u201b`\u00b4\u02bc]")
+# Words that don't count toward a guess's length: "I think it's a clock" is one answer, "map towel clock" a list.
+FILLER = frozenset(
+    "i im ive id think thinking guess guessing maybe probably perhaps definitely surely its it is was be been "
+    "could would might will a an the my your our answer because cause cuz so um uh hmm lol lmao going gonna "
+    "to say said that thats this he she they you we of in on at for and or not no do does dont doesnt cant cannot "
+    "isnt wont didnt letter".split()
+)
+NEGATIONS = frozenset("not no never isnt neither nor".split())  # "not a clock" doesn't name the clock
+NUMBER_WORDS = frozenset(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+    "seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand".split()
+)
+_PLURAL_ES = ("s", "x", "z", "ch", "sh")  # not "o": "sho" must not match "shoes"
 
 
 def riddle_id(entry: dict[str, Any]) -> str:
-    return hashlib.sha1(entry["riddle"].encode()).hexdigest()[:10]
+    return _text_id(entry["riddle"])
+
+
+@cache  # one shared string per riddle, so remembered ids don't pile up copies
+def _text_id(text: str) -> str:
+    return hashlib.sha1(text.encode()).hexdigest()[:10]
 
 
 def _plural(count: int, word: str) -> str:
@@ -2372,8 +2716,28 @@ def _plural(count: int, word: str) -> str:
 
 
 def _same_word(guess: str, answer: str) -> bool:
-    """Equal, or one is the other plus "s"/"es" (clock/clocks, match/matches)."""
-    return guess == answer or guess in (answer + "s", answer + "es") or answer in (guess + "s", guess + "es")
+    """Equal, or a plural of the other: clock/clocks, match/matches (but not pin/pines)."""
+    if guess == answer:
+        return True
+    for longer, shorter in ((guess, answer), (answer, guess)):
+        if longer == shorter + "s" or (longer == shorter + "es" and shorter.endswith(_PLURAL_ES)):
+            return True
+    return False
+
+
+def _words(text: str) -> list[str]:
+    """A guess or answer as comparable words: apostrophes and a leading article dropped, accents folded."""
+    text = _APOSTROPHES.sub("", unicodedata.normalize("NFKC", text))
+    return fold_accents(normalize(strip_article(text))).split()
+
+
+def _numbers(words: list[str]) -> set[str]:
+    return {w for w in words if w.isdigit() or w in NUMBER_WORDS}
+
+
+def _content(words: list[str], context: list[str] = ()) -> int:
+    """How many words could be an answer: not filler, and not a word from the riddle itself."""
+    return sum(w not in FILLER and not any(_same_word(w, c) for c in context) for w in words)
 
 
 class Riddle(Game):
@@ -2399,41 +2763,77 @@ class Riddle(Game):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        super().__init__(category, rng, assets, level=level, recent=recent)
         riddles: list[dict[str, Any]] = assets.json("riddles")
-        fresh = [r for r in riddles if riddle_id(r) not in avoid] or riddles
-        entry = rng.choice(fresh)
+        entry = self.pick_unseen(riddles, riddle_id)
         self.item_id = riddle_id(entry)
         self.riddle: str = entry["riddle"]
         self.answers: list[str] = entry["answers"]
         self.clue: str = entry["clue"]
-        self._accepted = [normalize(a).split() for a in self.answers]
-        self._max_words = max(len(a) for a in self._accepted) + EXTRA_WORDS
+        self._accepted = [_words(a) for a in self.answers]
+        self._context = _words(self.riddle)  # "roosters don't lay eggs" reuses the riddle's words: not a list
+        # a guess naming a different number ("3-2=1" when the answer is 2) is wrong even if it contains the answer
+        self._answer_numbers = set().union(*(_numbers(a) for a in self._accepted))
         self.guesses_left = self.GUESSES
         self.hints_used = 0
 
     def start(self) -> str:
         return f"🧩 {self.riddle} · {self.time_limit}s · {{p}}g <answer> · {{p}}hint"
 
-    def _matches(self, words: list[str]) -> bool:
+    def _match(self, words: list[str]) -> tuple[list[str], int] | None:
+        """The longest accepted answer the guess contains as whole words, and where it starts; None if none.
+        Spacing may differ by one word ("rain bow", "tea pot"), and the answer may be plural."""
+        found: tuple[list[str], int] | None = None
         for answer in self._accepted:
-            n = len(answer)
-            for i in range(len(words) - n + 1):
-                window = words[i : i + n]
-                if window[:-1] == answer[:-1] and _same_word(window[-1], answer[-1]):
-                    return True
-        return False
+            joined = "".join(answer)
+            for size in sorted({len(answer) - 1, len(answer), len(answer) + 1} - {0}):
+                for i in range(len(words) - size + 1):
+                    if _same_word("".join(words[i : i + size]), joined) and (
+                        found is None or _content(answer) > _content(found[0])
+                    ):
+                        found = (answer, i)
+        return found
+
+    def _is_answer(self, words: list[str]) -> tuple[bool, bool]:
+        """(right, a list): does the guess name the answer, and is it really several guesses at once?"""
+        found = self._match(words)
+        if found is None:
+            return False, False
+        answer, start = found
+        letter = len(answer) == 1 and len(answer[0]) == 1 and answer[0].isalpha()  # the M, E and W riddles
+        extra = 0 if letter or "or" in words else EXTRA_WORDS
+        if _content(words, self._context) > max(1, _content(answer)) + extra:
+            return False, True
+        before = [w for w in words[:start] if w not in ("a", "an", "the")]
+        if before and before[-1] in NEGATIONS:
+            return False, False
+        if _numbers(words) - self._answer_numbers:  # "3-2=1" names another number
+            return False, False
+        if letter and any(self._other_letter(words, i, answer[0]) for i in range(len(words))):
+            return False, True  # "a, e, i" or "y e a r" hedges between letters
+        return True, False
+
+    @staticmethod
+    def _other_letter(words: list[str], i: int, answer: str) -> bool:
+        """Is words[i] a single letter other than the answer? "I" opening a sentence and "a" right before
+        the answer ("is it a m") don't count."""
+        w = words[i]
+        if len(w) != 1 or not w.isalpha() or w == answer:
+            return False
+        if (w == "i" and i == 0) or (w == "a" and i + 1 < len(words) and len(words[i + 1]) == 1):
+            return False
+        return True
 
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
         if name == "hint":
             return self._hint()
-        words = normalize(strip_article(_APOSTROPHES.sub("", args))).split()
+        words = _words(args)
         if name != "g" or not words:
             return None
-        too_long = len(words) > self._max_words  # one answer per guess, not a list of them
-        if not too_long and self._matches(words):
+        right, too_long = self._is_answer(words)
+        if right:
             points = self.POINTS[self.hints_used]
             return Outcome(
                 messages=[f"✅ {msg.display_name} got it: {self.answers[0]} (+{points})"],
@@ -2458,7 +2858,9 @@ class Riddle(Game):
         letters = [ch for ch in main if ch.isalnum()]
         words = len(main.split())
         prefix = f"{_plural(words, 'word')}, " if words > 1 else ""
-        return Outcome(messages=[f"💡 {prefix}{_plural(len(letters), 'letter')}, starts with {letters[0].upper()}"])
+        # for a one- or two-letter answer, "starts with M" would give it away
+        start = f", starts with {letters[0].upper()}" if len(letters) > 2 else ""
+        return Outcome(messages=[f"💡 {prefix}{_plural(len(letters), 'letter')}{start}"])
 
     def on_timeout(self) -> Outcome:
         return Outcome(messages=[f"⏰ Time's up! It was: {self.answers[0]}."], finished=True, result="timeout")
@@ -2470,7 +2872,7 @@ class Riddle(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_riddle.py -q`, then `.venv/bin/pytest -q`.
-Expected: `10 passed`, then the whole suite passes (356 passed).
+Expected: `27 passed`, then the whole suite passes (399 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2646,9 +3048,9 @@ class HigherLower(Game):
         assets: Assets,
         *,
         level: str | None = None,
-        avoid: frozenset[str] = frozenset(),
+        recent: tuple[str, ...] = (),
     ) -> None:
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        super().__init__(category, rng, assets, level=level, recent=recent)
         self.terms: list[dict[str, Any]] = assets.json("higherlower")["terms"]
         self.used: set[str] = set()
         self.streak = 0
@@ -2730,7 +3132,7 @@ class HigherLower(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_higherlower.py -q`, then `.venv/bin/pytest -q`.
-Expected: `10 passed`, then the whole suite passes (366 passed).
+Expected: `10 passed`, then the whole suite passes (409 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2742,9 +3144,9 @@ git commit -m "Phase 2: Higher or Lower game"
 ### Task 6: Register the games; flows, config and README
 
 **Files:**
-- Replace: `tests/test_flows.py`, `tests/test_cli.py`, `tests/test_config.py`, `bot/games/__init__.py`, `config.toml`, `pyproject.toml`, `README.md`
+- Replace: `tests/test_flows.py`, `tests/test_cli.py`, `tests/test_config.py`, `tests/test_stats_help_commands.py`, `bot/games/__init__.py`, `bot/stats_commands.py`, `config.toml`, `pyproject.toml`, `README.md`
 
-`ALL_GAMES` gains Trivia, Riddle and Higher or Lower, and `config.toml` enables all five. `pyproject.toml` packages the JSON and Markdown content files. The flow tests play one game of each through `BotCore`, and the README documents the commands. The console test and the shipped-config test now expect all five games.
+`ALL_GAMES` gains Trivia, Riddle and Higher or Lower, and `config.toml` enables all five. `pyproject.toml` packages the JSON and Markdown content files. `?leaderboard` and `?gamestats` accept a game's aliases (`?leaderboard hl`). The flow tests play one game of each through `BotCore`, and the README documents the commands. The console test and the shipped-config test now expect all five games.
 
 - [ ] **Step 1: Write `tests/test_flows.py`**
 
@@ -3467,12 +3869,133 @@ def test_bot_id_must_be_numeric(tmp_path):
         load_config(write(tmp_path, 'channel = "ok_name"\n'), {**ENV, "BOT_ID": "mybot"})
 ```
 
-- [ ] **Step 4: Run the tests and see them fail**
+- [ ] **Step 4: Write `tests/test_stats_help_commands.py`**
 
-Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py -q`
+```python
+from datetime import datetime, timezone
+
+import pytest
+
+from bot.commands import CommandContext, CommandRegistry
+from bot.help import register_help
+from bot.stats import PlayerResult, RoundRecord, StatsStore
+from bot.stats_commands import register_stats
+from tests.helpers import make_msg
+
+T0 = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
+
+
+class Cmds:
+    def __init__(self):
+        self.stats = StatsStore(":memory:")
+        self.registry = CommandRegistry("?")
+        register_stats(self.registry, stats=self.stats, game_names=["scramble", "hangman"])
+        register_help(self.registry)
+        self.replies: list[str] = []
+
+    def play(self, game: str, login: str, points: int, won: bool = True) -> None:
+        self.stats.touch_user(f"id-{login}", login, login.title(), T0)
+        self.stats.record_round(
+            RoundRecord(game, None, f"id-{login}", T0, T0, "won",
+                        [PlayerResult(f"id-{login}", login, login.title(), points, won)])
+        )
+
+    async def run(self, text: str, login: str = "alice") -> str:
+        name, _, args = text.removeprefix("?").partition(" ")
+        ctx = CommandContext(make_msg(text, login), name, args, "?", lambda t, **kw: self.replies.append(t), None)
+        await self.registry.get(name).handler(ctx)
+        return self.replies[-1]
+
+
+@pytest.fixture
+def c() -> Cmds:
+    cmds = Cmds()
+    cmds.play("scramble", "bob", 10)
+    cmds.play("scramble", "bob", 7)
+    cmds.play("scramble", "carol", 10)
+    cmds.play("hangman", "carol", 12)
+    cmds.play("hangman", "alice", 0, won=False)
+    return cmds
+
+
+async def test_leaderboard_overall_default(c: Cmds):
+    assert await c.run("?leaderboard") == "🏆 Top 2 overall: 1. Carol (22) 2. Bob (17)"
+
+
+async def test_leaderboard_game_and_limit_in_any_order(c: Cmds):
+    assert await c.run("?leaderboard scramble 1") == "🏆 Top 1 scramble: 1. Bob (17)"
+    assert await c.run("?leaderboard 1 hangman") == "🏆 Top 1 hangman: 1. Carol (12)"
+    assert await c.run("?leaderboard 99") == "🏆 Top 2 overall: 1. Carol (22) 2. Bob (17)"
+
+
+async def test_leaderboard_limit_edge_cases(c: Cmds):
+    assert await c.run("?leaderboard 0") == "🏆 Top 1 overall: 1. Carol (22)"
+    assert await c.run("?leaderboard -5") == "🏆 Top 1 overall: 1. Carol (22)"
+    assert await c.run("?leaderboard " + chr(0xB2)) == "Unknown game. Games: scramble, hangman"  # superscript two
+    assert await c.run("?leaderboard SCRAMBLE 1 extra words") == "🏆 Top 1 scramble: 1. Bob (17)"
+
+
+async def test_leaderboard_unknown_game_and_empty(c: Cmds):
+    assert await c.run("?leaderboard chess") == "Unknown game. Games: scramble, hangman"
+    empty = Cmds()
+    assert await empty.run("?leaderboard hangman") == "No hangman scores yet."
+
+
+async def test_gamestats_self_overall(c: Cmds):
+    assert await c.run("?gamestats", "carol") == (
+        "📊 carol: 22 pts, 2 wins, 2 played | hangman 1W/1P 12pts | scramble 1W/1P 10pts"
+    )
+
+
+async def test_gamestats_game_and_other_user(c: Cmds):
+    assert await c.run("?gamestats scramble @Bob") == "📊 Bob · scramble: 2 wins / 2 played · 17 pts · rank #1"
+    assert await c.run("?gamestats bob") == "📊 Bob: 17 pts, 2 wins, 2 played | scramble 2W/2P 17pts"
+
+
+async def test_gamestats_one_win_is_singular(c: Cmds):
+    assert await c.run("?gamestats hangman carol") == "📊 Carol · hangman: 1 win / 1 played · 12 pts · rank #1"
+
+
+async def test_gamestats_played_without_points_has_no_rank(c: Cmds):
+    assert await c.run("?gamestats hangman") == "📊 alice · hangman: 0 wins / 1 played · 0 pts"
+
+
+async def test_gamestats_missing(c: Cmds):
+    assert await c.run("?gamestats nobody_here") == "No stats for that user yet."
+    assert await c.run("?gamestats bad/name") == "That's not a valid username."
+    assert await c.run("?gamestats @") == "That's not a valid username."
+    assert await c.run("?gamestats hangman bob") == "No hangman stats for Bob yet."
+    assert await c.run("?gamestats", "dave") == "No stats for dave yet."
+
+
+async def test_help_overview_and_details(c: Cmds):
+    assert await c.run("?help") == "Stats: ?leaderboard ?gamestats · ?help <command> for details"
+    assert await c.run("?commands") == "Stats: ?leaderboard ?gamestats · ?help <command> for details"
+    assert await c.run("?help ?leaderboard") == (
+        "?leaderboard [game] [1-10] · Top players by points, overall or for one game."
+    )
+
+
+async def test_help_unknown_never_echoes_what_was_typed(c: Cmds):
+    assert await c.run("?help nope") == "No command by that name. Try ?help."
+    assert await c.run("?help jason_is_trash") == "No command by that name. Try ?help."
+
+
+async def test_game_aliases_work_in_stats():
+    cmds = Cmds()
+    cmds.registry = CommandRegistry("?")
+    register_stats(cmds.registry, stats=cmds.stats, game_names=["scramble", "higherlower"])
+    cmds.play("higherlower", "dana", 6)
+    assert await cmds.run("?leaderboard hl") == "🏆 Top 1 higherlower: 1. Dana (6)"
+    assert await cmds.run("?gamestats hl dana") == "📊 Dana · higherlower: 1 win / 1 played · 6 pts · rank #1"
+```
+
+- [ ] **Step 5: Run the tests and see them fail**
+
+Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py tests/test_stats_help_commands.py -q`
 Expected: the new flow tests fail (`?trivia` isn't a command yet).
 
-- [ ] **Step 5: Write `bot/games/__init__.py`**
+- [ ] **Step 6: Write `bot/games/__init__.py`**
 
 ```python
 """All game classes, by name. config.toml's [games] enabled picks which ones run."""
@@ -3487,7 +4010,120 @@ from bot.games.trivia import Trivia
 ALL_GAMES: dict[str, type[Game]] = {cls.name: cls for cls in (Scramble, Hangman, Trivia, Riddle, HigherLower)}
 ```
 
-- [ ] **Step 6: Write `config.toml`**
+- [ ] **Step 7: Write `bot/stats_commands.py`**
+
+```python
+"""?leaderboard and ?gamestats."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Sequence
+
+from bot.commands import Command, CommandContext, CommandRegistry
+from bot.games import ALL_GAMES
+from bot.stats import StatsStore
+from bot.text import clean_username
+
+DEFAULT_LIMIT = 5
+MAX_LIMIT = 10
+_NUMBER = re.compile(r"-?[0-9]+")  # ASCII only: str.isdigit() accepts "²", which int() rejects
+
+
+def _plural(count: int, word: str) -> str:
+    return word if count == 1 else word + "s"
+
+
+def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: Sequence[str]) -> None:
+    games = [g.lower() for g in game_names]
+    # a game's aliases work here too: "?leaderboard hl" means higherlower
+    aliases = {a: cls.name for cls in ALL_GAMES.values() if cls.name in games for a in cls.aliases}
+
+    def game_name(word: str) -> str | None:
+        word = word.lower()
+        word = aliases.get(word, word)
+        return word if word in games else None
+
+    async def leaderboard(ctx: CommandContext) -> None:
+        game: str | None = None
+        limit = DEFAULT_LIMIT
+        for arg in ctx.argv[:2]:
+            if _NUMBER.fullmatch(arg):
+                limit = max(1, min(MAX_LIMIT, int(arg)))
+            elif game_name(arg):
+                game = game_name(arg)
+            else:
+                ctx.reply(f"Unknown game. Games: {', '.join(games)}")
+                return
+        rows = stats.leaderboard(game, limit)
+        label = game or "overall"
+        if not rows:
+            ctx.reply(f"No {label} scores yet.")
+            return
+        body = " ".join(f"{i}. {r.display_name} ({r.points})" for i, r in enumerate(rows, start=1))
+        ctx.reply(f"🏆 Top {len(rows)} {label}: {body}")
+
+    async def gamestats(ctx: CommandContext) -> None:
+        argv = ctx.argv
+        game: str | None = None
+        # A first argument that names a game is the game, even if someone's login is the same word.
+        if argv and game_name(argv[0]):
+            game = game_name(argv[0])
+            argv = argv[1:]
+        if argv:
+            login = clean_username(argv[0])
+            if login is None:
+                ctx.reply("That's not a valid username.")
+                return
+            user = stats.find_user(login)
+            if user is None:
+                ctx.reply("No stats for that user yet.")  # never repeat the name the user typed
+                return
+            user_id, name = user.user_id, user.display_name
+        else:
+            user_id, name = ctx.msg.user_id, ctx.msg.display_name
+        per_game = stats.user_stats(user_id)
+        if game is not None:
+            row = next((g for g in per_game if g.game == game), None)
+            if row is None:
+                ctx.reply(f"No {game} stats for {name} yet.")
+                return
+            rank = stats.rank(user_id, game)
+            rank_text = f" · rank #{rank}" if rank else ""
+            wins_text = f"{row.wins} {_plural(row.wins, 'win')}"
+            ctx.reply(f"📊 {name} · {game}: {wins_text} / {row.played} played · {row.points} pts{rank_text}")
+            return
+        if not per_game:
+            ctx.reply(f"No stats for {name} yet.")
+            return
+        points = sum(g.points for g in per_game)
+        wins = sum(g.wins for g in per_game)
+        played = sum(g.played for g in per_game)
+        parts = " | ".join(f"{g.game} {g.wins}W/{g.played}P {g.points}pts" for g in per_game)
+        ctx.reply(f"📊 {name}: {points} pts, {wins} {_plural(wins, 'win')}, {played} played | {parts}")
+
+    registry.add(
+        Command(
+            "leaderboard",
+            leaderboard,
+            "{p}leaderboard [game] [1-10]",
+            "Top players by points, overall or for one game.",
+            "Stats",
+        )
+    )
+    registry.add(
+        Command(
+            "gamestats",
+            gamestats,
+            "{p}gamestats [game] [username]",
+            "Wins, games played, and points: yours or someone else's, overall or for one game.",
+            "Stats",
+            global_cooldown=False,  # personal lookup: never blocked by someone else's
+        )
+    )
+```
+
+- [ ] **Step 8: Write `config.toml`**
 
 ```toml
 # Non-secret settings. Secrets (client id/secret, bot id, owner ids) live in .env.
@@ -3514,7 +4150,7 @@ max_queue = 30              # extra messages beyond this are dropped and logged
 retention_days = 30
 ```
 
-- [ ] **Step 7: Write `pyproject.toml`**
+- [ ] **Step 9: Write `pyproject.toml`**
 
 ```toml
 [build-system]
@@ -3551,7 +4187,7 @@ filterwarnings = [
 ]
 ```
 
-- [ ] **Step 8: Write `README.md`**
+- [ ] **Step 10: Write `README.md`**
 
 ````markdown
 # Offline Chat Bot
@@ -3573,7 +4209,7 @@ bot's outgoing messages are backed up.
 | `?help` / `?commands`, `?help <command>` | anyone | List commands, or explain one |
 | `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer; `?hint` for a hint (10/7/4 points) |
 | `?hangman [category]`, `?hangman categories` | anyone | Your own Hangman; guess with `?g <letter>` or `?g <answer>` |
-| `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`, 10 or 15 points) |
+| `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`; medium 10/7/4, hard 15/10/6 points). Questions from Open Trivia DB (CC BY-SA 4.0) |
 | `?riddle` | anyone | Your own riddle: `?g <answer>`, 3 guesses, `?hint` for a clue then the letter count (10/7/4 points) |
 | `?higherlower` / `?hl` | anyone | Does the next thing get more monthly Wikipedia views? `?g higher` or `?g lower`; 1 point per right answer, one miss ends the streak |
 | `?skip` | anyone | End your current game (no points) |
@@ -3586,7 +4222,7 @@ bot's outgoing messages are backed up.
 | `?stopgame` | mods, broadcaster, owners | End all running games with no points |
 
 Scramble and Hangman categories: animals, countries, food, games, general, streamers. Trivia
-categories: anime, animals, games, general, geography, history, movies, music, science, sports, tv.
+categories: animals, anime, games, general, geography, history, movies, music, science, sports, tv.
 
 A player doesn't get the same trivia question or riddle again within their last 50.
 
@@ -3723,15 +4359,15 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
   don't give the answer away).
 ````
 
-- [ ] **Step 9: Run the tests**
+- [ ] **Step 11: Run the tests**
 
-Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py -q`, then `.venv/bin/pytest -q`.
-Expected: `71 passed`, then the whole suite passes (371 passed).
+Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py tests/test_stats_help_commands.py -q`, then `.venv/bin/pytest -q`.
+Expected: `83 passed`, then the whole suite passes (415 passed).
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add tests/test_flows.py tests/test_cli.py tests/test_config.py bot/games/__init__.py config.toml pyproject.toml README.md
+git add tests/test_flows.py tests/test_cli.py tests/test_config.py tests/test_stats_help_commands.py bot/games/__init__.py bot/stats_commands.py config.toml pyproject.toml README.md
 git commit -m "Phase 2: register Trivia, Riddle and Higher or Lower; flows and README"
 ```
 
@@ -3741,7 +4377,13 @@ git commit -m "Phase 2: register Trivia, Riddle and Higher or Lower; flows and R
 - Replace: `scripts/fetch_trivia.py`, `bot/content/TRIVIA_CREDITS.md`
 - Generate: `bot/content/trivia.json`
 
-`scripts/fetch_trivia.py` downloads every verified multiple-choice question for the 11 categories (spec §3's mapping) from Open Trivia DB, one request every 5.5 s with a session token so nothing repeats. With a token the API may answer "fewer left than you asked for" with either response code 1 or 4, so both halve the batch size. It drops questions with blocked words, questions over 300 characters, easy questions too long for one message, and medium/hard questions that can't be typed (answer over 3 words or 25 characters, or the question mentions "of these", "of the following", "all of the above", "none of the" or a capitalised NOT). The credits file covers CC BY-SA 4.0.
+`scripts/fetch_trivia.py` downloads every verified multiple-choice question for the 11 categories (spec §3's mapping) from Open Trivia DB, one request every 5.5 s with a session token so nothing repeats. With a token the API may answer "fewer left than you asked for" with either response code 1 or 4, so both halve the batch size; network errors and HTTP 429 are retried with backoff. Text is cleaned (invisible characters, spaces). `keep()` holds every rule, and `--refilter` re-applies them to the existing file offline. It drops:
+
+- questions with blocked words or mature topics (drugs, alcohol, tobacco, sexual themes, self-harm, a few fan-service anime titles), questions over 300 characters, duplicates (ignoring punctuation and case), and a short list of ids checked and found wrong or dated;
+- easy questions too long for one message, or whose options read alike or include a lone letter ("E", which a player would read as A-D);
+- medium/hard questions that can't be typed fairly: answer over 3 words or 25 characters, empty once normalized ("?:"), carrying meaning in symbols (C++, -40, 13.8, 2-3, 4/4, %), a date with a month, a number of 5+ digits, an exact number for an "approximately" question, or a question that needs its options ("these", "following", "not", "except").
+
+The credits file covers CC BY-SA 4.0 and lists the changes made.
 
 - [ ] **Step 1: Write `scripts/fetch_trivia.py`**
 
@@ -3752,14 +4394,18 @@ Run once from the repo root: .venv/bin/python scripts/fetch_trivia.py
 The API allows one request per 5 seconds per IP, so this takes several minutes. It only serves
 verified questions. Easy questions keep their options (multiple choice); medium and hard ones
 are kept only if the answer can reasonably be typed.
+
+`--refilter` re-applies the filters below to the existing trivia.json without any network access.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date
@@ -3769,6 +4415,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bot.assets import Assets  # noqa: E402
 from bot.fun import BlockedWords  # noqa: E402
+from bot.text import normalize, strip_invisible  # noqa: E402
 
 API = "https://opentdb.com"
 OUT = Path(__file__).resolve().parent.parent / "bot" / "content" / "trivia.json"
@@ -3790,19 +4437,53 @@ CATEGORIES: dict[str, tuple[int, ...]] = {
     "animals": (27,),
 }
 DIFFICULTIES = ("easy", "medium", "hard")
-# Typed questions must make sense without seeing the options.
-NEEDS_OPTIONS = ("of these", "of the following", "all of the above", "none of the")
+# Typed questions must make sense without seeing the options ("Which is not a country in Africa?").
+NEEDS_OPTIONS = re.compile(r"\b(?:these|following|below|above|not|except|none of)\b", re.IGNORECASE)
+# Typed answers nobody types the same way twice: dates with a month, long numbers, approximate figures.
+MONTH_DATE = re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b.*\d|\d.*\b(?:jan|feb|mar"
+                        r"|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.IGNORECASE)
+LONG_NUMBER = re.compile(r"\d{5,}")
+APPROXIMATE = re.compile(r"\b(?:approximately|roughly|about how|around how|estimated)\b", re.IGNORECASE)
+# Topics that don't belong in a young, family-friendly chat, beyond the blocked-word list: drugs, alcohol,
+# tobacco, sexual themes, self-harm, and a few fan-service anime titles.
+MATURE_TOPICS = re.compile(
+    r"\b(?:cocaine|heroin|cannabis|marijuana|thc|weed|drugs?|cartel|overdose|beer|brewery|vodka|whisk(?:e)?y|rum"
+    r"|cocktails?|alcohol(?:ic)?|liquor|drunk|tobacco|cigarettes?|smoking|sex(?:ual|y)?|breasts?|harem|hot coffee"
+    r"|stripper|suicide|kill (?:themselves|himself|herself|yourself)|schutzstaffel|to love-ru|highschool dxd"
+    r"|highschool of the dead)\b",
+    re.IGNORECASE,
+)
+# Checked and wrong, garbled, or out of date (see docs/superpowers/plans, Phase 2 execution log).
+EXCLUDED_IDS = frozenset({
+    "4be33db662", "5efa52ea29", "0d5228c649", "ac2967fc00", "0508b9f490", "358cd17e26", "01495b878f",
+    "7732c495a3", "96ae8a7764", "5db409db5a",
+})
 MAX_TYPED_WORDS = 3
 MAX_TYPED_CHARS = 25
 MAX_QUESTION = 300
 MAX_EASY_TEXT = 400  # question plus options, so the multiple-choice message fits in one chat message
+# Typed answers whose meaning is in symbols the matcher can't compare: C++, -40, 13.8, 2-3, 4/4, V = I*R.
+MEANINGFUL_SYMBOLS = re.compile(r"[+#=*^<>°%?!♡♪]|\d\s*[.\-/:]\s*\d|(?:^|\s)-\s*\d")
 
 
 def get(path: str, **params: object) -> dict:
     url = f"{API}/{path}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response)
+        except (urllib.error.URLError, TimeoutError) as exc:  # includes HTTP 429 and dropped connections
+            if attempt == 4:
+                raise
+            print(f"  retrying after {exc}", flush=True)
+            time.sleep(DELAY * 2 ** (attempt + 1))
+    raise AssertionError("unreachable")
+
+
+def clean(text: str) -> str:
+    """Invisible characters (soft hyphens, direction marks) removed and spaces collapsed."""
+    return " ".join(strip_invisible(text).split())
 
 
 def typeable(question: str, answer: str) -> bool:
@@ -3810,9 +4491,35 @@ def typeable(question: str, answer: str) -> bool:
     return (
         len(answer.split()) <= MAX_TYPED_WORDS
         and len(answer) <= MAX_TYPED_CHARS
-        and not any(phrase in lowered for phrase in NEEDS_OPTIONS)
-        and " NOT " not in f" {question} "
+        and normalize(answer) != ""  # "♡♪!?" or "?:" can't be typed as a guess
+        and not MEANINGFUL_SYMBOLS.search(answer)
+        and not MONTH_DATE.search(answer)
+        and not LONG_NUMBER.search(answer.replace(",", ""))
+        and not (APPROXIMATE.search(lowered) and re.search(r"\d", answer))
+        and not NEEDS_OPTIONS.search(question)
     )
+
+
+def clear_options(options: list[str]) -> bool:
+    """Easy options must read differently once spaces and case are ignored, and none may be a lone
+    letter, which a player would read as A-D ("E", "A", "I", "O")."""
+    compact = [normalize(o).replace(" ", "") for o in options]
+    lone_letter = any(len(c) == 1 and c.isalpha() for c in compact)
+    return len(set(compact)) == len(options) and "" not in compact and not lone_letter
+
+
+def keep(entry: dict, blocked: BlockedWords) -> bool:
+    """Every rule a question must pass, used both while downloading and by --refilter."""
+    question, answer = entry["question"], entry["answer"]
+    texts = [question, answer, *entry.get("wrong", [])]
+    if entry["id"] in EXCLUDED_IDS or len(question) > MAX_QUESTION:
+        return False
+    if any(blocked.found_in(t) or MATURE_TOPICS.search(t) for t in texts):
+        return False
+    if entry["difficulty"] == "easy":
+        options = [answer, *entry["wrong"]]
+        return sum(len(t) + 4 for t in options) + len(question) <= MAX_EASY_TEXT and clear_options(options)
+    return typeable(question, answer)
 
 
 def fetch_all(token: str, category_id: int, difficulty: str) -> list[dict]:
@@ -3835,31 +4542,55 @@ def fetch_all(token: str, category_id: int, difficulty: str) -> list[dict]:
     return found
 
 
+def question_key(question: str) -> str:
+    """Questions that differ only in punctuation or case are the same question."""
+    return re.sub(r"[^a-z0-9]", "", question.lower())
+
+
+def tidy(entry: dict) -> dict:
+    entry = dict(entry, question=clean(entry["question"]), answer=clean(entry["answer"]))
+    if "wrong" in entry:
+        entry["wrong"] = [clean(w) for w in entry["wrong"]]
+    return entry
+
+
+def refilter() -> None:
+    blocked = BlockedWords.load(Assets())
+    payload = json.loads(OUT.read_text(encoding="utf-8"))
+    before = len(payload["questions"])
+    kept, keys = [], set()
+    for q in map(tidy, payload["questions"]):
+        if keep(q, blocked) and question_key(q["question"]) not in keys:
+            keys.add(question_key(q["question"]))
+            kept.append(q)
+    payload["questions"] = kept
+    OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
+    print(f"kept {len(payload['questions'])} of {before} questions in {OUT}")
+
+
 def main() -> None:
+    if "--refilter" in sys.argv[1:]:
+        refilter()
+        return
     blocked = BlockedWords.load(Assets())
     token = get("api_token.php", command="request")["token"]
     questions: list[dict] = []
-    seen: set[str] = set()
+    seen: set[str] = set()  # question keys
     for ours, ids in CATEGORIES.items():
         for difficulty in DIFFICULTIES:
             raw = [q for category_id in ids for q in fetch_all(token, category_id, difficulty)]
             kept = 0
             for q in raw:
-                question = urllib.parse.unquote(q["question"]).strip()
-                answer = urllib.parse.unquote(q["correct_answer"]).strip()
-                wrong = [urllib.parse.unquote(a).strip() for a in q["incorrect_answers"]]
+                question = clean(urllib.parse.unquote(q["question"]))
+                answer = clean(urllib.parse.unquote(q["correct_answer"]))
+                wrong = [clean(urllib.parse.unquote(a)) for a in q["incorrect_answers"]]
                 qid = hashlib.sha1(question.encode()).hexdigest()[:10]
-                texts = [question, answer, *wrong]
-                if qid in seen or len(question) > MAX_QUESTION or any(blocked.found_in(t) for t in texts):
-                    continue
                 entry = {"id": qid, "category": ours, "difficulty": difficulty, "question": question, "answer": answer}
                 if difficulty == "easy":
-                    if len(question) + sum(len(t) + 4 for t in (answer, *wrong)) > MAX_EASY_TEXT:
-                        continue
                     entry["wrong"] = wrong
-                elif not typeable(question, answer):
+                if question_key(question) in seen or not keep(entry, blocked):
                     continue
-                seen.add(qid)
+                seen.add(question_key(question))
                 questions.append(entry)
                 kept += 1
             print(f"{ours:10} {difficulty:6} fetched {len(raw):4} kept {kept:4}", flush=True)
@@ -3882,21 +4613,29 @@ if __name__ == "__main__":
 # Trivia credits
 
 The trivia questions in `trivia.json` come from [Open Trivia DB](https://opentdb.com/), licensed
-under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). They were downloaded once
-with `scripts/fetch_trivia.py`; easy questions keep their four options, and medium and hard ones
-were kept only if the answer can be typed. Questions with blocked words were left out. The
-adapted question bank is shared under the same license.
+under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), downloaded on 2026-10-05
+with `scripts/fetch_trivia.py`. `?help trivia` names the source and license in chat.
+
+Changes made to the original questions:
+
+- Text was decoded from the API's URL encoding, with invisible characters removed and spaces tidied.
+- Easy questions keep their four options. Medium and hard questions are asked without options
+  (typed answers), and were kept only if the answer can reasonably be typed.
+- Questions were left out if they contained blocked words or mature topics, needed their options to
+  make sense, duplicated another question, or were found to be wrong or out of date.
+
+The adapted question bank is shared under the same license.
 ```
 
 - [ ] **Step 3: Generate `bot/content/trivia.json`**
 
 Run: `.venv/bin/python scripts/fetch_trivia.py`
-Expected: it takes about 25 minutes; the last line reads `wrote N questions` with N around 3,200.
+Expected: it takes about 25 minutes; the last line reads `wrote N questions` with N around 3,000.
 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 371 passed.
+Expected: 415 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4035,7 +4774,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What did the ocean say to the beach?", "answers": ["waved", "wave", "waves"], "clue": "Think about how water moves on the shore."},
   {"riddle": "What did one wall say to the other wall?", "answers": ["corner", "at the corner"], "clue": "Think about where two walls touch."},
   {"riddle": "Why did the bicycle fall over?", "answers": ["two tired", "too tired", "tired"], "clue": "It needed a rest, and it has a pair of wheels."},
-  {"riddle": "What do you call a deer with no eyes?", "answers": ["no idea", "no eye deer", "no eyed deer", "noidea"], "clue": "Say the answer out loud: it sounds like a shrug."},
+  {"riddle": "What do you call a deer with no eyes?", "answers": ["no idea", "no eye deer", "no eyes deer", "no eyed deer", "noidea"], "clue": "Say the answer out loud: it sounds like a shrug."},
   {"riddle": "Where does a sheep go to get a haircut?", "answers": ["baa baa shop", "baabaa shop", "baa shop", "barber shop", "barbershop"], "clue": "Think about the noise a sheep makes."},
   {"riddle": "What do you call a fake noodle?", "answers": ["impasta", "impostor", "imposter"], "clue": "It sounds like someone pretending to be somebody else."},
   {"riddle": "What do you call cheese that isn't yours?", "answers": ["nacho cheese", "nacho", "nachos"], "clue": "Say 'not your' really fast."},
@@ -4072,7 +4811,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What do you call a boomerang that doesn't come back?", "answers": ["stick", "sticks"], "clue": "It's just a plain piece of wood now."},
   {"riddle": "If a red house is made of red bricks, what is a greenhouse made of?", "answers": ["glass"], "clue": "Plants grow inside because sunlight shines straight through it."},
   {"riddle": "If you have three apples and you take away two, how many do you have?", "answers": ["two", "2"], "clue": "Count the ones in your hands, not the ones left behind."},
-  {"riddle": "Imagine you're stuck in a dark room with no doors or windows. How do you get out?", "answers": ["stop imagining", "stop", "quit imagining", "quit"], "clue": "Look at the very first word of the question."},
+  {"riddle": "Imagine you're stuck in a dark room with no doors or windows. How do you get out?", "answers": ["stop imagining", "quit imagining"], "clue": "Look at the very first word of the question."},
   {"riddle": "I shave every day, but my beard stays the same. What am I?", "answers": ["barber", "barbers", "hairdresser", "hair stylist"], "clue": "People visit this person's shop when their locks get too long."},
   {"riddle": "I fly without wings and cry without eyes. What am I?", "answers": ["cloud", "clouds", "raincloud", "rain cloud", "storm cloud"], "clue": "I float in the sky and sometimes block the sun."},
   {"riddle": "I'm yellow and sour, and people turn me into a summer drink with sugar and water. What am I?", "answers": ["lemon", "lemons"], "clue": "Take a bite of me and your face will pucker."},
@@ -4099,7 +4838,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What season is the best for jumping on a trampoline?", "answers": ["spring", "springtime"], "clue": "Think of a bouncy metal coil and the season after winter."},
   {"riddle": "What is a tornado's favorite game?", "answers": ["twister"], "clue": "It's a party game where you put hands and feet on colored circles."},
   {"riddle": "What did the paper say to the pencil?", "answers": ["write on", "right on"], "clue": "Think of what a pencil does and a cool way to say 'awesome'."},
-  {"riddle": "What do you call a pony with a sore throat?", "answers": ["hoarse", "little hoarse", "horse", "little horse"], "clue": "It sounds like the word for a scratchy voice."},
+  {"riddle": "What do you call a pony with a sore throat?", "answers": ["hoarse", "little hoarse", "little horse"], "clue": "It sounds like the word for a scratchy voice."},
   {"riddle": "Why are fish so smart?", "answers": ["schools", "school", "live in schools"], "clue": "Think about where groups of fish swim and kids learn."},
   {"riddle": "What kind of bird can write?", "answers": ["penguin", "penguins"], "clue": "It waddles on the ice and can't fly."},
   {"riddle": "What bird is always out of breath?", "answers": ["puffin", "puffins"], "clue": "It's a seabird with a bright, colorful beak."},
@@ -4110,8 +4849,8 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "I have a mane and a mighty roar, and they call me king of the jungle. What am I?", "answers": ["lion", "lions"], "clue": "I'm a big cat that lives in a pride."},
   {"riddle": "What jumps when it walks and sits when it stands?", "answers": ["kangaroo", "kangaroos", "roo"], "clue": "It carries its baby in a pouch."},
   {"riddle": "I carry my house on my back, move very slowly, and leave a shiny trail. What am I?", "answers": ["snail", "snails"], "clue": "Gardeners find me munching lettuce after the rain."},
-  {"riddle": "What has a bill but never pays it?", "answers": ["duck", "ducks", "platypus", "bird"], "clue": "It quacks and paddles across ponds."},
-  {"riddle": "What animal can jump higher than a house?", "answers": ["any animal", "any", "all", "every", "cant jump", "cannot jump", "dont jump"], "clue": "Think about how high a building is able to leap."},
+  {"riddle": "What has a bill but never pays it?", "answers": ["duck", "ducks", "platypus"], "clue": "It quacks and paddles across ponds."},
+  {"riddle": "What animal can jump higher than a house?", "answers": ["any animal", "any", "all", "every", "cant jump", "cannot jump", "dont jump", "doesnt jump"], "clue": "Think about how high a building is able to leap."},
   {"riddle": "What has to be taken before you can get it?", "answers": ["picture", "pictures", "photo", "photos", "photograph", "selfie"], "clue": "Someone says cheese right before it happens."},
   {"riddle": "Turn me on my side and I'm everything. Cut me in half and I'm nothing. What am I?", "answers": ["eight", "8"], "clue": "Sideways, I look like the infinity symbol."},
   {"riddle": "What gets smaller every time it takes a bath?", "answers": ["soap", "soaps", "soap bar"], "clue": "It makes bubbles when you wash your hands."},
@@ -4136,7 +4875,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
 - [ ] **Step 2: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 371 passed.
+Expected: 415 passed.
 
 - [ ] **Step 3: Commit**
 
@@ -4151,7 +4890,7 @@ git commit -m "Phase 2: riddles"
 - Replace: `scripts/higherlower_terms.txt`, `scripts/fetch_pageviews.py`
 - Generate: `bot/content/higherlower.json`
 
-`scripts/higherlower_terms.txt` lists about 440 well-known, family-friendly terms (display name, exact English Wikipedia title, category). `scripts/fetch_pageviews.py` resolves each title through redirects, then sums last month's user page views from the Wikimedia REST API. It sends a generic User-Agent with the repo URL (no personal email), waits 1 s between requests, and backs off on HTTP 429. Missing pages are reported and skipped.
+`scripts/higherlower_terms.txt` lists about 440 well-known, family-friendly terms (display name, exact English Wikipedia title, category). `scripts/fetch_pageviews.py` resolves each title through redirects, then sums last month's user page views from the Wikimedia REST API. It sends a generic User-Agent with the repo URL (no personal email), waits 1 s between requests, and retries HTTP 429 and dropped connections with backoff. Missing and disambiguation pages are skipped; a term whose article differs from the title asked for, or with under 3,000 views, is printed for a check by hand. A run that finds fewer than 100 terms leaves the old file alone. Films use their film articles ("Moana (2016 film)"), and "It" and "Up" display as "It (the movie)" and "Up (the movie)" so the question reads well.
 
 - [ ] **Step 1: Write `scripts/higherlower_terms.txt`**
 
@@ -4261,7 +5000,6 @@ CaptainSparklez|CaptainSparklez|streamers
 Disguised Toast|Disguised Toast|streamers
 Imaqtpie|Imaqtpie|streamers
 DrLupo|DrLupo|streamers
-Bugha|Bugha|streamers
 Tfue|Tfue|streamers
 Jerma985|Jerma985|streamers
 
@@ -4547,20 +5285,20 @@ Oppenheimer|Oppenheimer (film)|movies
 Minions|Minions (film)|movies
 Despicable Me|Despicable Me|movies
 Encanto|Encanto|movies
-Moana|Moana|movies
+Moana|Moana (2016 film)|movies
 Coco|Coco (2017 film)|movies
-Up|Up (2009 film)|movies
+Up (the movie)|Up (2009 film)|movies
 The Incredibles|The Incredibles|movies
 Cars|Cars (film)|movies
-Ratatouille|Ratatouille|movies
+Ratatouille|Ratatouille (film)|movies
 WALL-E|WALL-E|movies
 Inside Out|Inside Out (2015 film)|movies
 Guardians of the Galaxy|Guardians of the Galaxy (film)|movies
 Black Panther|Black Panther (film)|movies
-Iron Man|Iron Man (film)|movies
+Iron Man|Iron Man (2008 film)|movies
 Joker|Joker (2019 film)|movies
-It|It (2017 film)|movies
-Venom|Venom (film)|movies
+It (the movie)|It (2017 film)|movies
+Venom|Venom (2018 film)|movies
 The Super Mario Bros. Movie|The Super Mario Bros. Movie|movies
 Jaws|Jaws (film)|movies
 E.T. the Extra-Terrestrial|E.T. the Extra-Terrestrial|movies
@@ -4653,6 +5391,8 @@ OUT = ROOT / "bot" / "content" / "higherlower.json"
 USER_AGENT = "offline-chat-bot/0.1 (https://github.com/rrong12/offline-chat-bot)"
 ACTION_API = "https://en.wikipedia.org/w/api.php"
 VIEWS_API = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user"
+REVIEW_BELOW = 3000  # monthly views this low usually mean the wrong article
+MIN_TERMS = 100
 
 
 def get(url: str) -> dict:
@@ -4664,8 +5404,13 @@ def get(url: str) -> dict:
         except urllib.error.HTTPError as exc:
             if exc.code != 429 or attempt == 5:
                 raise
-            wait = int(exc.headers.get("Retry-After") or 0) or 5 * 2**attempt  # rate limited: back off
+            retry_after = exc.headers.get("Retry-After") or ""
+            wait = int(retry_after) if retry_after.isdigit() else 5 * 2**attempt  # rate limited: back off
             time.sleep(min(wait, 120))
+        except (urllib.error.URLError, TimeoutError):  # dropped connection: try again
+            if attempt == 5:
+                raise
+            time.sleep(5 * 2**attempt)
     raise AssertionError("unreachable")
 
 
@@ -4679,13 +5424,17 @@ def resolve(titles: list[str]) -> dict[str, str | None]:
     result: dict[str, str | None] = {}
     for i in range(0, len(titles), 50):
         batch = titles[i : i + 50]
-        query = urllib.parse.urlencode(
-            {"action": "query", "format": "json", "redirects": 1, "titles": "|".join(batch)}
-        )
+        query = urllib.parse.urlencode({
+            "action": "query", "format": "json", "redirects": 1, "titles": "|".join(batch),
+            "prop": "pageprops", "ppprop": "disambiguation",  # a disambiguation page is the wrong article
+        })
         data = get(f"{ACTION_API}?{query}")["query"]
         step = {n["from"]: n["to"] for n in data.get("normalized", [])}
         step.update({r["from"]: r["to"] for r in data.get("redirects", [])})
-        missing = {p["title"] for p in data["pages"].values() if "missing" in p or "invalid" in p}
+        missing = {
+            p["title"] for p in data["pages"].values()
+            if "missing" in p or "invalid" in p or "disambiguation" in p.get("pageprops", {})
+        }
         for title in batch:
             current = title
             for _ in range(3):  # normalized, then redirected
@@ -4713,7 +5462,7 @@ def main() -> None:
     for name, title, category in rows:
         real = canonical.get(title)
         if real is None:
-            problems.append(f"missing page: {title}")
+            problems.append(f"missing or disambiguation page: {title}")
             continue
         try:
             views = monthly_views(real, start, end)
@@ -4721,7 +5470,13 @@ def main() -> None:
             problems.append(f"no views ({exc.code}): {real}")
             continue
         terms.append({"name": name, "article": real, "category": category, "views": views})
+        if real != title or views < REVIEW_BELOW:
+            problems.append(f"check by hand: {name} -> {real} ({views} views)")
         time.sleep(1.0)  # stay well under Wikimedia's rate limit
+    for problem in problems:
+        print("  " + problem)
+    if len(terms) < MIN_TERMS:  # don't overwrite good data with a failed run
+        sys.exit(f"only {len(terms)} terms found; {OUT} left unchanged")
     payload = {
         "source": "English Wikipedia page views (Wikimedia REST API), user agents only",
         "month": f"{start:%Y-%m}",
@@ -4729,9 +5484,6 @@ def main() -> None:
     }
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
     print(f"wrote {len(terms)} terms for {start:%Y-%m} to {OUT}")
-    for problem in problems:
-        print("  " + problem)
-    sys.exit(1 if len(terms) < 100 else 0)
 
 
 if __name__ == "__main__":
@@ -4746,7 +5498,7 @@ Expected: it takes a few minutes; it prints `wrote N terms for <month>` and any 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 371 passed.
+Expected: 415 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4762,9 +5514,10 @@ git commit -m "Phase 2: Higher or Lower terms and page views"
 
 Rules for the new content, run against the real files:
 
-- **Trivia:** 1,000+ questions, unique ids, exactly the 11 categories with 30+ questions each, easy questions with three distinct wrong options, typed answers of at most 3 words and 25 characters, every question message at most 480 characters, no blocked words, and the credits file.
+- **Trivia:** 1,000+ questions, unique ids, exactly the 11 categories with 30+ questions each, easy questions with three wrong options that differ from each other and pass the script's `clear_options`, typed answers that pass the script's `typeable` and have accepted forms, every question message at most 480 characters, no blocked words, and the credits file.
 - **Riddles:** 150+, no duplicates, riddle at most 300 characters, answers lowercase with 1-3 words and not starting with an article (guesses lose theirs), no blocked words, and no clue word equal to an answer word or sharing its first 4 letters with one.
 - **Higher or Lower:** 300+ terms, unique names of at most 30 characters, positive integer views, no blocked words, and every term has at least 50 possible partners.
+- **Games:** no game has a category with the same name as one of its levels.
 
 - [ ] **Step 1: Write `tests/test_content.py`**
 
@@ -4885,7 +5638,15 @@ TRIVIA_CATEGORIES = ["anime", "animals", "games", "general", "geography", "histo
 
 
 def test_trivia_bank():
-    from bot.games.trivia import Trivia, opening
+    import importlib.util
+
+    from bot.games.trivia import Trivia, accepted_answers, opening
+
+    script = REAL.root.parent.parent / "scripts" / "fetch_trivia.py"
+    spec = importlib.util.spec_from_file_location("fetch_trivia", script)
+    fetch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fetch)
+    clear_options, typeable = fetch.clear_options, fetch.typeable
 
     questions = REAL.json("trivia")["questions"]
     assert len(questions) >= 1000
@@ -4899,10 +5660,12 @@ def test_trivia_bank():
         texts = [q["question"], q["answer"], *q.get("wrong", [])]
         assert not any(blocked.found_in(t) for t in texts), q["id"]
         if q["difficulty"] == "easy":
-            assert len(q["wrong"]) == 3 and q["answer"] not in q["wrong"], q["id"]
             options = [q["answer"], *q["wrong"]]
+            assert len(q["wrong"]) == 3 and len({o.lower() for o in options}) == 4, q["id"]
+            assert clear_options(options), q["id"]  # options don't read alike, and none is a lone letter
         else:
-            assert len(q["answer"].split()) <= 3 and len(q["answer"]) <= 25, q["id"]
+            assert typeable(q["question"], q["answer"]), q["id"]  # short, typeable, no symbols like C++ or 13.8
+            assert accepted_answers(q["answer"]), q["id"]
             options = []
         assert len(opening(q["category"], q["difficulty"], q["question"], options, 30)) <= 480, q["id"]
 
@@ -4950,12 +5713,19 @@ def test_higherlower_terms():
         assert len(t["name"]) <= 30 and not blocked.found_in(t["name"]), t["name"]
         partners = sum(max(o["views"], t["views"]) >= MIN_RATIO * min(o["views"], t["views"]) for o in terms)
         assert partners >= 50, t["name"]
+
+
+def test_no_game_has_a_category_named_like_a_level():
+    from bot.games import ALL_GAMES
+
+    for cls in ALL_GAMES.values():  # "?trivia easy" must mean the difficulty, unambiguously
+        assert not set(cls.category_names(REAL)) & set(cls.levels), cls.name
 ```
 
 - [ ] **Step 2: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `23 passed`, then the whole suite passes (375 passed).
+Expected: `24 passed`, then the whole suite passes (420 passed).
 
 - [ ] **Step 3: Commit**
 

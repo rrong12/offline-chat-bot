@@ -65,6 +65,7 @@ def format_duration(seconds: float) -> str:
 
 _LEADING_ARTICLE = re.compile(r"(?i)^\s*(?:a|an|the)\s+(?=\S)")
 _ROMAN = re.compile(r"[ivxlcdm]+")
+_DIGITS = re.compile(r"\d+")
 
 
 def strip_article(text: str) -> str:
@@ -97,22 +98,39 @@ def within_one_edit(a: str, b: str) -> bool:
 
 
 def typo_match(guess: str, answer: str, min_letters: int = 5) -> bool:
-    """Do two normalized answers match? Equal ignoring spaces, or the same words except for one
-    word of `min_letters`+ letters that is one edit off. Numbers ("Apollo 13"), short words
-    ("A minor") and Roman numerals ("Louis XIV") must match exactly: one character is the answer there."""
+    """Do two normalized answers match? Equal ignoring spaces, or off by one typo in a word of
+    `min_letters`+ letters that keeps its first letter (so Mario isn't Wario). Numbers must be the same
+    groups of digits ("1 38" isn't "13 8", "Apollo 13" isn't 11), and short words ("A minor") and Roman
+    numerals ("Louis XIV") must match exactly: there one character is the whole answer."""
+    if _DIGITS.findall(guess) != _DIGITS.findall(answer):
+        return False
     if guess.replace(" ", "") == answer.replace(" ", ""):
         return True
     guess_words, answer_words = guess.split(), answer.split()
-    if len(guess_words) != len(answer_words):
+    if len(guess_words) == len(answer_words):
+        typos = 0
+        for g, a in zip(guess_words, answer_words, strict=True):
+            if g == a:
+                continue
+            if not _typo_ok(g, a, min_letters):
+                return False
+            typos += 1
+        return typos <= 1
+    # split differently ("shaquile oneal" for "shaquille o neal"): one typo over the whole answer
+    joined_guess, joined_answer = guess.replace(" ", ""), answer.replace(" ", "")
+    if any(_ROMAN.fullmatch(a) and len(a) > 1 for a in answer_words) or len(joined_answer) < 2 * min_letters:
         return False
-    typos = 0
-    for g, a in zip(guess_words, answer_words, strict=True):
-        if g == a:
-            continue
-        if not a.isalpha() or len(a) < min_letters or _ROMAN.fullmatch(a) or not within_one_edit(g, a):
-            return False
-        typos += 1
-    return typos <= 1
+    return _typo_ok(joined_guess, joined_answer, min_letters)
+
+
+def _typo_ok(guess: str, answer: str, min_letters: int) -> bool:
+    return (
+        answer.isalpha()
+        and len(answer) >= min_letters
+        and not _ROMAN.fullmatch(answer)
+        and guess[:1] == answer[:1]
+        and within_one_edit(guess, answer)
+    )
 
 
 def short_number(n: int) -> str:

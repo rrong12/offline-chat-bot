@@ -357,7 +357,7 @@ meme_badges = true          # ?rng's 69 and 420 badges; false turns them off
 - [ ] **Step 5: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_config.py -q`, then `.venv/bin/pytest -q`.
-Expected: `26 passed`, then the whole suite passes (377 passed).
+Expected: `26 passed`, then the whole suite passes (422 passed).
 
 - [ ] **Step 6: Commit**
 
@@ -942,7 +942,7 @@ class StatsStore:
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_stats.py -q`, then `.venv/bin/pytest -q`.
-Expected: `19 passed`, then the whole suite passes (380 passed).
+Expected: `19 passed`, then the whole suite passes (425 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -1292,7 +1292,7 @@ def register_rng(
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_rng.py -q`, then `.venv/bin/pytest -q`.
-Expected: `19 passed`, then the whole suite passes (399 passed).
+Expected: `19 passed`, then the whole suite passes (444 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2124,7 +2124,7 @@ bot's outgoing messages are backed up.
 | `?help` / `?commands`, `?help <command>` | anyone | List commands, or explain one |
 | `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer; `?hint` for a hint (10/7/4 points) |
 | `?hangman [category]`, `?hangman categories` | anyone | Your own Hangman; guess with `?g <letter>` or `?g <answer>` |
-| `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`, 10 or 15 points) |
+| `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`; medium 10/7/4, hard 15/10/6 points). Questions from Open Trivia DB (CC BY-SA 4.0) |
 | `?riddle` | anyone | Your own riddle: `?g <answer>`, 3 guesses, `?hint` for a clue then the letter count (10/7/4 points) |
 | `?higherlower` / `?hl` | anyone | Does the next thing get more monthly Wikipedia views? `?g higher` or `?g lower`; 1 point per right answer, one miss ends the streak |
 | `?skip` | anyone | End your current game (no points) |
@@ -2138,7 +2138,7 @@ bot's outgoing messages are backed up.
 | `?stopgame` | mods, broadcaster, owners | End all running games with no points |
 
 Scramble and Hangman categories: animals, countries, food, games, general, streamers. Trivia
-categories: anime, animals, games, general, geography, history, movies, music, science, sports, tv.
+categories: animals, anime, games, general, geography, history, movies, music, science, sports, tv.
 
 A player doesn't get the same trivia question or riddle again within their last 50.
 
@@ -2278,7 +2278,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - [ ] **Step 5: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_flows.py -q`, then `.venv/bin/pytest -q`.
-Expected: `40 passed`, then the whole suite passes (400 passed).
+Expected: `40 passed`, then the whole suite passes (445 passed).
 
 - [ ] **Step 6: Commit**
 

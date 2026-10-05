@@ -17,7 +17,7 @@ bot's outgoing messages are backed up.
 | `?help` / `?commands`, `?help <command>` | anyone | List commands, or explain one |
 | `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer; `?hint` for a hint (10/7/4 points) |
 | `?hangman [category]`, `?hangman categories` | anyone | Your own Hangman; guess with `?g <letter>` or `?g <answer>` |
-| `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`, 10 or 15 points) |
+| `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`; medium 10/7/4, hard 15/10/6 points). Questions from Open Trivia DB (CC BY-SA 4.0) |
 | `?riddle` | anyone | Your own riddle: `?g <answer>`, 3 guesses, `?hint` for a clue then the letter count (10/7/4 points) |
 | `?higherlower` / `?hl` | anyone | Does the next thing get more monthly Wikipedia views? `?g higher` or `?g lower`; 1 point per right answer, one miss ends the streak |
 | `?skip` | anyone | End your current game (no points) |
@@ -30,7 +30,7 @@ bot's outgoing messages are backed up.
 | `?stopgame` | mods, broadcaster, owners | End all running games with no points |
 
 Scramble and Hangman categories: animals, countries, food, games, general, streamers. Trivia
-categories: anime, animals, games, general, geography, history, movies, music, science, sports, tv.
+categories: animals, anime, games, general, geography, history, movies, music, science, sports, tv.
 
 A player doesn't get the same trivia question or riddle again within their last 50.
 

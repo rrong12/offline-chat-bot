@@ -97,9 +97,9 @@ class Quiz(Boom):
     def category_names(cls, assets):
         return ["science", "history"]
 
-    def __init__(self, category, rng, assets, *, level=None, avoid=frozenset()):
-        super().__init__(category, rng, assets, level=level, avoid=avoid)
-        self.item_id = next((i for i in self.ITEMS if i not in avoid), self.ITEMS[0])
+    def __init__(self, category, rng, assets, *, level=None, recent=()):
+        super().__init__(category, rng, assets, level=level, recent=recent)
+        self.item_id = next((i for i in self.ITEMS if i not in recent), None) or min(self.ITEMS, key=recent.index)
 
     def start(self) -> str:
         return f"quiz {self.category} {self.level} {self.item_id}"
@@ -122,7 +122,7 @@ class Streak(Boom):
 
 
 class Harness:
-    def __init__(self, tmp_path, clock: FakeClock, assets, max_games: int = 25):
+    def __init__(self, tmp_path, clock: FakeClock, assets, max_games: int = 25, extra_games=None):
         self.clock = clock
         self.said: list[tuple[str, dict]] = []  # everything the manager sent: (text, kwargs)
         self.replies: list[str] = []  # direct command replies (ctx.reply)
@@ -132,7 +132,7 @@ class Harness:
         self.manager = GameManager(
             games={"scramble": Scramble, "hangman": Hangman, "boom": Boom, "stubborn": Stubborn,
                    "noresult": NoResult, "anycommand": AnyCommand, "brokenstart": BrokenStart,
-                   "quiz": Quiz, "streak": Streak},
+                   "quiz": Quiz, "streak": Streak, **(extra_games or {})},
             stats=self.stats,
             log=self.log,
             clock=clock,
@@ -463,7 +463,7 @@ async def test_recent_questions_are_not_repeated_for_that_player(h: Harness):
         seen.append(h.texts()[-1].split()[-1])
         await h.command("?skip")
         h.clock.advance(10)
-    assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the game falls back to any question
+    assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the one seen longest ago comes back
 
 
 async def test_each_player_has_their_own_question_history(h: Harness):
@@ -492,3 +492,69 @@ async def test_restart_timer_gives_a_fresh_time_limit(h: Harness):
     h.clock.advance(2)
     h.manager.tick()
     assert h.manager.sessions == {}
+
+
+class Plain(Boom):
+    """No categories and no levels, like Riddle and Higher or Lower."""
+
+    name = "plain"
+    title = "Plain"
+
+    def on_message(self, msg, now):
+        return None
+
+
+async def test_extra_words_are_ignored_by_a_game_without_options(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"plain": Plain})
+    await h.command("?plain lets go")
+    assert "id-alice" in h.manager.sessions
+    await h.command("?plain categories", "bob")
+    assert h.replies == ["Plain has no options."]
+
+
+async def test_duplicate_and_uppercase_words_are_fine(h: Harness):
+    await h.command("?quiz HARD hard Science")
+    assert h.texts()[-1] == "quiz science hard q1"
+
+
+async def test_a_broken_time_limit_ends_only_that_game(h: Harness):
+    await h.command("?scramble animals", "alice")
+    await h.command("?hangman animals", "bob")
+    h.manager.sessions["id-alice"].game.time_limit = float("nan")
+    h.manager.tick()
+    assert set(h.manager.sessions) == {"id-bob"}
+    assert h.texts()[-1] == "Game ended due to an error."
+    h.clock.advance(200)
+    h.manager.tick()  # bob's game still times out normally
+    assert h.manager.sessions == {}
+
+
+async def test_remembered_questions_are_bounded(h: Harness, monkeypatch):
+    import bot.games.manager as manager_module
+
+    monkeypatch.setattr(manager_module, "RECENT_ITEMS", 2)
+    monkeypatch.setattr(manager_module, "RECENT_PLAYERS", 2)
+    for login in ("alice", "bob", "carol"):
+        for _ in range(3):
+            await h.command("?quiz science", login)
+            await h.command("?skip", login)
+            h.clock.advance(10)
+    assert list(h.manager._recent) == [("quiz", "id-bob"), ("quiz", "id-carol")]  # alice, the oldest, is gone
+    assert all(len(ids) == 2 for ids in h.manager._recent.values())
+
+
+class Sticky(Streak):
+    """Asks for more time when it times out."""
+
+    name = "sticky"
+
+    def on_timeout(self):
+        return Outcome(messages=["one more?"], restart_timer=True)
+
+
+async def test_a_restart_timer_from_on_timeout_cannot_extend_a_game(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"sticky": Sticky})
+    await h.command("?sticky")
+    h.clock.advance(10)
+    h.manager.tick()
+    assert h.manager.sessions == {}  # force-finished anyway

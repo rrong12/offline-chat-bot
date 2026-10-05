@@ -105,3 +105,12 @@ async def test_help_overview_and_details(c: Cmds):
 async def test_help_unknown_never_echoes_what_was_typed(c: Cmds):
     assert await c.run("?help nope") == "No command by that name. Try ?help."
     assert await c.run("?help jason_is_trash") == "No command by that name. Try ?help."
+
+
+async def test_game_aliases_work_in_stats():
+    cmds = Cmds()
+    cmds.registry = CommandRegistry("?")
+    register_stats(cmds.registry, stats=cmds.stats, game_names=["scramble", "higherlower"])
+    cmds.play("higherlower", "dana", 6)
+    assert await cmds.run("?leaderboard hl") == "🏆 Top 1 higherlower: 1. Dana (6)"
+    assert await cmds.run("?gamestats hl dana") == "📊 Dana · higherlower: 1 win / 1 played · 6 pts · rank #1"

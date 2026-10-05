@@ -103,7 +103,6 @@ CaptainSparklez|CaptainSparklez|streamers
 Disguised Toast|Disguised Toast|streamers
 Imaqtpie|Imaqtpie|streamers
 DrLupo|DrLupo|streamers
-Bugha|Bugha|streamers
 Tfue|Tfue|streamers
 Jerma985|Jerma985|streamers
 
@@ -389,20 +388,20 @@ Oppenheimer|Oppenheimer (film)|movies
 Minions|Minions (film)|movies
 Despicable Me|Despicable Me|movies
 Encanto|Encanto|movies
-Moana|Moana|movies
+Moana|Moana (2016 film)|movies
 Coco|Coco (2017 film)|movies
-Up|Up (2009 film)|movies
+Up (the movie)|Up (2009 film)|movies
 The Incredibles|The Incredibles|movies
 Cars|Cars (film)|movies
-Ratatouille|Ratatouille|movies
+Ratatouille|Ratatouille (film)|movies
 WALL-E|WALL-E|movies
 Inside Out|Inside Out (2015 film)|movies
 Guardians of the Galaxy|Guardians of the Galaxy (film)|movies
 Black Panther|Black Panther (film)|movies
-Iron Man|Iron Man (film)|movies
+Iron Man|Iron Man (2008 film)|movies
 Joker|Joker (2019 film)|movies
-It|It (2017 film)|movies
-Venom|Venom (film)|movies
+It (the movie)|It (2017 film)|movies
+Venom|Venom (2018 film)|movies
 The Super Mario Bros. Movie|The Super Mario Bros. Movie|movies
 Jaws|Jaws (film)|movies
 E.T. the Extra-Terrestrial|E.T. the Extra-Terrestrial|movies

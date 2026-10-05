@@ -153,10 +153,12 @@ class GameManager:
 
     @staticmethod
     def _options(cls: type[Game], categories: list[str]) -> str:
-        text = f"{cls.title} categories: {', '.join(categories)}"
+        parts = []
+        if categories:
+            parts.append(f"categories: {', '.join(categories)}")
         if cls.levels:
-            text += f" · {cls.levels_label}: {', '.join(cls.levels)}"
-        return text
+            parts.append(f"{cls.levels_label}: {', '.join(cls.levels)}")
+        return f"{cls.title} {' · '.join(parts)}" if parts else f"{cls.title} has no options."
 
     async def _start(self, cls: type[Game], ctx: CommandContext) -> None:
         tokens = ctx.args.lower().split()
@@ -175,12 +177,14 @@ class GameManager:
         if len(self.sessions) >= self.max_games or self._is_busy():
             self._notice(ctx, cls, "Too many games running right now, try again in a moment.")
             return
+        if not categories and not cls.levels:
+            tokens = []  # nothing to choose, so extra words ("?hl lets go") are ignored, as in Phase 1
         category: str | None = None
         level: str | None = None
         for token in tokens:
-            if token in categories and category is None:
+            if token in categories and category in (None, token):
                 category = token
-            elif token in cls.levels and level is None:
+            elif token in cls.levels and level in (None, token):
                 level = token
             else:  # never repeat the unknown word: it could be anything
                 kind = "option" if cls.levels else "category"
@@ -189,9 +193,8 @@ class GameManager:
         if categories and category is None:
             category = self.rng.choice(categories)
         recent_key = (cls.name, uid)
-        avoid = frozenset(self._recent.get(recent_key, ()))
         try:
-            game = cls(category, self.rng, self.assets, level=level, avoid=avoid)
+            game = cls(category, self.rng, self.assets, level=level, recent=tuple(self._recent.get(recent_key, ())))
             opening = game.start()
         except Exception as exc:
             logger.exception("could not start %s", cls.name)
@@ -210,7 +213,7 @@ class GameManager:
             reply_to=ctx.msg.id,
         )
         self.sessions[uid] = session
-        if game.item_id is not None:
+        if isinstance(game.item_id, str):
             self._remember(recent_key, game.item_id)
         self.log.write("game_start", round=session.key, game=cls.name, category=category, player=ctx.msg.login)
         self._reply(session, opening)
@@ -255,13 +258,26 @@ class GameManager:
         outcome = self._guard(session, f"{session.game.name}.on_message", lambda: session.game.on_message(msg, now))
         self._handle(session, outcome)
 
+    def _expired(self, session: Session, elapsed: float) -> bool | None:
+        """Is the game past its time limit? None (and the game is ended) if the limit isn't a usable number."""
+        limit = session.game.time_limit
+        if isinstance(limit, (int, float)) and not isinstance(limit, bool) and math.isfinite(limit):
+            return elapsed >= limit
+        self.log.write("error", where=f"game:{session.game.name}.time_limit", type="ValueError",
+                       message=f"time_limit is {limit!r}")
+        self._finish(session, "stopped", ["Game ended due to an error."], {}, set())
+        return None
+
     def tick(self) -> None:
         for session in list(self.sessions.values()):
             if self.sessions.get(session.user_id) is not session:
                 continue
             elapsed = self.clock.mono() - session.start_mono
             game = session.game
-            if elapsed >= game.time_limit:
+            expired = self._expired(session, elapsed)
+            if expired is None:
+                continue
+            if expired:
                 outcome = self._guard(session, f"{game.name}.on_timeout", game.on_timeout)
                 self._handle(session, outcome, default_result="timeout")
                 if self.sessions.get(session.user_id) is session:  # the game didn't end itself: force it
