@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (256 tests in total before the content task). Copy the code exactly. If a step's
+  this order (262 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -873,6 +873,10 @@ MIGRATIONS: list[str] = [
 ]
 
 
+class DatabaseTooNew(RuntimeError):
+    """The database was written by a newer version of the bot."""
+
+
 @dataclass(frozen=True)
 class UserRow:
     user_id: str
@@ -939,7 +943,8 @@ class StatsStore:
                 self._conn.execute("INSERT INTO schema_version (version) VALUES (0)")
         version = self.schema_version()
         if version > len(MIGRATIONS):
-            raise RuntimeError(
+            self._conn.close()
+            raise DatabaseTooNew(
                 f"database schema is version {version}, newer than this code (version {len(MIGRATIONS)})"
             )
         for number, sql in enumerate(MIGRATIONS[version:], start=version + 1):
@@ -5958,6 +5963,32 @@ async def test_disconnect_is_not_logged_during_a_deliberate_close(tmp_path, cloc
     conn._closing = True
     await client.event_websocket_closed(None)
     assert not list((tmp_path / "logs").glob("*.jsonl"))
+
+
+async def test_rejected_app_credentials_are_a_setup_error(tmp_path, clock, monkeypatch):
+    class RejectsLogin:
+        def __init__(self, connector):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def start(self, with_adapter=False):
+            exc = twitchio.HTTPException.__new__(twitchio.HTTPException)
+            exc.status = 403
+            raise exc
+
+    monkeypatch.setattr(twitch, "_Client", RejectsLogin)
+    conn = twitch.TwitchConnector(make_config(tmp_path), ActivityLog(tmp_path, clock), clock)
+
+    async def noop(*args):
+        pass
+
+    with pytest.raises(ConfigError, match="TWITCH_CLIENT_SECRET"):
+        await conn.run(noop, noop)
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -6001,6 +6032,9 @@ AUTH_URL = f"http://localhost:{AUTH_PORT}/oauth?scopes=" + "%20".join(BOT_SCOPES
 WATCHDOG_SECONDS = 30  # how often to check that the bot is still logged in and subscribed
 NO_SUBSCRIPTION_GRACE = 240  # seconds without a chat subscription before giving up (systemd restarts us)
 AUTH_FAILURE_STATUSES = {400, 401, 403}  # Twitch rejected the token itself; anything else may be transient
+_CREDENTIALS_REJECTED = (
+    "Twitch rejected the app login (HTTP {status}): check TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET in .env"
+)
 
 
 def strip_reply_mention(text: str, reply: Any) -> str:
@@ -6125,6 +6159,10 @@ class TwitchConnector:
         try:
             async with self._client:
                 await self._client.start(with_adapter=False)
+        except twitchio.HTTPException as exc:
+            if not self.channel_id and exc.status in AUTH_FAILURE_STATUSES:  # failed before setup finished
+                raise ConfigError(_CREDENTIALS_REJECTED.format(status=exc.status)) from exc
+            raise
         finally:
             if self._watchdog is not None:
                 self._watchdog.cancel()
@@ -6266,7 +6304,12 @@ async def authorize(config: Config) -> UserRef:
 
     client = AuthClient(client_id=config.client_id, client_secret=config.client_secret, fetch_client_user=False)
     async with client:
-        await client.login(load_tokens=False, save_tokens=False)
+        try:
+            await client.login(load_tokens=False, save_tokens=False)
+        except twitchio.HTTPException as exc:
+            if exc.status in AUTH_FAILURE_STATUSES:
+                raise ConfigError(_CREDENTIALS_REJECTED.format(status=exc.status)) from exc
+            raise
         await client.adapter.run()
         print(f"Open this URL in a browser where you're logged in as the BOT account:\n\n  {AUTH_URL}\n")
         user = await done
@@ -6277,7 +6320,7 @@ async def authorize(config: Config) -> UserRef:
 
 Run: `.venv/bin/pytest tests/test_twitch_mapping.py -q`
 
-Expected: PASS (17 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (18 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Smoke-test the login page wiring (no real credentials needed)**
 
@@ -6316,13 +6359,15 @@ git commit -m "Add the Twitch connector and login flow"
 - SIGINT and SIGTERM call `request_shutdown("signal")`, which stops cleanly with exit 0 (spec §13). A second signal during a stuck shutdown exits immediately.
 - A logging filter hides TwitchIO's irrelevant "install starlette" hint.
 - A database written by a newer version of the bot exits with code 2, so systemd doesn't restart-loop. A setup error during `auth` (port 4343 busy) also exits 2 with a plain message.
-- **Certificates:** the python.org macOS installers ship without root certificates, so every HTTPS call (Twitch, the fact APIs) fails until "Install Certificates.command" is run. That was found on Robert's laptop during review. `bot/certs.py` is imported first, before aiohttp builds its SSL contexts. When Python's default CA file is missing, it points `SSL_CERT_FILE` at the `certifi` bundle (a new dependency).
+- **Certificates:** the python.org macOS installers ship without root certificates, so every HTTPS call (Twitch, the fact APIs) fails until "Install Certificates.command" is run. That was found on Robert's laptop during review. `bot/certs.py` is imported from `bot/__init__.py`, so it runs before aiohttp builds its SSL contexts in every entry point. When Python has neither a CA file nor a non-empty CA folder, it points `SSL_CERT_FILE` at the `certifi` bundle (a new dependency).
+- **Setup problems exit 2, which systemd never restarts:** an unreadable `.env`, an unwritable data folder, a corrupt database, a database from a newer bot, or Twitch rejecting the client ID or secret. Empty environment variables don't override `.env`.
+- **Signals:** Ctrl+C before startup finishes exits 130 quietly. Only a genuine second signal force-exits, after flushing output.
 
 The CLI tests run the real process, the way a person would.
 
 **Files:**
 - Create: `bot/__main__.py`, `bot/certs.py`
-- Modify: `pyproject.toml` (add `certifi`)
+- Modify: `pyproject.toml` (add `certifi`), `bot/__init__.py` (import `bot.certs`)
 - Test: `tests/test_certs.py`, `tests/test_cli.py`
 
 - [ ] **Step 1: Write the failing test `tests/test_certs.py`**
@@ -6331,34 +6376,57 @@ The CLI tests run the real process, the way a person would.
 from types import SimpleNamespace
 
 import certifi
+import pytest
 
 from bot import certs
 
 
 def fake_paths(cafile=None, capath=None):
+    # ssl.get_default_verify_paths() reports None for a CA file or folder that doesn't exist
     return lambda: SimpleNamespace(cafile=cafile, capath=capath)
 
 
-def test_uses_certifi_when_python_has_no_ca_bundle(monkeypatch, tmp_path):
-    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
-    monkeypatch.setattr(certs.ssl, "get_default_verify_paths", fake_paths(str(tmp_path / "missing.pem")))
+@pytest.fixture
+def clean_env(monkeypatch):
+    # setenv first, so monkeypatch remembers and restores the original value after the test
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
+        monkeypatch.setenv(name, "placeholder")
+        monkeypatch.delenv(name)
+    return monkeypatch
+
+
+def test_uses_certifi_when_python_has_no_ca_bundle(clean_env):
+    clean_env.setattr(certs.ssl, "get_default_verify_paths", fake_paths())
     assert certs.ensure_ca_bundle()
     assert certs.os.environ["SSL_CERT_FILE"] == certifi.where()
 
 
-def test_keeps_the_system_bundle_when_present(monkeypatch, tmp_path):
+def test_uses_certifi_when_the_cert_folder_is_empty(clean_env, tmp_path):
+    clean_env.setattr(certs.ssl, "get_default_verify_paths", fake_paths(capath=str(tmp_path)))
+    assert certs.ensure_ca_bundle()
+
+
+def test_keeps_a_system_ca_file(clean_env, tmp_path):
     bundle = tmp_path / "cert.pem"
     bundle.write_text("x")
-    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
-    monkeypatch.setattr(certs.ssl, "get_default_verify_paths", fake_paths(str(bundle)))
+    clean_env.setattr(certs.ssl, "get_default_verify_paths", fake_paths(cafile=str(bundle)))
     assert not certs.ensure_ca_bundle()
     assert "SSL_CERT_FILE" not in certs.os.environ
 
 
-def test_respects_an_explicit_setting(monkeypatch):
-    monkeypatch.setenv("SSL_CERT_FILE", "/custom.pem")
+def test_keeps_a_nonempty_system_cert_folder(clean_env, tmp_path):
+    (tmp_path / "abcd1234.0").write_text("x")
+    clean_env.setattr(certs.ssl, "get_default_verify_paths", fake_paths(capath=str(tmp_path)))
+    assert not certs.ensure_ca_bundle()
+
+
+def test_respects_explicit_settings(clean_env):
+    clean_env.setenv("SSL_CERT_FILE", "/custom.pem")
     assert not certs.ensure_ca_bundle()
     assert certs.os.environ["SSL_CERT_FILE"] == "/custom.pem"
+    clean_env.delenv("SSL_CERT_FILE")
+    clean_env.setenv("SSL_CERT_DIR", "/custom/certs")
+    assert not certs.ensure_ca_bundle()
 ```
 
 - [ ] **Step 2: Write the failing test `tests/test_cli.py`**
@@ -6379,10 +6447,12 @@ def write_config(tmp_path: Path) -> Path:
     return path
 
 
-def run_bot(*args: str, stdin: str = "", env_file: str | None = None, tmp_path: Path) -> subprocess.CompletedProcess:
+def run_bot(
+    *args: str, stdin: str = "", env_file: str | None = None, tmp_path: Path, extra_env: dict | None = None
+) -> subprocess.CompletedProcess:
     if env_file is not None:
         (tmp_path / ".env").write_text(env_file, encoding="utf-8")
-    clean_env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    clean_env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), **(extra_env or {})}
     return subprocess.run(
         [sys.executable, "-m", "bot", *args],
         input=stdin,
@@ -6433,6 +6503,54 @@ def test_database_newer_than_code_exits_2(tmp_path):
     result = run_bot("console", "--config", str(write_config(tmp_path)), tmp_path=tmp_path)
     assert result.returncode == 2
     assert "newer than this code" in result.stderr
+
+
+SECRETS = "TWITCH_CLIENT_ID=cid\nTWITCH_CLIENT_SECRET=secret\nBOT_ID=123\n"
+
+
+def test_env_file_is_read_and_real_environment_wins(tmp_path):
+    config = str(write_config(tmp_path))
+    from_file = run_bot("--config", config, env_file=SECRETS + "OWNER_IDS=notnum\n", tmp_path=tmp_path)
+    assert from_file.returncode == 2 and "got notnum" in from_file.stderr
+    from_env = run_bot("--config", config, tmp_path=tmp_path, extra_env={"OWNER_IDS": "fromenv"})
+    assert from_env.returncode == 2 and "got fromenv" in from_env.stderr
+    empty_env = run_bot("--config", config, tmp_path=tmp_path, extra_env={"OWNER_IDS": ""})
+    assert "got notnum" in empty_env.stderr  # an empty variable doesn't override .env
+
+
+def test_corrupt_database_exits_2(tmp_path):
+    db = tmp_path / "data" / "console" / "bot.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(b"this is not a sqlite database" * 100)
+    result = run_bot("console", "--config", str(write_config(tmp_path)), tmp_path=tmp_path)
+    assert result.returncode == 2
+    assert "Setup error" in result.stderr
+
+
+def test_sigterm_stops_cleanly(tmp_path):
+    import json
+    import select
+    import signal
+    import time
+
+    config = write_config(tmp_path)
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "-m", "bot", "console", "--config", str(config)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+    )
+    try:
+        ready, _, _ = select.select([proc.stdout], [], [], 10)  # don't hang if the bot never starts
+        assert ready, "the bot did not start within 10 s"
+        assert proc.stdout.readline().startswith("Console mode.")  # banner: the bot is running
+        time.sleep(0.2)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=10) == 0
+    finally:
+        proc.kill()
+    logs = list((tmp_path / "data" / "console" / "logs").glob("activity-*.jsonl"))
+    last = json.loads(logs[0].read_text().splitlines()[-1])
+    assert last["event"] == "shutdown" and last["by"] == "signal"
 
 
 def test_bad_config_exits_2(tmp_path):
@@ -6486,13 +6604,23 @@ filterwarnings = [
 ]
 ```
 
-- [ ] **Step 5: Reinstall so `certifi` is available**
+- [ ] **Step 5: Write `bot/__init__.py`**
+
+```python
+__version__ = "0.1.0"
+
+# Set up a CA bundle before anything imports aiohttp (see bot/certs.py). Importing it here covers
+# every entry point, since Python always imports the package first.
+from bot import certs as _certs  # noqa: E402,F401
+```
+
+- [ ] **Step 6: Reinstall so `certifi` is available**
 
 Run: `.venv/bin/pip install -e '.[dev]'`
 
 Expected: ends with `Successfully installed ... certifi-...` (or "already satisfied").
 
-- [ ] **Step 6: Write `bot/certs.py`**
+- [ ] **Step 7: Write `bot/certs.py`**
 
 ```python
 """Make HTTPS work on Pythons that ship without root certificates.
@@ -6500,7 +6628,7 @@ Expected: ends with `Successfully installed ... certifi-...` (or "already satisf
 The python.org macOS installers don't include a CA bundle until "Install Certificates.command"
 is run, so every HTTPS connection (Twitch, the fact APIs) fails certificate checks. When
 Python's default CA file is missing, point SSL_CERT_FILE at certifi's bundle. This must run
-before aiohttp builds its SSL contexts, so `bot/__main__.py` imports this module first.
+before aiohttp builds its SSL contexts, so `bot/__init__.py` imports this module.
 """
 
 from __future__ import annotations
@@ -6511,21 +6639,28 @@ import ssl
 import certifi
 
 
+def _has_certificates(directory: str | None) -> bool:
+    if not directory or not os.path.isdir(directory):
+        return False
+    with os.scandir(directory) as entries:
+        return any(True for _ in entries)
+
+
 def ensure_ca_bundle() -> bool:
     """Set SSL_CERT_FILE to certifi's bundle if needed. Returns True if it was set."""
-    if os.environ.get("SSL_CERT_FILE"):
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
         return False
-    paths = ssl.get_default_verify_paths()
-    if (paths.cafile and os.path.exists(paths.cafile)) or (paths.capath and os.path.isdir(paths.capath)):
+    paths = ssl.get_default_verify_paths()  # cafile/capath are None when missing
+    if paths.cafile or _has_certificates(paths.capath):
         return False
     os.environ["SSL_CERT_FILE"] = certifi.where()
     return True
 
 
-ensure_ca_bundle()
+USING_CERTIFI = ensure_ca_bundle()
 ```
 
-- [ ] **Step 7: Write `bot/__main__.py`**
+- [ ] **Step 8: Write `bot/__main__.py`**
 
 ```python
 """Command line: `python -m bot` (run on Twitch), `python -m bot auth`, `python -m bot console`."""
@@ -6539,19 +6674,23 @@ import logging
 import os
 import random
 import signal
+import sqlite3
 import sys
 from pathlib import Path
 
 from dotenv import dotenv_values
 
-from bot import certs  # noqa: F401  (first: sets up the CA bundle before aiohttp loads)
+from bot import certs
 from bot.activity_log import ActivityLog
 from bot.assets import Assets
 from bot.clock import Clock
 from bot.config import Config, ConfigError, load_config
-from bot.core import EXIT_CONFIG, EXIT_OK, BotCore
+from bot.core import EXIT_CONFIG, BotCore
 from bot.http import HttpClient
-from bot.stats import StatsStore
+from bot.stats import DatabaseTooNew, StatsStore
+
+logger = logging.getLogger("bot")
+EXIT_INTERRUPTED = 130  # Ctrl+C before the bot finished starting
 
 
 class _HideStarletteHint(logging.Filter):
@@ -6562,14 +6701,16 @@ class _HideStarletteHint(logging.Filter):
 def _setup_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("twitchio.client").addFilter(_HideStarletteHint())
+    if certs.USING_CERTIFI:
+        logger.info("Python has no CA bundle here; using certifi's")
 
 
 async def _serve(config: Config, *, console: bool) -> int:
     clock = Clock()
-    log = ActivityLog(config.data_dir / "logs", clock, config.log_retention_days)
     try:
+        log = ActivityLog(config.data_dir / "logs", clock, config.log_retention_days)
         stats = StatsStore(config.data_dir / "bot.db")
-    except RuntimeError as exc:  # the database was written by a newer version of the bot
+    except (DatabaseTooNew, OSError, sqlite3.DatabaseError) as exc:  # bad data folder or database
         print(f"Setup error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
     if console:
@@ -6590,11 +6731,21 @@ async def _serve(config: Config, *, console: bool) -> int:
         http=HttpClient(),
         rng=random.Random(),
     )
+    signals = 0
+
     def on_signal() -> None:
-        if core.shutdown_by is None:
+        nonlocal signals
+        signals += 1
+        if signals == 1:
             core.request_shutdown("signal")
-        else:  # a second Ctrl+C / SIGTERM while shutdown is stuck: leave now
-            os._exit(EXIT_OK)
+            return
+        print("Second signal: exiting now.", file=sys.stderr)  # shutdown is stuck; leave now
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:
+                pass
+        os._exit(core.exit_code)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -6621,8 +6772,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _setup_logging()
 
-    env = {**dotenv_values(args.config.parent / ".env"), **os.environ}
-    env = {k: v for k, v in env.items() if v is not None}
+    try:
+        file_env = dotenv_values(args.config.parent / ".env")
+    except OSError as exc:
+        print(f"Config error: can't read .env: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    # Real environment variables win, but only if they have a value.
+    env = {k: v for k, v in file_env.items() if v} | {k: v for k, v in os.environ.items() if v}
     try:
         if args.mode == "run":
             config = load_config(args.config, env)
@@ -6634,28 +6790,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Config error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
 
-    if args.mode == "auth":
-        try:
-            return asyncio.run(_auth(config))
-        except ConfigError as exc:  # e.g. port 4343 already in use
-            print(f"Setup error: {exc}", file=sys.stderr)
-            return EXIT_CONFIG
-    if args.mode == "console":
-        config = dataclasses.replace(config, data_dir=config.data_dir / "console")
-    return asyncio.run(_serve(config, console=args.mode == "console"))
+    try:
+        if args.mode == "auth":
+            try:
+                return asyncio.run(_auth(config))
+            except ConfigError as exc:  # e.g. port 4343 in use, or Twitch rejected the app login
+                print(f"Setup error: {exc}", file=sys.stderr)
+                return EXIT_CONFIG
+        if args.mode == "console":
+            config = dataclasses.replace(config, data_dir=config.data_dir / "console")
+        return asyncio.run(_serve(config, console=args.mode == "console"))
+    except KeyboardInterrupt:  # Ctrl+C before the signal handlers were installed
+        return EXIT_INTERRUPTED
 
 
 if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 8: Run the tests and confirm they pass**
+- [ ] **Step 9: Run the tests and confirm they pass**
 
 Run: `.venv/bin/pytest tests/test_certs.py tests/test_cli.py -q`
 
-Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (13 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
-- [ ] **Step 9: Play a round by hand**
+- [ ] **Step 10: Play a round by hand**
 
 Run: `.venv/bin/python -m bot console`, then type:
 
@@ -6669,10 +6828,10 @@ alice: ?catfact
 
 Expected: replies like `bot → alice: Games: ?scramble ?hangman ?skip | ...`, then a **live** cat fact. It mustn't be the built-in fallback line, which proves HTTPS works with the CA-bundle fallback. Then `bot → mod: ON · up 0s · games: 0 running · v0.1.0`, then `bot → mod: Shutting down (requested by mod).`, and the process exits on its own (`echo $?` prints `0`). Games can't start yet: the word lists arrive in Task 18.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add pyproject.toml bot/certs.py bot/__main__.py tests/test_certs.py tests/test_cli.py
+git add pyproject.toml bot/__init__.py bot/certs.py bot/__main__.py tests/test_certs.py tests/test_cli.py
 git commit -m "Add the command-line entry point and a CA-bundle fallback"
 ```
 
@@ -6861,7 +7020,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 271 tests pass.
+Expected: `15 passed`, then all 277 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -7043,7 +7202,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (271).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (277).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
