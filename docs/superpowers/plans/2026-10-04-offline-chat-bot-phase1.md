@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (189 tests in total before the content task). Copy the code exactly. If a step's
+  this order (190 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -2092,7 +2092,7 @@ git commit -m "Add command parsing, registry, and help text"
 
 Scramble (spec §7) is a personal game:
 
-- **Words:** single words of 4 to 10 ASCII letters only.
+- **Words:** single words of 4 to 10 ASCII letters with at least two distinct letters.
 - **Scramble:** reshuffled until it differs from the word.
 - **Hints only on request:** the first `?hint` shows the first and last letters. The second shows about half the letters (first, last, and `max(1, ceil(n/2) - 2)` random middle letters). Further `?hint`s are ignored.
 - **Points:** 10, 7, or 4 by hints taken.
@@ -2122,6 +2122,13 @@ def test_only_valid_words_and_categories(assets):
     assert Scramble.category_names(assets) == ["animals", "food"]
     game = make(assets)
     assert game.word == "ALLIGATOR"
+
+
+def test_words_that_cannot_be_scrambled_are_skipped():
+    from bot.games.scramble import _valid
+
+    assert not _valid("aaaa") and not _valid("AaAa")
+    assert _valid("abba")
 
 
 def test_start_message_shows_scramble_that_differs(assets):
@@ -2278,7 +2285,8 @@ from bot.text import normalize
 
 
 def _valid(entry: str) -> bool:
-    return entry.isascii() and entry.isalpha() and 4 <= len(entry) <= 10
+    # Needs two distinct letters, or no scramble can differ from the word ("aaaa").
+    return entry.isascii() and entry.isalpha() and 4 <= len(entry) <= 10 and len(set(entry.lower())) > 1
 
 
 class Scramble(Game):
@@ -2357,7 +2365,7 @@ class Scramble(Game):
 
 Run: `.venv/bin/pytest tests/test_scramble.py -q`
 
-Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -5803,7 +5811,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 204 tests pass.
+Expected: `15 passed`, then all 205 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -5976,7 +5984,7 @@ Console mode keeps its own database under `data/console/`, separate from the rea
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (204).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (205).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
