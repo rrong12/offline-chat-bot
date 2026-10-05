@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (185 tests in total before the content task). Copy the code exactly. If a step's
+  this order (189 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -1864,7 +1864,7 @@ git commit -m "Add cooldowns, permissions, and test helpers"
 
 ### Task 7: Command parsing, registry, and help text
 
-`parse_command` strips invisible characters first, so a Chatterino duplicate like `?scramble\U000E0000` still parses. `usage` and `description` use `{p}` for the prefix, so changing the prefix in `config.toml` updates all help text. `cooldown` turns the per-user cooldown on; `global_cooldown` adds the chat-wide one, which game start commands turn off so anyone can start their own game. `help_overview()` lists the `listed` commands grouped Games, Stats, Fun; control commands and `?help` itself are unlisted.
+`parse_command` strips invisible characters first, so a Chatterino duplicate like `?scramble\U000E0000` still parses, and splits on any whitespace. `add()` rejects duplicate names or aliases, names that aren't lowercase (lookup lowercases, so they'd be unreachable), and unknown groups (they'd silently vanish from `?help`). `usage` and `description` use `{p}` for the prefix, so changing the prefix in `config.toml` updates all help text. `cooldown` turns the per-user cooldown on; `global_cooldown` adds the chat-wide one, which game start commands turn off so anyone can start their own game. `help_overview()` lists the `listed` commands grouped Games, Stats, Fun; control commands and `?help` itself are unlisted.
 
 **Files:**
 - Create: `bot/commands.py`
@@ -1901,6 +1901,11 @@ def test_parse_command_strips_invisible_and_extra_spaces():
     assert parse_command("  ?cookie   give  bob \U000e0000", "?") == ("cookie", "give  bob")
 
 
+def test_parse_command_splits_on_any_whitespace():
+    assert parse_command("?scramble\tAnimals", "?") == ("scramble", "Animals")
+    assert parse_command("?scramble" + chr(0xA0) + "food", "?") == ("scramble", "food")  # no-break space
+
+
 def test_parse_command_custom_prefix():
     assert parse_command("!scramble", "!") == ("scramble", "")
     assert parse_command("!scramble", "?") is None
@@ -1922,8 +1927,16 @@ def test_command_cooldown_flags_default_on():
 def test_registry_rejects_duplicates():
     reg = CommandRegistry("?")
     reg.add(cmd("fact"))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="'fact' is already registered"):
         reg.add(cmd("other", aliases=("fact",)))
+
+
+def test_registry_rejects_uppercase_names_and_unknown_groups():
+    reg = CommandRegistry("?")
+    with pytest.raises(ValueError, match="lowercase"):
+        reg.add(cmd("Fact"))
+    with pytest.raises(ValueError, match="unknown group"):
+        reg.add(cmd("fact", group="Game"))
 
 
 def test_help_overview_groups_in_order_and_skips_unlisted():
@@ -1966,7 +1979,8 @@ from dataclasses import dataclass, field
 from bot.connectors.base import ChatMessage
 from bot.text import strip_invisible, truncate
 
-GROUP_ORDER = ("Games", "Stats", "Fun")
+GROUP_ORDER = ("Games", "Stats", "Fun")  # groups shown in the ?help overview, in this order
+GROUPS = (*GROUP_ORDER, "Control", "Info")
 
 
 def parse_command(text: str, prefix: str) -> tuple[str, str] | None:
@@ -1977,8 +1991,8 @@ def parse_command(text: str, prefix: str) -> tuple[str, str] | None:
     body = text[len(prefix):]
     if not body or body[0].isspace():
         return None
-    name, _, args = body.partition(" ")
-    return name.lower(), args.strip()
+    name, *rest = body.split(maxsplit=1)
+    return name.lower(), rest[0].strip() if rest else ""
 
 
 @dataclass
@@ -2019,9 +2033,13 @@ class CommandRegistry:
     _order: list[Command] = field(default_factory=list)
 
     def add(self, cmd: Command) -> None:
+        if cmd.group not in GROUPS:
+            raise ValueError(f"command {cmd.name!r} has unknown group {cmd.group!r} (known: {', '.join(GROUPS)})")
         for name in (cmd.name, *cmd.aliases):
+            if name != name.lower() or not name:
+                raise ValueError(f"command names must be lowercase and non-empty, got {name!r}")
             if name in self._commands:
-                raise ValueError(f"duplicate command name: {name}")
+                raise ValueError(f"command name or alias {name!r} is already registered")
         for name in (cmd.name, *cmd.aliases):
             self._commands[name] = cmd
         self._order.append(cmd)
@@ -2059,7 +2077,7 @@ class CommandRegistry:
 
 Run: `.venv/bin/pytest tests/test_commands.py -q`
 
-Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (11 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -5021,6 +5039,7 @@ This follows the TwitchIO 3.3.2 source, which was read while writing the plan.
   3. It subscribes to `channel.chat.message` over WebSocket with the bot token (`as_bot=True`).
 - **Sending:** through Helix with the **app token** (`token_for=None`), which gives a modded bot the Chat Bot badge. `MessageRejectedError` becomes `SendResult(False, code, message)`.
 - **Connection events:** the first `websocket_welcome` logs `connected` and later ones log `reconnected`. `websocket_closed` logs `disconnected`.
+- **Replies:** when a message is a Twitch reply that starts with "@<parent> ", that mention is stripped, so answering by replying to the bot works ("@bot alligator" reads "alligator").
 - **Revocation:** a revoked subscription is fatal (`AuthRequired`).
 - **Token file safety:** tokens are saved on close only if they loaded. A startup failure would otherwise overwrite the token file with nothing and force a needless re-login.
 - **`authorize()`:** runs TwitchIO's built-in web adapter on `localhost:4343`. Its default callback is `http://localhost:4343/oauth/callback`, which must match the app registration.
@@ -5044,10 +5063,16 @@ from bot.connectors.base import AuthRequired
 from bot.connectors.twitch import AUTH_URL, read_bot_token, to_chat_message
 
 
-def fake_payload(source=None, **chatter):
+def fake_payload(source=None, text="?scramble", reply=None, **chatter):
     defaults = dict(id="42", name="Alice", display_name="Alice", broadcaster=False, moderator=False)
     defaults.update(chatter)
-    return SimpleNamespace(id="m1", text="?scramble", chatter=SimpleNamespace(**defaults), source_broadcaster=source)
+    return SimpleNamespace(
+        id="m1", text=text, chatter=SimpleNamespace(**defaults), source_broadcaster=source, reply=reply
+    )
+
+
+def reply_to(login: str):
+    return SimpleNamespace(parent_user=SimpleNamespace(name=login))
 
 
 def test_to_chat_message_maps_fields(clock: FakeClock):
@@ -5061,6 +5086,21 @@ def test_to_chat_message_maps_fields(clock: FakeClock):
 def test_to_chat_message_shared_chat_source(clock: FakeClock):
     msg = to_chat_message(fake_payload(source=SimpleNamespace(id=999)), clock)
     assert msg.source_channel_id == "999"
+
+
+def test_reply_mention_is_stripped(clock: FakeClock):
+    msg = to_chat_message(fake_payload(text="@OfflineBot alligator", reply=reply_to("offlinebot")), clock)
+    assert msg.text == "alligator"
+    cmd = to_chat_message(fake_payload(text="@offlinebot ?g e", reply=reply_to("offlinebot")), clock)
+    assert cmd.text == "?g e"
+
+
+def test_mentions_are_kept_when_not_a_reply_or_not_the_parent(clock: FakeClock):
+    assert to_chat_message(fake_payload(text="@offlinebot hi"), clock).text == "@offlinebot hi"
+    other = to_chat_message(fake_payload(text="@someone hi", reply=reply_to("offlinebot")), clock)
+    assert other.text == "@someone hi"
+    bare = to_chat_message(fake_payload(text="@offlinebot", reply=reply_to("offlinebot")), clock)
+    assert bare.text == "@offlinebot"
 
 
 def test_read_bot_token(tmp_path):
@@ -5116,6 +5156,17 @@ REDIRECT_URI = "http://localhost:4343/oauth/callback"  # register this exact URL
 AUTH_URL = "http://localhost:4343/oauth?scopes=" + "%20".join(BOT_SCOPES)
 
 
+def strip_reply_mention(text: str, reply: Any) -> str:
+    """Drop the leading "@name " Twitch clients put on a reply, so "@bot alligator" reads "alligator"."""
+    parent = getattr(getattr(reply, "parent_user", None), "name", None) if reply is not None else None
+    if not parent:
+        return text
+    head, _, rest = text.partition(" ")
+    if head.lower() == f"@{parent.lower()}" and rest:
+        return rest.lstrip()
+    return text
+
+
 def to_chat_message(payload: Any, clock: Clock) -> ChatMessage:
     """Map a twitchio.ChatMessage to our platform-neutral ChatMessage."""
     chatter = payload.chatter
@@ -5125,7 +5176,7 @@ def to_chat_message(payload: Any, clock: Clock) -> ChatMessage:
         user_id=str(chatter.id),
         login=(chatter.name or "").lower(),
         display_name=chatter.display_name or chatter.name or "",
-        text=payload.text,
+        text=strip_reply_mention(payload.text, getattr(payload, "reply", None)),
         is_broadcaster=bool(chatter.broadcaster),
         is_moderator=bool(chatter.moderator),
         source_channel_id=str(source.id) if source is not None else None,
@@ -5295,7 +5346,7 @@ async def authorize(config: Config) -> UserRef:
 
 Run: `.venv/bin/pytest tests/test_twitch_mapping.py -q`
 
-Expected: PASS (4 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (6 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Smoke-test the login page wiring (no real credentials needed)**
 
@@ -5752,7 +5803,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 200 tests pass.
+Expected: `15 passed`, then all 204 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -5925,7 +5976,7 @@ Console mode keeps its own database under `data/console/`, separate from the rea
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (200).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (204).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
@@ -5971,7 +6022,8 @@ can create accounts and approve logins. The agent walks him through it and recor
 - [ ] **Step 8:** Both accounts play their own games at the same time, and each one's answers
   only affect their own game. Scramble ends three ways: won (try `?hint`), timed out (wait
   45 s), and `?skip`. Hangman ends three ways too: won with `?g`, lost on 6 wrong letters, and
-  timed out. Typing a plain "W" during Hangman does nothing. Replies show as threaded replies.
+  timed out. Typing a plain "W" during Hangman does nothing. Replies show as threaded replies,
+  and answering by using Twitch's reply button on the bot's message also works.
 - [ ] **Step 9:** `?gamestats`, `?gamestats hangman <name>`, `?leaderboard`, and
   `?leaderboard scramble 3` show the right numbers.
 - [ ] **Step 10:** Every quick command answers: `?8ball`, `?coinflip`, `?catfact`, `?dogfact`,
