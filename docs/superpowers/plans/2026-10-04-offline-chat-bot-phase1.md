@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (203 tests in total before the content task). Copy the code exactly. If a step's
+  this order (220 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -3410,12 +3410,13 @@ git commit -m "Add the game registry and personal-game manager"
 
 ### Task 11: HTTP client and fun commands
 
-`HttpClient.get_json` never raises. On a timeout (3 s), an HTTP error, or bad JSON, it returns `None`, and the command uses a bundled fallback line (spec §5). Facts are whitespace-cleaned, and anything over 400 characters falls back. All four API URLs and response shapes were checked live on 2026-10-04.
+`HttpClient.get_json` never raises. On a timeout (3 s), an HTTP error, or bad JSON, it returns `None`, and the command uses a bundled fallback line (spec §5). API text must be a string. It's stripped of invisible and control characters, and anything over 400 characters or containing a link or @mention falls back: the bot as a mod skips Twitch's link filter, so this is the only filter. Response bodies are capped at 64 KB. All four API URLs and response shapes were checked live on 2026-10-04.
 
 `?cookie` rules:
 
 - One cookie per user per UTC day.
-- `?cookie give <user>` validates the name and checks that the account exists through the connector's `lookup_user`.
+- `?cookie give <user>` validates the name and checks that the account exists through the connector's `lookup_user` (5 s timeout). A name that isn't found is never echoed back. Mentions use the login when a display name is localized.
+- `?cookie` with any argument other than `give` shows usage instead of spending the cookie.
 - A rejected give doesn't use up the cookie.
 - Giving uses the giver's daily cookie; the recipient's own cookie is unaffected.
 
@@ -3473,6 +3474,73 @@ async def test_get_json_returns_none_on_timeout():
         await server.close()
 
 
+async def test_get_json_parses_json_sent_as_text_and_sends_headers():
+    seen = {}
+
+    async def plain(request):
+        seen["accept"] = request.headers.get("Accept")
+        return web.Response(text='{"joke": "ha"}', content_type="text/plain")
+
+    server = await serve(plain)
+    client = HttpClient(timeout=1)
+    try:
+        url = str(server.make_url("/"))
+        assert await client.get_json(url, headers={"Accept": "application/json"}) == {"joke": "ha"}
+        assert seen["accept"] == "application/json"
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_get_json_reads_a_body_sent_in_pieces():
+    async def chunked(request):
+        resp = web.StreamResponse(headers={"Content-Type": "application/json"})
+        await resp.prepare(request)
+        await resp.write(b'{"fact": "cats ')
+        await asyncio.sleep(0.02)
+        await resp.write(b'purr"}')
+        await resp.write_eof()
+        return resp
+
+    server = await serve(chunked)
+    client = HttpClient(timeout=1)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) == {"fact": "cats purr"}
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_get_json_refuses_oversized_bodies(monkeypatch):
+    import bot.http
+
+    monkeypatch.setattr(bot.http, "MAX_BODY", 10)
+
+    async def big(request):
+        return web.json_response({"fact": "x" * 100})
+
+    server = await serve(big)
+    client = HttpClient(timeout=1)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) is None
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_get_json_returns_none_for_non_json_200():
+    async def html(request):
+        return web.Response(text="<html>challenge</html>", content_type="text/html")
+
+    server = await serve(html)
+    client = HttpClient(timeout=1)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) is None
+    finally:
+        await client.close()
+        await server.close()
+
+
 async def test_get_json_returns_none_on_http_error():
     async def broken(request):
         return web.Response(status=500)
@@ -3489,6 +3557,7 @@ async def test_get_json_returns_none_on_http_error():
 - [ ] **Step 2: Write the failing test `tests/test_fun.py`**
 
 ```python
+import asyncio
 import random
 
 import pytest
@@ -3510,8 +3579,13 @@ class Fun:
         self.said: list[str] = []
         self.known = {"bob": UserRef("id-bob", "bob", "Bob")}
 
-        async def lookup(login):
+        async def default_lookup(login):
             return self.known.get(login)
+
+        self.lookup = default_lookup
+
+        async def lookup(login):
+            return await self.lookup(login)
 
         register_fun(
             self.registry, assets=assets, rng=random.Random(1), http=self.http,
@@ -3563,15 +3637,40 @@ async def test_fact_falls_back_when_api_fails_or_is_malformed_or_too_long(assets
         "https://catfact.ninja/fact": None,
         "https://dogapi.dog/api/v2/facts": {"unexpected": True},
         "https://uselessfacts.jsph.pl/api/v2/facts/random?language=en": {"text": "x" * 401},
+        "https://icanhazdadjoke.com/": {"joke": None},
     })
     fun = Fun(assets, clock, http)
-    for name in ("catfact", "dogfact", "fact"):
+    for name in ("catfact", "dogfact", "fact", "dadjoke"):
         await fun.run(f"?{name}")
     assert fun.replies == [
         "🐱 fallback catfacts line",
         "🐶 fallback dogfacts line",
         "💡 fallback facts line",
+        "😄 fallback dadjokes line",
     ]
+
+
+@pytest.mark.parametrize("bad", [
+    "Visit https://spam.example now", "see www.spam.example", "ask @someone about it", 42, ["a", "b"],
+])
+async def test_fact_with_links_mentions_or_wrong_type_falls_back(assets, clock, bad):
+    fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": bad}}))
+    await fun.run("?catfact")
+    assert fun.replies == ["🐱 fallback catfacts line"]
+
+
+async def test_fact_text_keeps_decomposed_accents(assets, clock):
+    text = "e" + chr(0x0301) + "clairs are pastries."
+    fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
+    await fun.run("?catfact")
+    assert fun.replies == ["🐱 " + chr(0x00E9) + "clairs are pastries."]
+
+
+async def test_fact_text_is_stripped_of_invisible_and_control_characters(assets, clock):
+    text = "Cats" + chr(0x202E) + " purr" + chr(0x07) + "."
+    fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
+    await fun.run("?catfact")
+    assert fun.replies == ["🐱 Cats purr."]
 
 
 async def test_cookie_once_per_utc_day(fun: Fun, clock: FakeClock):
@@ -3598,14 +3697,45 @@ async def test_cookie_give_rejections_do_not_use_the_cookie(fun: Fun):
     await fun.run("?cookie give not/valid")
     await fun.run("?cookie give alice")
     await fun.run("?cookie give ghost_user")
+    await fun.run("?cookie gift bob")
     assert fun.replies == [
-        "Usage: ?cookie give <username>",
+        "Usage: ?cookie or ?cookie give <username>",
         "That's not a valid username.",
         "You can't give a cookie to yourself.",
-        "Couldn't find a user named ghost_user.",
+        "Couldn't find that user.",
+        "Usage: ?cookie or ?cookie give <username>",
     ]
     await fun.run("?cookie")
     assert fun.replies[-1] == "🥠 Good things are coming."
+
+
+async def test_cookie_give_after_cookie_used(fun: Fun):
+    await fun.run("?cookie")
+    await fun.run("?cookie give bob")
+    assert fun.replies[-1].startswith("You already opened today's cookie.")
+    assert fun.said == []
+
+
+async def test_cookie_give_lookup_timeout(assets, clock, monkeypatch):
+    import bot.fun
+
+    monkeypatch.setattr(bot.fun, "LOOKUP_TIMEOUT", 0.05)
+    fun = Fun(assets, clock)
+
+    async def slow(login):
+        await asyncio.sleep(1)
+
+    fun.lookup = slow
+    await fun.run("?cookie give bob")
+    assert fun.replies == ["Couldn't check that user right now. Try again in a bit."]
+    await fun.run("?cookie")
+    assert fun.replies[-1] == "🥠 Good things are coming."
+
+
+async def test_cookie_give_mentions_login_for_localised_display_names(fun: Fun):
+    fun.known["bob"] = UserRef("id-bob", "bob", "\u9cf3\u51f0")
+    await fun.run("?cookie give bob")
+    assert fun.said == ["🥠 @alice gave @bob a fortune cookie: Good things are coming."]
 ```
 
 - [ ] **Step 3: Run it and confirm it fails**
@@ -3637,14 +3767,18 @@ class FakeHttp:
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import aiohttp
 
+from bot import __version__
+
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "offline-chat-bot/0.1 (Twitch chat bot)"
+USER_AGENT = f"offline-chat-bot/{__version__} (Twitch chat bot)"
+MAX_BODY = 64_000  # bytes; fact and joke responses are tiny
 
 
 class HttpClient:
@@ -3662,7 +3796,13 @@ class HttpClient:
                 if resp.status != 200:
                     logger.warning("GET %s -> HTTP %s", url, resp.status)
                     return None
-                return await resp.json(content_type=None)
+                body = bytearray()
+                async for chunk in resp.content.iter_chunked(16_384):  # read() alone may return a partial body
+                    body += chunk
+                    if len(body) > MAX_BODY:
+                        logger.warning("GET %s: body over %d bytes", url, MAX_BODY)
+                        return None
+                return json.loads(body)
         except Exception as exc:  # timeouts, DNS, bad JSON: all fall back
             logger.warning("GET %s failed: %s", url, type(exc).__name__)
             return None
@@ -3679,8 +3819,11 @@ class HttpClient:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
+import re
+import unicodedata
 from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -3691,9 +3834,14 @@ from bot.commands import Command, CommandContext, CommandRegistry
 from bot.connectors.base import UserRef
 from bot.http import HttpClient
 from bot.stats import StatsStore
-from bot.text import clean_username, format_duration
+from bot.text import clean_username, format_duration, strip_invisible
 
 MAX_FACT = 400
+LOOKUP_TIMEOUT = 5.0  # seconds to wait for Twitch to confirm a user exists
+# Third-party text must not carry links or @mentions into Jason's chat (the bot, as a mod,
+# bypasses Twitch's link filter). Every reply also starts with an emoji, so it can never begin
+# with "/" or "." and be read as a chat command; keep that prefix.
+_UNSAFE = re.compile(r"://|www\.|@\w", re.IGNORECASE)
 
 LookupUser = Callable[[str], Awaitable[UserRef | None]]
 
@@ -3702,6 +3850,23 @@ def _get(data: Any, *path: str | int) -> Any:
     for key in path:
         data = data[key]
     return data
+
+
+def _safe_text(value: Any) -> str | None:
+    """API text cleaned for chat, or None if it's missing, too long, or carries links/mentions."""
+    if not isinstance(value, str):
+        return None
+    text = unicodedata.normalize("NFC", value)  # compose accents first so stripping marks keeps them
+    text = " ".join(strip_invisible(text).split())  # all whitespace (incl. newlines) becomes one space
+    text = "".join(ch for ch in text if ch.isprintable())  # then drop control characters
+    if not text or len(text) > MAX_FACT or _UNSAFE.search(text):
+        return None
+    return text
+
+
+def _mention(display_name: str, login: str) -> str:
+    """@display name if it's just a capitalised login, else @login (localised names don't ping)."""
+    return f"@{display_name}" if display_name.lower() == login.lower() else f"@{login}"
 
 
 # command name -> (emoji, url, path to the text in the JSON, extra headers, fallback file, help)
@@ -3744,14 +3909,11 @@ def register_fun(
     def fact_handler(emoji: str, url: str, path: tuple, headers: dict, fallback: str):
         async def handler(ctx: CommandContext) -> None:
             data = await http.get_json(url, headers=headers or None)
-            text = None
             try:
-                text = " ".join(str(_get(data, *path)).split()) if data is not None else None
+                text = _safe_text(_get(data, *path)) if data is not None else None
             except (KeyError, IndexError, TypeError):
                 text = None
-            if not text or len(text) > MAX_FACT:
-                text = rng.choice(assets.lines(fallback))
-            ctx.reply(f"{emoji} {text}")
+            ctx.reply(f"{emoji} {text or rng.choice(assets.lines(fallback))}")
 
         return handler
 
@@ -3768,9 +3930,13 @@ def register_fun(
         today = clock.now().date().isoformat()
         uid = ctx.msg.user_id
         argv = ctx.argv
-        if argv and argv[0].lower() == "give":
+        usage = f"Usage: {ctx.prefix}cookie or {ctx.prefix}cookie give <username>"
+        if argv and argv[0].lower() != "give":
+            ctx.reply(usage)  # e.g. "?cookie gift bob": don't silently spend the cookie
+            return
+        if argv:
             if len(argv) < 2:
-                ctx.reply(f"Usage: {ctx.prefix}cookie give <username>")
+                ctx.reply(usage)
                 return
             login = clean_username(argv[1])
             if login is None:
@@ -3782,19 +3948,28 @@ def register_fun(
             if stats.get_daily(uid, "cookie", today) is not None:
                 ctx.reply(already_message())
                 return
-            target = await lookup_user(login)
+            try:
+                target = await asyncio.wait_for(lookup_user(login), LOOKUP_TIMEOUT)
+            except TimeoutError:
+                ctx.reply("Couldn't check that user right now. Try again in a bit.")
+                return
             if target is None:
-                ctx.reply(f"Couldn't find a user named {login}.")
+                ctx.reply("Couldn't find that user.")  # never repeat the name the user typed
+                return
+            if target.user_id == uid:
+                ctx.reply("You can't give a cookie to yourself.")
                 return
             fortune = rng.choice(assets.lines("fortunes"))
             record = json.dumps({"gave_to": target.login, "fortune": fortune})
             if not stats.claim_daily(uid, "cookie", today, record):
                 ctx.reply(already_message())
                 return
-            ctx.say(f"🥠 @{ctx.msg.display_name} gave @{target.display_name} a fortune cookie: {fortune}")
+            giver = _mention(ctx.msg.display_name, ctx.msg.login)
+            receiver = _mention(target.display_name, target.login)
+            ctx.say(f"🥠 {giver} gave {receiver} a fortune cookie: {fortune}")
             return
         fortune = rng.choice(assets.lines("fortunes"))
-        if not stats.claim_daily(uid, "cookie", today, fortune):
+        if not stats.claim_daily(uid, "cookie", today, json.dumps({"fortune": fortune})):
             ctx.reply(already_message())
             return
         ctx.reply(f"🥠 {fortune}")
@@ -3814,7 +3989,7 @@ def register_fun(
 
 Run: `.venv/bin/pytest tests/test_http.py tests/test_fun.py -q`
 
-Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (23 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 8: Commit**
 
@@ -3829,7 +4004,7 @@ Argument rules from spec §5:
 
 - `?leaderboard [game] [limit]` accepts its arguments in either order. The limit is clamped to 1 to 10, and the default is 5.
 - `?gamestats [game] [username]` treats the first argument as a game if it names one, and otherwise as a username. A leading `@` is stripped.
-- Unknown names are echoed only after username validation.
+- A typed name that isn't found is never echoed ("No stats for that user yet.").
 - `?help <x>` echoes `x` only if it looks like a command name, so the bot never repeats arbitrary text.
 
 **Files:**
@@ -3917,7 +4092,7 @@ async def test_gamestats_played_without_points_has_no_rank(c: Cmds):
 
 
 async def test_gamestats_missing(c: Cmds):
-    assert await c.run("?gamestats nobody_here") == "No stats for nobody_here yet."
+    assert await c.run("?gamestats nobody_here") == "No stats for that user yet."
     assert await c.run("?gamestats bad/name") == "That's not a valid username."
     assert await c.run("?gamestats hangman bob") == "No hangman stats for Bob yet."
     assert await c.run("?gamestats", "dave") == "No stats for dave yet."
@@ -3994,7 +4169,7 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
                 return
             user = stats.find_user(login)
             if user is None:
-                ctx.reply(f"No stats for {login} yet.")
+                ctx.reply("No stats for that user yet.")  # never repeat the name the user typed
                 return
             user_id, name = user.user_id, user.display_name
         else:
@@ -5578,14 +5753,52 @@ git commit -m "Add the Twitch connector and login flow"
 - SIGINT and SIGTERM call `request_shutdown("signal")`, which stops cleanly with exit 0 (spec §13).
 - A logging filter hides TwitchIO's irrelevant "install starlette" hint.
 - A database written by a newer version of the bot exits with code 2, so systemd doesn't restart-loop.
+- **Certificates:** the python.org macOS installers ship without root certificates, so every HTTPS call (Twitch, the fact APIs) fails until "Install Certificates.command" is run. That was found on Robert's laptop during review. `bot/certs.py` is imported first, before aiohttp builds its SSL contexts. When Python's default CA file is missing, it points `SSL_CERT_FILE` at the `certifi` bundle (a new dependency).
 
 The CLI tests run the real process, the way a person would.
 
 **Files:**
-- Create: `bot/__main__.py`
-- Test: `tests/test_cli.py`
+- Create: `bot/__main__.py`, `bot/certs.py`
+- Modify: `pyproject.toml` (add `certifi`)
+- Test: `tests/test_certs.py`, `tests/test_cli.py`
 
-- [ ] **Step 1: Write the failing test `tests/test_cli.py`**
+- [ ] **Step 1: Write the failing test `tests/test_certs.py`**
+
+```python
+from types import SimpleNamespace
+
+import certifi
+
+from bot import certs
+
+
+def fake_paths(cafile=None, capath=None):
+    return lambda: SimpleNamespace(cafile=cafile, capath=capath)
+
+
+def test_uses_certifi_when_python_has_no_ca_bundle(monkeypatch, tmp_path):
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setattr(certs.ssl, "get_default_verify_paths", fake_paths(str(tmp_path / "missing.pem")))
+    assert certs.ensure_ca_bundle()
+    assert certs.os.environ["SSL_CERT_FILE"] == certifi.where()
+
+
+def test_keeps_the_system_bundle_when_present(monkeypatch, tmp_path):
+    bundle = tmp_path / "cert.pem"
+    bundle.write_text("x")
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setattr(certs.ssl, "get_default_verify_paths", fake_paths(str(bundle)))
+    assert not certs.ensure_ca_bundle()
+    assert "SSL_CERT_FILE" not in certs.os.environ
+
+
+def test_respects_an_explicit_setting(monkeypatch):
+    monkeypatch.setenv("SSL_CERT_FILE", "/custom.pem")
+    assert not certs.ensure_ca_bundle()
+    assert certs.os.environ["SSL_CERT_FILE"] == "/custom.pem"
+```
+
+- [ ] **Step 2: Write the failing test `tests/test_cli.py`**
 
 ```python
 """Runs the real `python -m bot` process, the way a person would."""
@@ -5666,13 +5879,89 @@ def test_bad_config_exits_2(tmp_path):
     assert "channel must be a Twitch username" in result.stderr
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [ ] **Step 3: Run it and confirm it fails**
 
-Run: `.venv/bin/pytest tests/test_cli.py -q`
+Run: `.venv/bin/pytest tests/test_certs.py tests/test_cli.py -q`
 
-Expected: FAIL. the console test fails (`No module named bot.__main__`, so the return code is 1)
+Expected: FAIL. `cannot import name 'certs'` (and, once certs exists, the console test fails with `No module named bot.__main__`)
 
-- [ ] **Step 3: Write `bot/__main__.py`**
+- [ ] **Step 4: Write `pyproject.toml`**
+
+```toml
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "offline-chat-bot"
+version = "0.1.0"
+description = "Twitch chat-games bot for jasontheween's offline chat"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "twitchio==3.3.2",
+    "aiohttp>=3.9",
+    "python-dotenv>=1.0",
+    "certifi>=2024.2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[tool.setuptools.packages.find]
+include = ["bot*"]
+
+[tool.setuptools.package-data]
+bot = ["content/*.txt", "content/words/*.txt"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    # TwitchIO's web adapter subclasses aiohttp's Application; harmless, not ours to fix.
+    "ignore:Inheritance class AiohttpAdapter from web.Application is discouraged:DeprecationWarning",
+]
+```
+
+- [ ] **Step 5: Reinstall so `certifi` is available**
+
+Run: `.venv/bin/pip install -e '.[dev]'`
+
+Expected: ends with `Successfully installed ... certifi-...` (or "already satisfied").
+
+- [ ] **Step 6: Write `bot/certs.py`**
+
+```python
+"""Make HTTPS work on Pythons that ship without root certificates.
+
+The python.org macOS installers don't include a CA bundle until "Install Certificates.command"
+is run, so every HTTPS connection (Twitch, the fact APIs) fails certificate checks. When
+Python's default CA file is missing, point SSL_CERT_FILE at certifi's bundle. This must run
+before aiohttp builds its SSL contexts, so `bot/__main__.py` imports this module first.
+"""
+
+from __future__ import annotations
+
+import os
+import ssl
+
+import certifi
+
+
+def ensure_ca_bundle() -> bool:
+    """Set SSL_CERT_FILE to certifi's bundle if needed. Returns True if it was set."""
+    if os.environ.get("SSL_CERT_FILE"):
+        return False
+    paths = ssl.get_default_verify_paths()
+    if (paths.cafile and os.path.exists(paths.cafile)) or (paths.capath and os.path.isdir(paths.capath)):
+        return False
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    return True
+
+
+ensure_ca_bundle()
+```
+
+- [ ] **Step 7: Write `bot/__main__.py`**
 
 ```python
 """Command line: `python -m bot` (run on Twitch), `python -m bot auth`, `python -m bot console`."""
@@ -5691,6 +5980,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from bot import certs  # noqa: F401  (first: sets up the CA bundle before aiohttp loads)
 from bot.activity_log import ActivityLog
 from bot.assets import Assets
 from bot.clock import Clock
@@ -5785,30 +6075,31 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [ ] **Step 8: Run the tests and confirm they pass**
 
-Run: `.venv/bin/pytest tests/test_cli.py -q`
+Run: `.venv/bin/pytest tests/test_certs.py tests/test_cli.py -q`
 
-Expected: PASS (5 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
-- [ ] **Step 5: Play a round by hand**
+- [ ] **Step 9: Play a round by hand**
 
 Run: `.venv/bin/python -m bot console`, then type:
 
 ```text
 alice: ?help
 alice: ?coinflip
+alice: ?catfact
 @mod: ?bot status
 @mod: ?bot shutdown
 ```
 
-Expected: replies like `bot → alice: Games: ?scramble ?hangman ?skip | ...`, then `bot → mod: ON · up 0s · games: 0 running · v0.1.0`, then `bot → mod: Shutting down (requested by mod).`, and the process exits on its own (`echo $?` prints `0`). Games can't start yet: the word lists arrive in Task 18.
+Expected: replies like `bot → alice: Games: ?scramble ?hangman ?skip | ...`, then a **live** cat fact. It mustn't be the built-in fallback line, which proves HTTPS works with the CA-bundle fallback. Then `bot → mod: ON · up 0s · games: 0 running · v0.1.0`, then `bot → mod: Shutting down (requested by mod).`, and the process exits on its own (`echo $?` prints `0`). Games can't start yet: the word lists arrive in Task 18.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add bot/__main__.py tests/test_cli.py
-git commit -m "Add the command-line entry point"
+git add pyproject.toml bot/certs.py bot/__main__.py tests/test_certs.py tests/test_cli.py
+git commit -m "Add the command-line entry point and a CA-bundle fallback"
 ```
 
 ### Task 18: Bundled content (word lists, 8-ball, fortunes, fallbacks)
@@ -5996,7 +6287,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 218 tests pass.
+Expected: `15 passed`, then all 235 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -6088,6 +6379,9 @@ python3.12 -m venv .venv
 Type lines like `alice: ?scramble animals`. A leading `@` makes the user a mod (`@mod: ?bot off`).
 Console mode keeps its own database under `data/console/`, separate from the real one.
 
+On macOS, the python.org installer ships without root certificates, so HTTPS would fail. The
+bot detects this at startup and uses the `certifi` certificate bundle automatically.
+
 ## Set up on Twitch (one time)
 
 1. **Bot account:** create a new Twitch account for the bot and verify its email.
@@ -6169,7 +6463,7 @@ Console mode keeps its own database under `data/console/`, separate from the rea
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (218).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (235).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
@@ -6211,7 +6505,8 @@ can create accounts and approve logins. The agent walks him through it and recor
 
 **Checklist** (run `.venv/bin/python -m bot`; check each item off):
 - [ ] **Step 7:** The startup log shows `startup ... "is_mod": true`, and the bot's chat
-  messages show the purple Chat Bot badge.
+  messages show the purple Chat Bot badge. If it fails with `CERTIFICATE_VERIFY_FAILED`, the
+  CA-bundle fallback in `bot/certs.py` didn't apply: check `SSL_CERT_FILE`.
 - [ ] **Step 8:** Both accounts play their own games at the same time, and each one's answers
   only affect their own game. Scramble ends three ways: won (try `?hint`), timed out (wait
   45 s), and `?skip`. Hangman ends three ways too: won with `?g`, lost on 6 wrong letters, and
