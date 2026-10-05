@@ -119,3 +119,32 @@ def test_timeout_and_reveal(assets):
 def test_unknown_category_raises(assets):
     with pytest.raises(ValueError):
         make(assets, category="planets")
+
+
+def one_question(tmp_path, answer: str, difficulty: str = "medium") -> Trivia:
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir(exist_ok=True)
+    q = {"id": "x", "category": "general", "difficulty": difficulty, "question": "Q?", "answer": answer}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    return Trivia("general", random.Random(1), Assets(root), level=difficulty)
+
+
+@pytest.mark.parametrize("answer, guess, right", [
+    ("Apollo 11", "apollo 13", False),  # numbers inside an answer are exact
+    ("Louis XIV", "louis xvi", False),  # so are Roman numerals
+    ("C minor", "e minor", False),  # and one-letter words
+    ("A-ha", "aha", True),  # "A-" isn't an article
+    ("Pokémon", "pokemon", True),  # accents never cost the typo
+    ("Pokémon", "pokemno", True),  # ... so a real typo is still allowed
+    ("The Beatles", "beatles", True),
+    ("The Beatles", "the beatels", True),
+    ("Leonardo da Vinci", "leonardo da vinsi", True),
+    ("Leonardo da Vinci", "leonardi da vinsi", False),  # one typo in total
+])
+def test_typed_matching_rules(tmp_path, answer, guess, right):
+    out = g(one_question(tmp_path, answer), guess)
+    assert (out.result == "won") is right

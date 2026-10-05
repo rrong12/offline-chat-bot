@@ -66,9 +66,11 @@
 
 Small helpers the new games share, all in `bot/text.py`:
 
-- `strip_article` drops a leading "a", "an" or "the" from normalized text, so "the eiffel tower" matches "eiffel tower".
-- `within_one_edit` is a Damerau-Levenshtein distance of at most 1 (one insertion, deletion, substitution, or swap of neighbouring letters). Trivia uses it to forgive a typo in answers of 5+ letters (spec §3).
-- `short_number` formats view counts for Higher or Lower: 950, 1.2K, 55K, 241K, 1.2M (spec §5). It rounds up into the next unit instead of printing "1000K".
+- `strip_article` drops a leading "a", "an" or "the" from **raw** text (before `normalize`, which turns punctuation into spaces): only a whole word followed by real whitespace counts, so "A-ha" and "A$AP Rocky" keep their "A".
+- `fold_accents` removes accents ("Pokémon" -> "Pokemon"), so a missing accent never costs a player their one typo.
+- `within_one_edit` is a Damerau-Levenshtein distance of at most 1 (one insertion, deletion, substitution, or swap of neighbouring letters).
+- `typo_match` decides whether two normalized answers match (spec §3): equal ignoring spaces, or the same words except one word of 5+ letters that is one edit off. Numbers ("Apollo 13" vs 11), one-letter words ("C minor" vs E) and Roman numerals ("Louis XIV" vs XVI) must match exactly, because there one character is the whole answer.
+- `short_number` formats view counts for Higher or Lower: 950, 1.2K, 55K, 241K, 1.2M (spec §5). It uses integer maths to round half up, moves into the next unit instead of printing "1000K", and rejects negative numbers.
 
 `Assets.json(name)` loads `content/<name>.json` once and caches it. The parsed object is shared, so callers must not modify it.
 
@@ -134,14 +136,18 @@ def assets(content_dir: Path) -> Assets:
 - [ ] **Step 2: Write `tests/test_text.py`**
 
 ```python
+import pytest
+
 from bot.text import (
     clean_username,
+    fold_accents,
     format_duration,
     normalize,
     short_number,
     strip_article,
     strip_invisible,
     truncate,
+    typo_match,
     within_one_edit,
 )
 
@@ -225,9 +231,30 @@ def test_format_duration():
 
 
 def test_strip_article():
-    assert strip_article("the eiffel tower") == "eiffel tower"
+    assert strip_article("The Eiffel Tower") == "Eiffel Tower"
     assert strip_article("an apple") == "apple"
+    assert strip_article("a towel") == "towel"
+    assert strip_article("  the  clock") == "clock"
     assert strip_article("theater") == "theater"  # only a whole leading word
+    assert strip_article("A-ha") == "A-ha" and strip_article("A$AP Rocky") == "A$AP Rocky"  # not articles
+    assert strip_article("the") == "the" and strip_article("") == ""
+
+
+def test_fold_accents():
+    assert fold_accents("Pokémon Mötley Crüe café") == "Pokemon Motley Crue cafe"
+
+
+def test_typo_match():
+    assert typo_match("jupitor", "jupiter")
+    assert typo_match("pacman", "pac man")  # spaces don't matter
+    assert typo_match("leonardo da vinsi", "leonardo da vinci")
+    assert not typo_match("apollo 13", "apollo 11")  # numbers exact
+    assert not typo_match("e minor", "a minor")  # short words exact
+    assert not typo_match("louis xvi", "louis xiv")  # Roman numerals exact
+    assert not typo_match("henry vii", "henry viii")
+    assert not typo_match("1950s", "1940s")
+    assert not typo_match("jupitor saturnn", "jupiter saturn")  # one typo in total
+    assert not typo_match("cat", "car")  # too short for a typo
 
 
 def test_within_one_edit():
@@ -237,15 +264,20 @@ def test_within_one_edit():
     assert within_one_edit("jupiter", "upiter")  # deletion
     assert within_one_edit("jupiter", "jupietr")  # neighbours swapped
     assert not within_one_edit("jupiter", "jpuietr")
+    assert not within_one_edit("jupiter", "juxyter")  # two different letters side by side
+    assert within_one_edit("", "a") and not within_one_edit("", "ab")
     assert not within_one_edit("abc", "cba")
     assert not within_one_edit("a", "abc")
 
 
 def test_short_number():
-    cases = {0: "0", 950: "950", 1000: "1K", 1234: "1.2K", 55_123: "55K", 241_000: "241K",
-             999_499: "999K", 999_500: "1M", 1_234_567: "1.2M", 12_345_678: "12M", 1_500_000_000: "1.5B"}
+    cases = {0: "0", 950: "950", 1000: "1K", 1234: "1.2K", 1150: "1.2K", 1350: "1.4K", 9950: "10K",
+             10_500: "11K", 55_123: "55K", 241_000: "241K", 999_499: "999K", 999_500: "1M",
+             1_234_567: "1.2M", 12_345_678: "12M", 1_500_000_000: "1.5B"}
     for n, text in cases.items():
         assert short_number(n) == text, n
+    with pytest.raises(ValueError):
+        short_number(-5)
 ```
 
 - [ ] **Step 3: Write `tests/test_assets.py`**
@@ -343,15 +375,19 @@ def format_duration(seconds: float) -> str:
     return f"{secs}s"
 
 
-_ARTICLES = ("a ", "an ", "the ")
+_LEADING_ARTICLE = re.compile(r"(?i)^\s*(?:a|an|the)\s+(?=\S)")
+_ROMAN = re.compile(r"[ivxlcdm]+")
 
 
 def strip_article(text: str) -> str:
-    """'the eiffel tower' -> 'eiffel tower'. Expects normalized text."""
-    for article in _ARTICLES:
-        if text.startswith(article):
-            return text[len(article):]
-    return text
+    """'The Eiffel Tower' -> 'Eiffel Tower'. Use on raw text, before normalize: only a whole leading
+    word followed by real whitespace counts, so "A-ha" and "A$AP" keep their "A"."""
+    return _LEADING_ARTICLE.sub("", text, count=1)
+
+
+def fold_accents(text: str) -> str:
+    """'pokémon' -> 'pokemon', so a missing accent never costs a player their one typo."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
 
 
 def within_one_edit(a: str, b: str) -> bool:
@@ -372,15 +408,38 @@ def within_one_edit(a: str, b: str) -> bool:
     return short[i:] == long[i + 1:]
 
 
+def typo_match(guess: str, answer: str, min_letters: int = 5) -> bool:
+    """Do two normalized answers match? Equal ignoring spaces, or the same words except for one
+    word of `min_letters`+ letters that is one edit off. Numbers ("Apollo 13"), short words
+    ("A minor") and Roman numerals ("Louis XIV") must match exactly: one character is the answer there."""
+    if guess.replace(" ", "") == answer.replace(" ", ""):
+        return True
+    guess_words, answer_words = guess.split(), answer.split()
+    if len(guess_words) != len(answer_words):
+        return False
+    typos = 0
+    for g, a in zip(guess_words, answer_words, strict=True):
+        if g == a:
+            continue
+        if not a.isalpha() or len(a) < min_letters or _ROMAN.fullmatch(a) or not within_one_edit(g, a):
+            return False
+        typos += 1
+    return typos <= 1
+
+
 def short_number(n: int) -> str:
-    """950, 1.2K, 55K, 241K, 1.2M, 12M: at most three significant digits."""
+    """950, 1.2K, 55K, 241K, 1.2M, 12M: at most three significant digits, rounded half up."""
+    if n < 0:
+        raise ValueError(f"short_number needs a count, got {n}")
     if n < 1000:
         return str(n)
     for divisor, suffix in ((1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B")):
-        value = n / divisor
-        text = f"{value:.1f}" if value < 10 else f"{value:.0f}"
-        if float(text) < 1000 or suffix == "B":
-            return text.removesuffix(".0") + suffix
+        tenths = (n * 10 + divisor // 2) // divisor  # integer maths: no float rounding surprises
+        if tenths < 100:
+            return f"{tenths // 10}.{tenths % 10}".removesuffix(".0") + suffix
+        whole = (n + divisor // 2) // divisor
+        if whole < 1000 or suffix == "B":
+            return f"{whole}{suffix}"
     raise AssertionError("unreachable")
 ```
 
@@ -434,7 +493,7 @@ def _read_json(path: Path) -> Any:
 - [ ] **Step 7: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_text.py tests/test_assets.py -q`, then `.venv/bin/pytest -q`.
-Expected: `23 passed`, then the whole suite passes (307 passed).
+Expected: `25 passed`, then the whole suite passes (309 passed).
 
 - [ ] **Step 8: Commit**
 
@@ -1773,7 +1832,7 @@ class Hangman(Game):
 - [ ] **Step 8: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_manager.py tests/test_scramble.py -q`, then `.venv/bin/pytest -q`.
-Expected: `49 passed`, then the whole suite passes (316 passed).
+Expected: `49 passed`, then the whole suite passes (318 passed).
 
 - [ ] **Step 9: Commit**
 
@@ -1785,13 +1844,13 @@ git commit -m "Phase 2: game options, repeat avoidance, timer restarts, aliases,
 ### Task 3: Trivia game
 
 **Files:**
-- Create: `tests/test_trivia.py`, `bot/games/trivia.py`
+- Replace: `tests/test_trivia.py`, `bot/games/trivia.py`
 
 Spec §3. Questions come from `content/trivia.json` (built in Task 7). Each has an `id`, `category`, `difficulty`, `question`, `answer`, and, for easy ones, three `wrong` options.
 
 - **Starting:** the category comes from the manager. A missing difficulty, or one this category has no questions for, becomes a random available one. Recently seen ids are avoided when possible.
 - **Easy:** the four options are shuffled once and lettered A-D, 20 s. One guess: a letter or the option's text. Right: 5 points; wrong ends the game showing the right option. Nonsense gets one "Answer with ?g and a letter" reminder, then silence. No hints.
-- **Medium and hard:** typed, 30 s, 3 guesses. A guess matches if, ignoring case, punctuation, spaces, a leading article and any parenthetical in the answer, it equals the answer, or (answers of 5+ characters that aren't numbers) is within one edit. Two hints: word and letter count with the first letter, then about half the letters in place. Points: medium 10/7/4, hard 15/10/6 by hints used.
+- **Medium and hard:** typed, 30 s, 3 guesses. A guess matches if `typo_match` accepts it against the answer, compared with and without a leading article (on both sides), with accents folded, and with any parenthetical in the answer dropped. Two hints: word and letter count with the first letter, then about half the letters in place. Points: medium 10/7/4, hard 15/10/6 by hints used.
 - `opening()` builds the question message; the content test (Task 10) uses it to check every question fits in one chat message.
 
 - [ ] **Step 1: Write `tests/test_trivia.py`**
@@ -1918,6 +1977,35 @@ def test_timeout_and_reveal(assets):
 def test_unknown_category_raises(assets):
     with pytest.raises(ValueError):
         make(assets, category="planets")
+
+
+def one_question(tmp_path, answer: str, difficulty: str = "medium") -> Trivia:
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir(exist_ok=True)
+    q = {"id": "x", "category": "general", "difficulty": difficulty, "question": "Q?", "answer": answer}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    return Trivia("general", random.Random(1), Assets(root), level=difficulty)
+
+
+@pytest.mark.parametrize("answer, guess, right", [
+    ("Apollo 11", "apollo 13", False),  # numbers inside an answer are exact
+    ("Louis XIV", "louis xvi", False),  # so are Roman numerals
+    ("C minor", "e minor", False),  # and one-letter words
+    ("A-ha", "aha", True),  # "A-" isn't an article
+    ("Pokémon", "pokemon", True),  # accents never cost the typo
+    ("Pokémon", "pokemno", True),  # ... so a real typo is still allowed
+    ("The Beatles", "beatles", True),
+    ("The Beatles", "the beatels", True),
+    ("Leonardo da Vinci", "leonardo da vinsi", True),
+    ("Leonardo da Vinci", "leonardi da vinsi", False),  # one typo in total
+])
+def test_typed_matching_rules(tmp_path, answer, guess, right):
+    out = g(one_question(tmp_path, answer), guess)
+    assert (out.result == "won") is right
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -1942,10 +2030,10 @@ from typing import Any
 from bot.assets import Assets
 from bot.connectors.base import ChatMessage
 from bot.games.base import Game, Outcome
-from bot.text import normalize, strip_article, within_one_edit
+from bot.text import fold_accents, normalize, strip_article, typo_match
 
 LETTERS = "ABCD"
-TYPO_MIN_LETTERS = 5  # answers this long forgive one typo; shorter ones and numbers must be exact
+TYPO_MIN_LETTERS = 5  # words this long forgive one typo; shorter words and numbers must be exact
 _PARENTHETICAL = re.compile(r"\s*\([^)]*\)")
 
 
@@ -1953,8 +2041,9 @@ def _questions(assets: Assets) -> list[dict[str, Any]]:
     return assets.json("trivia")["questions"]
 
 
-def _compact(text: str) -> str:
-    return strip_article(normalize(text)).replace(" ", "")
+def _forms(text: str) -> set[str]:
+    """Comparable forms of raw text: normalized and accent-folded, with and without a leading article."""
+    return {fold_accents(normalize(t)) for t in (text, strip_article(text))}
 
 
 def opening(category: str, level: str, question: str, options: list[str], seconds: int) -> str:
@@ -2022,7 +2111,7 @@ class Trivia(Game):
             self.options = [self.answer, *q["wrong"]]
             rng.shuffle(self.options)
             self.time_limit = self.EASY_TIME
-        self._accepted = {_compact(self.answer), _compact(_PARENTHETICAL.sub("", self.answer))}
+        self._accepted = _forms(self.answer) | _forms(_PARENTHETICAL.sub("", self.answer))
         self.guesses_left = self.GUESSES
         self.hints_used = 0
         self._told_how = False  # the "answer with A-D" reminder is sent at most once
@@ -2066,7 +2155,8 @@ class Trivia(Game):
         guess = normalize(args)
         index = LETTERS.lower().find(guess) if len(guess) == 1 else -1
         if index < 0 or index >= len(self.options):
-            index = next((i for i, o in enumerate(self.options) if _compact(o) == _compact(args)), -1)
+            said = {f.replace(" ", "") for f in _forms(args)}
+            index = next((i for i, o in enumerate(self.options) if said & {f.replace(" ", "") for f in _forms(o)}), -1)
         if index < 0:
             if self._told_how:
                 return None
@@ -2077,13 +2167,7 @@ class Trivia(Game):
         return Outcome(messages=[f"❌ It was {self._correct_text()}."], finished=True, result="lost")
 
     def _matches(self, guess: str) -> bool:
-        compact = _compact(guess)
-        for answer in self._accepted:
-            if compact == answer:
-                return True
-            if not answer.isdigit() and len(answer) >= TYPO_MIN_LETTERS and within_one_edit(compact, answer):
-                return True
-        return False
+        return any(typo_match(g, a, TYPO_MIN_LETTERS) for g in _forms(guess) for a in self._accepted)
 
     def _guess_typed(self, args: str, msg: ChatMessage) -> Outcome:
         if self._matches(args):
@@ -2124,7 +2208,7 @@ class Trivia(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_trivia.py -q`, then `.venv/bin/pytest -q`.
-Expected: `16 passed`, then the whole suite passes (332 passed).
+Expected: `26 passed`, then the whole suite passes (344 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2136,12 +2220,12 @@ git commit -m "Phase 2: Trivia game"
 ### Task 4: Riddle game
 
 **Files:**
-- Create: `tests/test_riddle.py`, `bot/games/riddle.py`
+- Replace: `tests/test_riddle.py`, `bot/games/riddle.py`
 
 Spec §4. Riddles come from `content/riddles.json` (Task 8): `riddle`, `answers` (main answer first), and `clue`.
 
 - **Start:** `🧩 <riddle> · 60s · ?g <answer> · ?hint`. The id is a hash of the riddle text, so it survives reordering the file.
-- **Guesses:** 3. After normalizing and dropping a leading article, a guess wins if it contains an accepted answer as whole words ("is it a clock"); the last word may differ by a plural "s"/"es". A guess longer than the longest answer plus 3 words is a list, not an answer: it costs a guess ("One answer per guess"). Apostrophes are removed before normalizing, so "I'm" can't leave a lone "m" that wins the letter riddles.
+- **Guesses:** 3. After normalizing and dropping a leading article, a guess wins if it contains an accepted answer as whole words ("is it a clock"); the last word may differ by a plural "s"/"es". A guess longer than the longest answer plus 3 words is a list, not an answer: it costs a guess ("One answer per guess"). Apostrophes are removed before normalizing, so "I'm" can't leave a lone "m" that wins the letter riddles; then a leading article is dropped from the raw guess and it is normalized.
 - **Hints:** the clue, then the main answer's word and letter count and first letter. Points 10/7/4.
 
 - [ ] **Step 1: Write `tests/test_riddle.py`**
@@ -2329,7 +2413,7 @@ class Riddle(Game):
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
         if name == "hint":
             return self._hint()
-        words = strip_article(normalize(_APOSTROPHES.sub("", args))).split()
+        words = normalize(strip_article(_APOSTROPHES.sub("", args))).split()
         if name != "g" or not words:
             return None
         too_long = len(words) > self._max_words  # one answer per guess, not a list of them
@@ -2370,7 +2454,7 @@ class Riddle(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_riddle.py -q`, then `.venv/bin/pytest -q`.
-Expected: `10 passed`, then the whole suite passes (342 passed).
+Expected: `10 passed`, then the whole suite passes (354 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2382,7 +2466,7 @@ git commit -m "Phase 2: Riddle game"
 ### Task 5: Higher or Lower game
 
 **Files:**
-- Create: `tests/test_higherlower.py`, `bot/games/higherlower.py`
+- Replace: `tests/test_higherlower.py`, `bot/games/higherlower.py`
 
 Spec §5. Terms come from `content/higherlower.json` (Task 9): `name` and monthly `views`.
 
@@ -2616,7 +2700,7 @@ class HigherLower(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_higherlower.py -q`, then `.venv/bin/pytest -q`.
-Expected: `9 passed`, then the whole suite passes (351 passed).
+Expected: `9 passed`, then the whole suite passes (363 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -3612,7 +3696,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - [ ] **Step 9: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py -q`, then `.venv/bin/pytest -q`.
-Expected: `71 passed`, then the whole suite passes (356 passed).
+Expected: `71 passed`, then the whole suite passes (368 passed).
 
 - [ ] **Step 10: Commit**
 
@@ -3782,7 +3866,7 @@ Expected: it takes about 25 minutes; the last line reads `wrote N questions` wit
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 356 passed.
+Expected: 368 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3973,7 +4057,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "I'm always running but I never move, and I keep your snacks nice and cool. What am I?", "answers": ["fridge", "fridges", "refrigerator", "freezer"], "clue": "Magnets and drawings often hang on my door."},
   {"riddle": "I'm soft and fluffy, and I hold your head up every night. What am I?", "answers": ["pillow", "pillows"], "clue": "Fresh cases go on me when the sheets get washed."},
   {"riddle": "I whistle when I'm hot, I have a spout, and I sit on the stove. What am I?", "answers": ["kettle", "kettles", "tea kettle", "teapot"], "clue": "I boil water for cocoa or noodles."},
-  {"riddle": "When is a door not a door?", "answers": ["ajar", "jar", "a jar"], "clue": "It's slightly open, and it sounds like something you keep jam in."},
+  {"riddle": "When is a door not a door?", "answers": ["ajar", "jar"], "clue": "It's slightly open, and it sounds like something you keep jam in."},
   {"riddle": "What do you call a fly with no wings?", "answers": ["walk", "walker"], "clue": "Without wings, it has to get around on foot."},
   {"riddle": "What did one pencil say to the other pencil?", "answers": ["sharp", "sharpened"], "clue": "Think of a pencil's pointy tip and a word for looking stylish."},
   {"riddle": "What kind of flower grows on your face?", "answers": ["tulips", "tulip", "two lips"], "clue": "Say its name slowly: it sounds like a pair of mouth parts."},
@@ -4022,7 +4106,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
 - [ ] **Step 2: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 356 passed.
+Expected: 368 passed.
 
 - [ ] **Step 3: Commit**
 
@@ -4632,7 +4716,7 @@ Expected: it takes a few minutes; it prints `wrote N terms for <month>` and any 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 356 passed.
+Expected: 368 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4649,7 +4733,7 @@ git commit -m "Phase 2: Higher or Lower terms and page views"
 Rules for the new content, run against the real files:
 
 - **Trivia:** 1,000+ questions, unique ids, exactly the 11 categories with 30+ questions each, easy questions with three distinct wrong options, typed answers of at most 3 words and 25 characters, every question message at most 480 characters, no blocked words, and the credits file.
-- **Riddles:** 150+, no duplicates, riddle at most 300 characters, answers lowercase with 1-3 words, no blocked words, and no clue word equal to an answer word or sharing its first 4 letters with one.
+- **Riddles:** 150+, no duplicates, riddle at most 300 characters, answers lowercase with 1-3 words and not starting with an article (guesses lose theirs), no blocked words, and no clue word equal to an answer word or sharing its first 4 letters with one.
 - **Higher or Lower:** 300+ terms, unique names of at most 30 characters, positive integer views, no blocked words, and every term has at least 50 possible partners.
 
 - [ ] **Step 1: Write `tests/test_content.py`**
@@ -4811,6 +4895,8 @@ def test_riddles():
     for r in riddles:
         assert len(r["riddle"]) <= 300 and r["clue"], r["riddle"]
         assert r["answers"] and all(re.fullmatch(r"[a-z0-9]+( [a-z0-9]+){0,2}", a) for a in r["answers"]), r["riddle"]
+        # guesses lose a leading article before matching, so an answer must not start with one
+        assert not any(re.match(r"(a|an|the) ", a) for a in r["answers"]), r["riddle"]
         clue_words = _stems(r["clue"])
         answer_words = {w for a in r["answers"] for w in a.split()}
         for cw in clue_words:
@@ -4839,7 +4925,7 @@ def test_higherlower_terms():
 - [ ] **Step 2: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `23 passed`, then the whole suite passes (360 passed).
+Expected: `23 passed`, then the whole suite passes (372 passed).
 
 - [ ] **Step 3: Commit**
 

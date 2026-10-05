@@ -63,15 +63,19 @@ def format_duration(seconds: float) -> str:
     return f"{secs}s"
 
 
-_ARTICLES = ("a ", "an ", "the ")
+_LEADING_ARTICLE = re.compile(r"(?i)^\s*(?:a|an|the)\s+(?=\S)")
+_ROMAN = re.compile(r"[ivxlcdm]+")
 
 
 def strip_article(text: str) -> str:
-    """'the eiffel tower' -> 'eiffel tower'. Expects normalized text."""
-    for article in _ARTICLES:
-        if text.startswith(article):
-            return text[len(article):]
-    return text
+    """'The Eiffel Tower' -> 'Eiffel Tower'. Use on raw text, before normalize: only a whole leading
+    word followed by real whitespace counts, so "A-ha" and "A$AP" keep their "A"."""
+    return _LEADING_ARTICLE.sub("", text, count=1)
+
+
+def fold_accents(text: str) -> str:
+    """'pokémon' -> 'pokemon', so a missing accent never costs a player their one typo."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
 
 
 def within_one_edit(a: str, b: str) -> bool:
@@ -92,13 +96,36 @@ def within_one_edit(a: str, b: str) -> bool:
     return short[i:] == long[i + 1:]
 
 
+def typo_match(guess: str, answer: str, min_letters: int = 5) -> bool:
+    """Do two normalized answers match? Equal ignoring spaces, or the same words except for one
+    word of `min_letters`+ letters that is one edit off. Numbers ("Apollo 13"), short words
+    ("A minor") and Roman numerals ("Louis XIV") must match exactly: one character is the answer there."""
+    if guess.replace(" ", "") == answer.replace(" ", ""):
+        return True
+    guess_words, answer_words = guess.split(), answer.split()
+    if len(guess_words) != len(answer_words):
+        return False
+    typos = 0
+    for g, a in zip(guess_words, answer_words, strict=True):
+        if g == a:
+            continue
+        if not a.isalpha() or len(a) < min_letters or _ROMAN.fullmatch(a) or not within_one_edit(g, a):
+            return False
+        typos += 1
+    return typos <= 1
+
+
 def short_number(n: int) -> str:
-    """950, 1.2K, 55K, 241K, 1.2M, 12M: at most three significant digits."""
+    """950, 1.2K, 55K, 241K, 1.2M, 12M: at most three significant digits, rounded half up."""
+    if n < 0:
+        raise ValueError(f"short_number needs a count, got {n}")
     if n < 1000:
         return str(n)
     for divisor, suffix in ((1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B")):
-        value = n / divisor
-        text = f"{value:.1f}" if value < 10 else f"{value:.0f}"
-        if float(text) < 1000 or suffix == "B":
-            return text.removesuffix(".0") + suffix
+        tenths = (n * 10 + divisor // 2) // divisor  # integer maths: no float rounding surprises
+        if tenths < 100:
+            return f"{tenths // 10}.{tenths % 10}".removesuffix(".0") + suffix
+        whole = (n + divisor // 2) // divisor
+        if whole < 1000 or suffix == "B":
+            return f"{whole}{suffix}"
     raise AssertionError("unreachable")

@@ -1,11 +1,15 @@
+import pytest
+
 from bot.text import (
     clean_username,
+    fold_accents,
     format_duration,
     normalize,
     short_number,
     strip_article,
     strip_invisible,
     truncate,
+    typo_match,
     within_one_edit,
 )
 
@@ -89,9 +93,30 @@ def test_format_duration():
 
 
 def test_strip_article():
-    assert strip_article("the eiffel tower") == "eiffel tower"
+    assert strip_article("The Eiffel Tower") == "Eiffel Tower"
     assert strip_article("an apple") == "apple"
+    assert strip_article("a towel") == "towel"
+    assert strip_article("  the  clock") == "clock"
     assert strip_article("theater") == "theater"  # only a whole leading word
+    assert strip_article("A-ha") == "A-ha" and strip_article("A$AP Rocky") == "A$AP Rocky"  # not articles
+    assert strip_article("the") == "the" and strip_article("") == ""
+
+
+def test_fold_accents():
+    assert fold_accents("Pokémon Mötley Crüe café") == "Pokemon Motley Crue cafe"
+
+
+def test_typo_match():
+    assert typo_match("jupitor", "jupiter")
+    assert typo_match("pacman", "pac man")  # spaces don't matter
+    assert typo_match("leonardo da vinsi", "leonardo da vinci")
+    assert not typo_match("apollo 13", "apollo 11")  # numbers exact
+    assert not typo_match("e minor", "a minor")  # short words exact
+    assert not typo_match("louis xvi", "louis xiv")  # Roman numerals exact
+    assert not typo_match("henry vii", "henry viii")
+    assert not typo_match("1950s", "1940s")
+    assert not typo_match("jupitor saturnn", "jupiter saturn")  # one typo in total
+    assert not typo_match("cat", "car")  # too short for a typo
 
 
 def test_within_one_edit():
@@ -101,12 +126,17 @@ def test_within_one_edit():
     assert within_one_edit("jupiter", "upiter")  # deletion
     assert within_one_edit("jupiter", "jupietr")  # neighbours swapped
     assert not within_one_edit("jupiter", "jpuietr")
+    assert not within_one_edit("jupiter", "juxyter")  # two different letters side by side
+    assert within_one_edit("", "a") and not within_one_edit("", "ab")
     assert not within_one_edit("abc", "cba")
     assert not within_one_edit("a", "abc")
 
 
 def test_short_number():
-    cases = {0: "0", 950: "950", 1000: "1K", 1234: "1.2K", 55_123: "55K", 241_000: "241K",
-             999_499: "999K", 999_500: "1M", 1_234_567: "1.2M", 12_345_678: "12M", 1_500_000_000: "1.5B"}
+    cases = {0: "0", 950: "950", 1000: "1K", 1234: "1.2K", 1150: "1.2K", 1350: "1.4K", 9950: "10K",
+             10_500: "11K", 55_123: "55K", 241_000: "241K", 999_499: "999K", 999_500: "1M",
+             1_234_567: "1.2M", 12_345_678: "12M", 1_500_000_000: "1.5B"}
     for n, text in cases.items():
         assert short_number(n) == text, n
+    with pytest.raises(ValueError):
+        short_number(-5)

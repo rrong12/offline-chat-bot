@@ -12,10 +12,10 @@ from typing import Any
 from bot.assets import Assets
 from bot.connectors.base import ChatMessage
 from bot.games.base import Game, Outcome
-from bot.text import normalize, strip_article, within_one_edit
+from bot.text import fold_accents, normalize, strip_article, typo_match
 
 LETTERS = "ABCD"
-TYPO_MIN_LETTERS = 5  # answers this long forgive one typo; shorter ones and numbers must be exact
+TYPO_MIN_LETTERS = 5  # words this long forgive one typo; shorter words and numbers must be exact
 _PARENTHETICAL = re.compile(r"\s*\([^)]*\)")
 
 
@@ -23,8 +23,9 @@ def _questions(assets: Assets) -> list[dict[str, Any]]:
     return assets.json("trivia")["questions"]
 
 
-def _compact(text: str) -> str:
-    return strip_article(normalize(text)).replace(" ", "")
+def _forms(text: str) -> set[str]:
+    """Comparable forms of raw text: normalized and accent-folded, with and without a leading article."""
+    return {fold_accents(normalize(t)) for t in (text, strip_article(text))}
 
 
 def opening(category: str, level: str, question: str, options: list[str], seconds: int) -> str:
@@ -92,7 +93,7 @@ class Trivia(Game):
             self.options = [self.answer, *q["wrong"]]
             rng.shuffle(self.options)
             self.time_limit = self.EASY_TIME
-        self._accepted = {_compact(self.answer), _compact(_PARENTHETICAL.sub("", self.answer))}
+        self._accepted = _forms(self.answer) | _forms(_PARENTHETICAL.sub("", self.answer))
         self.guesses_left = self.GUESSES
         self.hints_used = 0
         self._told_how = False  # the "answer with A-D" reminder is sent at most once
@@ -136,7 +137,8 @@ class Trivia(Game):
         guess = normalize(args)
         index = LETTERS.lower().find(guess) if len(guess) == 1 else -1
         if index < 0 or index >= len(self.options):
-            index = next((i for i, o in enumerate(self.options) if _compact(o) == _compact(args)), -1)
+            said = {f.replace(" ", "") for f in _forms(args)}
+            index = next((i for i, o in enumerate(self.options) if said & {f.replace(" ", "") for f in _forms(o)}), -1)
         if index < 0:
             if self._told_how:
                 return None
@@ -147,13 +149,7 @@ class Trivia(Game):
         return Outcome(messages=[f"❌ It was {self._correct_text()}."], finished=True, result="lost")
 
     def _matches(self, guess: str) -> bool:
-        compact = _compact(guess)
-        for answer in self._accepted:
-            if compact == answer:
-                return True
-            if not answer.isdigit() and len(answer) >= TYPO_MIN_LETTERS and within_one_edit(compact, answer):
-                return True
-        return False
+        return any(typo_match(g, a, TYPO_MIN_LETTERS) for g in _forms(guess) for a in self._accepted)
 
     def _guess_typed(self, args: str, msg: ChatMessage) -> Outcome:
         if self._matches(args):

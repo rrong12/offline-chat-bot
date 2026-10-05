@@ -83,7 +83,7 @@ class Riddle(Game):
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
         if name == "hint":
             return self._hint()
-        words = strip_article(normalize(_APOSTROPHES.sub("", args))).split()
+        words = normalize(strip_article(_APOSTROPHES.sub("", args))).split()
         if name != "g" or not words:
             return None
         too_long = len(words) > self._max_words  # one answer per guess, not a list of them
