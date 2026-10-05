@@ -20,6 +20,7 @@ class Outcome:
     finished: bool = False
     result: Literal["won", "timeout", "lost"] | None = None  # set when finished
     coalesce_key: str | None = None
+    restart_timer: bool = False  # give the player a fresh time limit (streak games, after each right guess)
 
 
 class Game(ABC):
@@ -27,14 +28,29 @@ class Game(ABC):
     title: ClassVar[str]  # "Scramble"
     usage: ClassVar[str]  # "{p}scramble [category]"
     description: ClassVar[str]  # shown by ?help <game>; {p} becomes the prefix
-    time_limit: ClassVar[int]  # seconds
+    time_limit: int  # seconds; set on the class, and a game may change it for one round
+    aliases: ClassVar[tuple[str, ...]] = ()  # other names for the start command
     # In-game commands: name -> (usage, description). Routed here only while this game runs.
     commands: ClassVar[dict[str, tuple[str, str]]] = {}
+    # Optional second start option, such as Trivia's difficulty: "?trivia science hard".
+    levels: ClassVar[tuple[str, ...]] = ()
+    levels_label: ClassVar[str] = ""  # "difficulties", shown with the category list
 
-    def __init__(self, category: str | None, rng: random.Random, assets: Assets) -> None:
+    def __init__(
+        self,
+        category: str | None,
+        rng: random.Random,
+        assets: Assets,
+        *,
+        level: str | None = None,
+        avoid: frozenset[str] = frozenset(),
+    ) -> None:
         self.category = category
         self.rng = rng
         self.assets = assets
+        self.level = level  # one of `levels`, or None to let the game pick
+        self.avoid = avoid  # ids of questions this player saw recently
+        self.item_id: str | None = None  # id of the question shown, so the manager can avoid repeats
 
     @classmethod
     def category_names(cls, assets: Assets) -> list[str]:

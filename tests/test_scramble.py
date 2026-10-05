@@ -111,3 +111,11 @@ def test_timeout_reveals_word(assets):
     assert out.finished and out.result == "timeout"
     assert out.messages == ["⏰ Time's up! It was ALLIGATOR."]
     assert out.awards == {}
+
+
+def test_g_command_also_guesses_and_stays_silent_when_wrong(assets):
+    game = make(assets)
+    wrong = game.on_command("g", "crocodile", make_msg("?g crocodile"), None)
+    assert not wrong.finished and wrong.messages == []
+    out = game.on_command("g", "Alligator", make_msg("?g Alligator"), None)
+    assert out.finished and out.messages == ["✅ alice got it: ALLIGATOR (+10)"]

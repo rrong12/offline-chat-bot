@@ -7,6 +7,7 @@ import math
 import random
 import traceback
 import uuid
+from collections import Counter, OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,6 +26,13 @@ logger = logging.getLogger(__name__)
 Say = Callable[..., None]  # say(text, *, reply_to=None, coalesce_key=None, priority=False)
 
 NOTICE_SECONDS = 5.0  # at most one "can't start" or category-list reply per player this often
+RECENT_ITEMS = 50  # a player doesn't get the same question again within their last 50 of that game
+RECENT_PLAYERS = 10_000  # remembered (game, player) pairs; the least recently active are forgotten
+# Help for in-game commands that several games share; a command only one game uses keeps its own text.
+SHARED_COMMAND_HELP = {
+    "g": ("{p}g <guess>", "Guess in your current game."),
+    "hint": ("{p}hint", "Get a hint in your current game (fewer points)."),
+}
 
 
 @dataclass
@@ -69,6 +77,7 @@ class GameManager:
         self._is_busy = is_busy
         self.sessions: dict[str, Session] = {}  # user_id -> that player's running game
         self._cooldowns = Cooldowns(clock)  # per-player game cooldowns and notice rate limits
+        self._recent: OrderedDict[tuple[str, str], deque[str]] = OrderedDict()  # (game, user_id) -> item ids
 
     # registration
 
@@ -77,13 +86,17 @@ class GameManager:
         # on starting, and refusal replies are rate-limited separately (see _notice).
         for cls in self.games.values():
             handler = self._start_handler(cls)
-            registry.add(Command(cls.name, handler, cls.usage, cls.description, "Games", cooldown=False))
+            registry.add(
+                Command(cls.name, handler, cls.usage, cls.description, "Games", aliases=cls.aliases, cooldown=False)
+            )
         registry.add(Command("skip", self._skip_command, "{p}skip", "End your current game.", "Games", cooldown=False))
+        users = Counter(name for cls in self.games.values() for name in cls.commands)
         seen: set[str] = set()
         for cls in self.games.values():
-            for name, (usage, description) in cls.commands.items():
+            for name, own_help in cls.commands.items():
                 if name not in seen:
                     seen.add(name)
+                    usage, description = SHARED_COMMAND_HELP.get(name, own_help) if users[name] > 1 else own_help
                     registry.add(
                         Command(name, self._game_command, usage, description, "Games", cooldown=False, listed=False)
                     )
@@ -137,12 +150,19 @@ class GameManager:
 
         return handler
 
+    @staticmethod
+    def _options(cls: type[Game], categories: list[str]) -> str:
+        text = f"{cls.title} categories: {', '.join(categories)}"
+        if cls.levels:
+            text += f" · {cls.levels_label}: {', '.join(cls.levels)}"
+        return text
+
     async def _start(self, cls: type[Game], ctx: CommandContext) -> None:
-        arg = ctx.args.strip().lower()
+        tokens = ctx.args.lower().split()
         categories = cls.category_names(self.assets)
         uid = ctx.msg.user_id
-        if arg == "categories":
-            self._notice(ctx, f"{cls.title} categories: {', '.join(categories)}")
+        if tokens == ["categories"]:
+            self._notice(ctx, self._options(cls, categories))
             return
         if uid in self.sessions:
             self._notice(ctx, f"You already have a {self.sessions[uid].game.name} game running.")
@@ -154,12 +174,22 @@ class GameManager:
         if len(self.sessions) >= self.max_games or self._is_busy():
             self._notice(ctx, "Too many games running right now, try again in a moment.")
             return
-        if categories and arg and arg not in categories:
-            self._notice(ctx, f"Unknown category. {cls.title} categories: {', '.join(categories)}")
-            return
-        category = (arg or self.rng.choice(categories)) if categories else None
+        category: str | None = None
+        level: str | None = None
+        for token in tokens:
+            if token in categories and category is None:
+                category = token
+            elif token in cls.levels and level is None:
+                level = token
+            else:  # never repeat the unknown word: it could be anything
+                self._notice(ctx, f"Unknown {'option' if cls.levels else 'category'}. {self._options(cls, categories)}")
+                return
+        if categories and category is None:
+            category = self.rng.choice(categories)
+        recent_key = (cls.name, uid)
+        avoid = frozenset(self._recent.get(recent_key, ()))
         try:
-            game = cls(category, self.rng, self.assets)
+            game = cls(category, self.rng, self.assets, level=level, avoid=avoid)
             opening = game.start()
         except Exception as exc:
             logger.exception("could not start %s", cls.name)
@@ -178,8 +208,17 @@ class GameManager:
             reply_to=ctx.msg.id,
         )
         self.sessions[uid] = session
+        if game.item_id is not None:
+            self._remember(recent_key, game.item_id)
         self.log.write("game_start", round=session.key, game=cls.name, category=category, player=ctx.msg.login)
         self._reply(session, opening)
+
+    def _remember(self, key: tuple[str, str], item_id: str) -> None:
+        recent = self._recent.pop(key, None) or deque(maxlen=RECENT_ITEMS)
+        recent.append(item_id)
+        self._recent[key] = recent  # now the most recently used
+        while len(self._recent) > RECENT_PLAYERS:
+            self._recent.popitem(last=False)
 
     async def _skip_command(self, ctx: CommandContext) -> None:
         session = self.sessions.get(ctx.msg.user_id)
@@ -245,6 +284,8 @@ class GameManager:
             result = outcome.result or default_result
             self._finish(session, result, outcome.messages, outcome.awards, outcome.winners)
         else:
+            if outcome.restart_timer:
+                session.start_mono = self.clock.mono()
             for text in outcome.messages:
                 self._reply(session, text, outcome.coalesce_key)
 

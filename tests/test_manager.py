@@ -83,6 +83,44 @@ class BrokenStart(Boom):
         raise RuntimeError("cannot start")
 
 
+class Quiz(Boom):
+    """Has categories, levels, an alias, and question ids, to test start options and repeat avoidance."""
+
+    name = "quiz"
+    title = "Quiz"
+    aliases = ("qz",)
+    levels = ("easy", "hard")
+    levels_label = "difficulties"
+    ITEMS = ("q1", "q2", "q3")
+
+    @classmethod
+    def category_names(cls, assets):
+        return ["science", "history"]
+
+    def __init__(self, category, rng, assets, *, level=None, avoid=frozenset()):
+        super().__init__(category, rng, assets, level=level, avoid=avoid)
+        self.item_id = next((i for i in self.ITEMS if i not in avoid), self.ITEMS[0])
+
+    def start(self) -> str:
+        return f"quiz {self.category} {self.level} {self.item_id}"
+
+    def on_message(self, msg, now):
+        return None
+
+
+class Streak(Boom):
+    """Every guess is right and restarts the timer."""
+
+    name = "streak"
+    commands = {"g": ("{p}g", "Guess.")}
+
+    def on_message(self, msg, now):
+        return None
+
+    def on_command(self, name, args, msg, now):
+        return Outcome(messages=["right"], restart_timer=True)
+
+
 class Harness:
     def __init__(self, tmp_path, clock: FakeClock, assets, max_games: int = 25):
         self.clock = clock
@@ -93,7 +131,8 @@ class Harness:
         self.log = ActivityLog(tmp_path / "logs", clock)
         self.manager = GameManager(
             games={"scramble": Scramble, "hangman": Hangman, "boom": Boom, "stubborn": Stubborn,
-                   "noresult": NoResult, "anycommand": AnyCommand, "brokenstart": BrokenStart},
+                   "noresult": NoResult, "anycommand": AnyCommand, "brokenstart": BrokenStart,
+                   "quiz": Quiz, "streak": Streak},
             stats=self.stats,
             log=self.log,
             clock=clock,
@@ -139,7 +178,8 @@ def h(tmp_path, clock, assets) -> Harness:
 def test_register_adds_start_skip_and_hidden_game_commands(h: Harness):
     names = {c.name for c in h.registry.all()}
     assert names == {
-        "scramble", "hangman", "boom", "stubborn", "noresult", "anycommand", "brokenstart", "skip", "hint", "g"
+        "scramble", "hangman", "boom", "stubborn", "noresult", "anycommand", "brokenstart", "quiz", "streak",
+        "skip", "hint", "g",
     }
     start = h.registry.get("scramble")
     assert not start.cooldown  # the per-player game cooldown is the only limit on starting
@@ -383,3 +423,58 @@ async def test_finish_records_the_players_current_name(h: Harness):
 async def test_game_messages_get_prefix_substituted(h: Harness):
     await h.command("?hangman animals")
     assert "guess with ?g <letter>" in h.texts()[0]
+
+
+def test_shared_in_game_commands_get_generic_help(h: Harness):
+    assert h.registry.get("g").description == "Guess in your current game."  # several games use ?g
+    assert h.registry.get("hint").description == "Get a hint in your Scramble game (fewer points)."  # only Scramble
+
+
+async def test_category_and_level_in_either_order(h: Harness):
+    await h.command("?quiz hard science")
+    assert h.texts()[-1] == "quiz science hard q1"
+
+
+async def test_level_without_category_picks_a_category(h: Harness):
+    await h.command("?quiz easy")
+    assert h.texts()[-1].startswith("quiz ") and h.texts()[-1].endswith(" easy q1")
+
+
+async def test_categories_list_includes_levels(h: Harness):
+    await h.command("?quiz categories")
+    assert h.replies == ["Quiz categories: science, history · difficulties: easy, hard"]
+
+
+async def test_unknown_option_lists_categories_and_levels_without_echoing(h: Harness):
+    await h.command("?quiz science planets")
+    assert h.replies == ["Unknown option. Quiz categories: science, history · difficulties: easy, hard"]
+    assert h.manager.sessions == {}
+
+
+async def test_alias_starts_the_game(h: Harness):
+    await h.command("?qz science")
+    assert h.texts()[-1] == "quiz science None q1"
+
+
+async def test_recent_questions_are_not_repeated_for_that_player(h: Harness):
+    seen = []
+    for _ in range(4):
+        await h.command("?quiz science")
+        seen.append(h.texts()[-1].split()[-1])
+        await h.command("?skip")
+        h.clock.advance(10)
+    assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the game falls back to any question
+    await h.command("?quiz science", "bob")
+    assert h.texts()[-1].endswith("q1")  # other players have their own history
+
+
+async def test_restart_timer_gives_a_fresh_time_limit(h: Harness):
+    await h.command("?streak")
+    h.clock.advance(8)
+    await h.command("?g x")
+    h.clock.advance(8)  # 16 s since the start, but only 8 s since the right guess
+    h.manager.tick()
+    assert "id-alice" in h.manager.sessions
+    h.clock.advance(2)
+    h.manager.tick()
+    assert h.manager.sessions == {}

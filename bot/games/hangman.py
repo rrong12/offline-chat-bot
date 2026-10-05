@@ -47,8 +47,16 @@ class Hangman(Game):
     def category_names(cls, assets: Assets) -> list[str]:
         return [c for c in assets.categories() if any(_valid(w) for w in assets.words(c))]
 
-    def __init__(self, category: str | None, rng: random.Random, assets: Assets) -> None:
-        super().__init__(category, rng, assets)
+    def __init__(
+        self,
+        category: str | None,
+        rng: random.Random,
+        assets: Assets,
+        *,
+        level: str | None = None,
+        avoid: frozenset[str] = frozenset(),
+    ) -> None:
+        super().__init__(category, rng, assets, level=level, avoid=avoid)
         assert category is not None
         self.answer = rng.choice([w for w in assets.words(category) if _valid(w)]).upper()
         self.guessed: set[str] = set()

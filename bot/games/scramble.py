@@ -37,19 +37,30 @@ class Scramble(Game):
     title = "Scramble"
     usage = "{p}scramble [category]"
     description = (
-        "Your own word to unscramble: 10 points, or 7 or 4 if you take hints with {p}hint. "
-        "{p}scramble categories lists topics. {p}skip ends your game."
+        "Your own word to unscramble: type it, or {p}g <word>. 10 points, or 7 or 4 if you take hints "
+        "with {p}hint. {p}scramble categories lists topics. {p}skip ends your game."
     )
     time_limit = 45
     POINTS = (10, 7, 4)
-    commands = {"hint": ("{p}hint", "Get a hint in your Scramble game (fewer points).")}
+    commands = {
+        "hint": ("{p}hint", "Get a hint in your Scramble game (fewer points)."),
+        "g": ("{p}g <word>", "Guess the word in your Scramble game."),
+    }
 
     @classmethod
     def category_names(cls, assets: Assets) -> list[str]:
         return [c for c in assets.categories() if any(_valid(w) for w in assets.words(c))]
 
-    def __init__(self, category: str | None, rng: random.Random, assets: Assets) -> None:
-        super().__init__(category, rng, assets)
+    def __init__(
+        self,
+        category: str | None,
+        rng: random.Random,
+        assets: Assets,
+        *,
+        level: str | None = None,
+        avoid: frozenset[str] = frozenset(),
+    ) -> None:
+        super().__init__(category, rng, assets, level=level, avoid=avoid)
         assert category is not None
         blocked = _blocked_fragments(assets)
         candidates = [w.upper() for w in assets.words(category) if _valid(w)]
@@ -91,7 +102,10 @@ class Scramble(Game):
         return " ".join(ch if i in shown else "_" for i, ch in enumerate(self.word))
 
     def on_message(self, msg: ChatMessage, now: datetime) -> Outcome | None:
-        guess = normalize(msg.text)
+        return self._guess(msg.text, msg)
+
+    def _guess(self, text: str, msg: ChatMessage) -> Outcome | None:
+        guess = normalize(text)
         if " " in guess or len(guess) != len(self.word):
             return None
         if guess not in self._answers:
@@ -106,6 +120,8 @@ class Scramble(Game):
         )
 
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
+        if name == "g":
+            return self._guess(args, msg)  # a wrong guess stays silent, as in plain chat
         if name != "hint" or self.hints_shown >= len(self.POINTS) - 1:
             return None
         self.hints_shown += 1
