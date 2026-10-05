@@ -51,6 +51,31 @@ class Stubborn(Boom):
         raise RuntimeError("no answer")
 
 
+class NoResult(Boom):
+    """Times out with finished=True but no result."""
+
+    name = "noresult"
+
+    def on_message(self, msg, now):
+        return None
+
+    def on_timeout(self) -> Outcome:
+        return Outcome(messages=["over"], finished=True)
+
+
+class AnyCommand(Boom):
+    """Answers any in-game command, to prove the manager only routes declared ones."""
+
+    name = "anycommand"
+    commands = {"g": ("{p}g", "Guess.")}
+
+    def on_message(self, msg, now):
+        return None
+
+    def on_command(self, name, args, msg, now):
+        return Outcome(messages=[f"got {name}"])
+
+
 class BrokenStart(Boom):
     name = "brokenstart"
 
@@ -68,7 +93,7 @@ class Harness:
         self.log = ActivityLog(tmp_path / "logs", clock)
         self.manager = GameManager(
             games={"scramble": Scramble, "hangman": Hangman, "boom": Boom, "stubborn": Stubborn,
-                   "brokenstart": BrokenStart},
+                   "noresult": NoResult, "anycommand": AnyCommand, "brokenstart": BrokenStart},
             stats=self.stats,
             log=self.log,
             clock=clock,
@@ -113,7 +138,9 @@ def h(tmp_path, clock, assets) -> Harness:
 
 def test_register_adds_start_skip_and_hidden_game_commands(h: Harness):
     names = {c.name for c in h.registry.all()}
-    assert names == {"scramble", "hangman", "boom", "stubborn", "brokenstart", "skip", "hint", "g"}
+    assert names == {
+        "scramble", "hangman", "boom", "stubborn", "noresult", "anycommand", "brokenstart", "skip", "hint", "g"
+    }
     start = h.registry.get("scramble")
     assert not start.cooldown  # the per-player game cooldown is the only limit on starting
     assert not h.registry.get("g").listed and not h.registry.get("g").cooldown
@@ -176,6 +203,12 @@ async def test_refusal_replies_are_rate_limited_per_player(h: Harness):
     h.clock.advance(5)
     await h.command("?scramble animals")
     assert len(h.replies) == 2
+
+
+async def test_category_list_is_rate_limited_too(h: Harness):
+    await h.command("?scramble categories")
+    await h.command("?hangman categories")
+    assert h.replies == ["Scramble categories: animals, food"]
 
 
 async def test_categories_then_pick_works_immediately(h: Harness):
@@ -303,10 +336,18 @@ async def test_timeout_is_forced_if_the_game_does_not_finish(h: Harness):
     assert [e["outcome"] for e in h.events() if e["event"] == "game_end"] == ["timeout"]
 
 
-async def test_start_failure_is_reported_and_starts_nothing(h: Harness):
+async def test_start_failure_is_reported_once_and_starts_nothing(h: Harness):
+    await h.command("?brokenstart")
     await h.command("?brokenstart")
     assert h.replies == ["Couldn't start that game."]
     assert h.manager.sessions == {}
+
+
+async def test_finished_timeout_without_result_counts_as_timeout(h: Harness):
+    await h.command("?noresult")
+    h.clock.advance(10)
+    h.manager.tick()
+    assert [e["outcome"] for e in h.events() if e["event"] == "game_end"] == ["timeout"]
 
 
 async def test_stats_failure_still_ends_the_game(h: Harness, monkeypatch):
@@ -323,9 +364,11 @@ async def test_stats_failure_still_ends_the_game(h: Harness, monkeypatch):
 
 
 async def test_in_game_command_for_a_different_game_is_ignored(h: Harness):
-    await h.command("?hangman animals", "bob")
-    await h.command("?hint", "bob")  # Hangman has no ?hint
-    assert len(h.said) == 1
+    await h.command("?anycommand", "bob")
+    await h.command("?hint", "bob")  # registered by Scramble; bob's game doesn't declare it
+    assert h.texts() == ["boom started"]
+    await h.command("?g", "bob")  # declared: reaches the game
+    assert h.texts()[-1] == "got g"
 
 
 async def test_finish_records_the_players_current_name(h: Harness):

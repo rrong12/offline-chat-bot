@@ -159,8 +159,8 @@ class StatsStore:
     def record_round(self, rec: RoundRecord) -> int:
         """Write a finished round and its players in one transaction. Returns the round id.
 
-        Players' user rows are upserted here; the starter (`started_by`) must already have a
-        user row (the game manager touches the starter when the game starts).
+        Players' user rows are upserted here, before the round row, so a starter who is also a
+        player (always true for personal games) needs no separate user row.
         """
         with self._conn:
             for p in rec.players:

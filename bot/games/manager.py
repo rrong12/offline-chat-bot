@@ -164,7 +164,7 @@ class GameManager:
         except Exception as exc:
             logger.exception("could not start %s", cls.name)
             self.log.write("error", where=f"game:{cls.name}.start", type=type(exc).__name__, message=str(exc))
-            ctx.reply("Couldn't start that game.")
+            self._notice(ctx, "Couldn't start that game.")
             return
         session = Session(
             key=uuid.uuid4().hex[:8],
