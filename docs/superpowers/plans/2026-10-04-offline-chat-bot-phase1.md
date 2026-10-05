@@ -7202,6 +7202,9 @@ ExecStart=/opt/offline-chat-bot/.venv/bin/python -m bot
 Restart=on-failure
 RestartSec=30
 RestartPreventExitStatus=2 3
+# A clean shutdown takes at most about 20 s (finish the current send, drain, close).
+TimeoutStopSec=30
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
@@ -7218,8 +7221,8 @@ and a daily activity log. Design: `docs/superpowers/specs/2026-10-04-offline-cha
 
 Games are personal: `?scramble` starts **your** game, only your answers count, and the bot
 answers you in threaded replies. Many people can play at once (25 games by default), each
-person runs one game at a time, and new games pause while the bot's outgoing messages are
-backed up.
+person runs one game at a time, and new games are refused ("try again in a moment") while the
+bot's outgoing messages are backed up.
 
 ## Commands
 
@@ -7233,17 +7236,24 @@ backed up.
 | `?gamestats [game] [username]` | anyone | Wins, games played, points |
 | `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke` | anyone | Quick fun |
 | `?cookie`, `?cookie give <username>` | anyone | Daily fortune cookie (resets 00:00 UTC) |
-| `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check |
+| `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check. `?bot off` ends every running game with no points, and while paused the bot ignores everything except `?bot` from a mod |
 | `?bot shutdown` | mods, broadcaster, owners | Stop the bot process. Only someone with access to the machine can start it again |
 | `?stopgame` | mods, broadcaster, owners | End all running games with no points |
 
 Categories: animals, countries, food, games, general, streamers.
 
-## Try it without Twitch
+## Install
 
 ```
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
+```
+
+Any Python from 3.11 to 3.13 works.
+
+## Try it without Twitch
+
+```
 .venv/bin/python -m bot console
 ```
 
@@ -7256,17 +7266,26 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 ## Set up on Twitch (one time)
 
 1. **Bot account:** create a new Twitch account for the bot and verify its email.
-2. **Twitch app:** at https://dev.twitch.tv/console, register an application.
+2. **Twitch app:** at https://dev.twitch.tv/console, register an application (Twitch requires
+   two-factor authentication on the account that registers it).
    - OAuth Redirect URL: `http://localhost:4343/oauth/callback` (exactly).
    - Category: Chat Bot. Client type: Confidential.
    - Copy the Client ID and create a Client Secret.
-3. **Secrets:** `cp .env.example .env`, then fill in `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, and
-   your own Twitch user ID in `OWNER_IDS`.
-4. **Log the bot in:** run `.venv/bin/python -m bot auth`. Open the printed URL in a browser where
+3. **Secrets:** `cp .env.example .env`, then fill in `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET`.
+   `.env` holds secrets: never share or commit it (it's git-ignored).
+4. **Your numeric user ID** goes in `OWNER_IDS`. It's a number, not your username. To look it up
+   (replace `yourname`):
+   ```
+   source .env
+   TOKEN=$(curl -s -X POST "https://id.twitch.tv/oauth2/token?client_id=$TWITCH_CLIENT_ID&client_secret=$TWITCH_CLIENT_SECRET&grant_type=client_credentials" | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')
+   curl -s -H "Client-Id: $TWITCH_CLIENT_ID" -H "Authorization: Bearer $TOKEN" "https://api.twitch.tv/helix/users?login=yourname"
+   ```
+   The `"id"` in the answer is your user ID.
+5. **Log the bot in:** run `.venv/bin/python -m bot auth`. Open the printed URL in a browser where
    you're logged in as the **bot** account and approve. Put the printed `BOT_ID=...` line in `.env`.
    The login is saved in `data/.tio.tokens.json`. Never share or commit that file.
-5. **Channel:** set `channel` in `config.toml` to the channel the bot should join.
-6. **Mod the bot** in that channel (`/mod <botaccount>` in its chat). Without mod status the bot
+6. **Channel:** set `channel` in `config.toml` to the channel the bot should join.
+7. **Mod the bot** in that channel (`/mod <botaccount>` in its chat). Without mod status the bot
    still runs, but it can only send 1 message per second, slow mode applies, and it won't show
    the Chat Bot badge. The startup log says `is_mod` either way.
 
@@ -7284,6 +7303,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - 1: crashed.
 - 2: config problem (the message names the setting).
 - 3: the Twitch login needs redoing (`python -m bot auth`).
+- 130: Ctrl+C before the bot finished starting.
 
 ## Settings
 
@@ -7306,9 +7326,13 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 1. Copy the project folder to the server (for example `/opt/offline-chat-bot`), including
    `.env` and `data/.tio.tokens.json`.
-2. On the server: `python3.12 -m venv .venv && .venv/bin/pip install -e .`
-3. Create a user for the bot (`sudo useradd -r chatbot`) and give it the folder
-   (`sudo chown -R chatbot /opt/offline-chat-bot`).
+2. On the server: `python3 -m venv .venv && .venv/bin/pip install -e .` (any Python 3.11-3.13).
+3. Create a user for the bot (`sudo useradd -r chatbot`), give it the folder, and make the two
+   secret files readable only by it:
+   ```
+   sudo chown -R chatbot /opt/offline-chat-bot
+   sudo chmod 600 /opt/offline-chat-bot/.env /opt/offline-chat-bot/data/.tio.tokens.json
+   ```
 4. `sudo cp deploy/offline-chat-bot.service /etc/systemd/system/`, then
    `sudo systemctl daemon-reload && sudo systemctl enable --now offline-chat-bot`.
 5. **How it behaves on the server:**
@@ -7320,12 +7344,16 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
    - **Logs:** `journalctl -u offline-chat-bot -f`.
 6. **Run only one copy of the bot at a time.** If it's running on both your laptop and the
    server, every command is answered twice.
+7. **If it stops with exit 3 (login needed):** the login page needs a browser, which a server
+   doesn't have. Either run `python -m bot auth` on your laptop and copy the new
+   `data/.tio.tokens.json` to the server (then `chmod 600` it and restart the service), or tunnel
+   the login port with `ssh -L 4343:localhost:4343 <server>` and run `auth` on the server.
 
 ## Go live in jasontheween's chat
 
 1. A channel mod runs `/mod <botaccount>` there.
 2. Set `channel = "jasontheween"` in `config.toml`.
-3. Restart the bot.
+3. Restart the bot (`sudo systemctl restart offline-chat-bot` on the server).
 
 ## Tests
 
@@ -7433,3 +7461,120 @@ is then a config change: the contact mods the bot, `channel = "jasontheween"`, r
 
 Record here anything that changes during execution: review findings, deviations from this
 plan, and the live test results.
+
+Tasks 1-19 were built on branch `phase1` on 2026-10-04 with subagents. Each task got:
+
+- an exact-diff spec review against this plan;
+- a code-quality review (Sonnet for small tasks, Opus for core ones).
+
+The code blocks above are the final, reviewed versions; the entries below say what review changed.
+
+
+- **Task 1** (`de62bda`, `ec5886a`): built as planned. The quality review found that `pip install -e .` leaves an untracked `offline_chat_bot.egg-info/`, so `*.egg-info/`, `build/`, and `dist/` were added to `.gitignore`.
+- **Task 2** (`9dc9822` + fix): the quality review found that `normalize` turned combining marks and format characters into spaces, so strikethrough "fancy text" became "h e l l o". It also found raw invisible characters in the source: a regex in `bot/text.py` and a test string. Cause: `\uXXXX` escapes in the agent's tool input were decoded into real characters while the prototype was being written, so the plan's Task 2 code blocks carry them too. Fix: `strip_invisible` now drops Unicode categories Cf, Mn, and Me plus the tag block U+E0000-E007F (U+E0000 itself is unassigned, category Cn). Tests build their special characters with `chr()`, and boundary tests for usernames were added. The plan's Task 2 code blocks are superseded by the committed files.
+- **Task 3** (`37ab92a` + fix): the quality review found that `ActivityLog.write()` could raise on I/O errors, which would crash the error-reporting path itself. It also found that a caller field named `ts` could overwrite the timestamp. Fix: I/O errors in `write` and `prune` are caught and logged, `ts` is always the real timestamp, the asset cache got a comment, and tests were added.
+- **Task 4** (`44dc2cd` + fix): the quality review found four problems.
+  - Migrations weren't atomic: sqlite3 doesn't wrap CREATE statements in a transaction, so one failed migration left the database unable to start.
+  - The tests didn't cover the spec's wins tiebreak, the rename handling in `find_user`, or the foreign-key rule.
+  - The leaderboard queries got slow at scale.
+  - Smaller items: `claim_daily` reported any IntegrityError as "already used", `_iso` didn't convert to UTC, and a newer database was accepted silently.
+  - Fix:
+    - each migration runs as `BEGIN; ...; COMMIT;` through `executescript` inside `with conn`;
+    - a database version newer than the code raises an error;
+    - the ranking SQL aggregates before joining, with separate all-games and one-game queries, SQL `LIMIT`, and `ROW_NUMBER()` for rank;
+    - migration 1 adds indexes `round_players(user_id, points, won)` and `rounds(game)`. Measured at 8k users and 373k player rows: overall leaderboard 220 to 14 ms, per game 125 to 61 ms;
+    - `claim_daily` uses `ON CONFLICT DO NOTHING` and checks `rowcount`;
+    - `_iso` converts to UTC;
+    - 8 tests were added, and the tests close their stores.
+- **Task 5** (`74f0393` + fix): the quality review found that `drain()` didn't honor its timeout and that sends had no timeout of their own. TwitchIO uses aiohttp's 300 s default, so a dead network could hang shutdown or freeze the queue for minutes. It also found that an unexpected error (e.g. a bad send result) killed the `run()` loop silently. Minor findings: the fixed 0.25 s poll capped the real send rate (rate 3 gave 2/s), `run()` took up to 1 s to stop, coalescing across priority lanes broke ordering, and leftovers and drops weren't logged with their text. Fix: per-send `asyncio.wait_for` timeout (10 s), `drain` wrapped in `asyncio.timeout` that logs leftovers, result handling inside the try, `run()` catches and logs errors and continues, waits on stop or wake, and paces by tokens; a flush lock keeps `run`/`drain` from sending concurrently; coalescing that changes lanes re-inserts the message; 10 tests added.
+- **Task 6** (`b20a969` + fix): the quality review found that pruning at 10,000 cooldown entries only drops expired ones. With a live set of 10k or more, every `trigger()` paid a full rescan and memory still grew. Fix: after a prune, the next one waits until the dict doubles (amortized O(1)). Tests were added for `ready()`, pruning, and the back-off.
+- **Task 7** (`886c091` + fix): the quality review found that a mixed-case command name registered fine but could never be found (lookup lowercases), and that a typo in `group` silently dropped a command from `?help`. Also, `parse_command` split only on a literal space, so a tab or no-break space glued words together. Fix: `add()` rejects non-lowercase names and unknown groups, the duplicate error names the clashing alias, and parsing splits on any whitespace. Tests were added.
+- **Task 8** (`a77cf21` + fix): the quality review found that a word made of one repeated letter couldn't be scrambled and was shown unscrambled. Fix: Scramble requires two distinct letters, plus a test. Pushed back on: deduplicating word lists in the game (Task 18's content test already rejects case-insensitive duplicates). Deferred: a timer-reset hook on `Outcome` for streak games (Phase 2, Higher or Lower; it's one optional field plus one line in the manager).
+- **Task 9** (`135ea3e` + follow-up): the quality review found no defects. Following its UX note, a wrong `?g <answer>` now replies "❌ Not it." instead of nothing; `?g` is explicit, and the 2 s cooldown bounds it. Tests were added for punctuation, repeated letters, and extra words after `?g`.
+- **Task 10** (`78eba8a` + fix): the Opus quality review found three things.
+  - **Stacked cooldowns:** the per-user command cooldown and the game cooldown stacked on start commands. A fast win followed by `?scramble` was silently ignored, then showed a wrong countdown, and the wait came to about 20 s instead of 10. Picking a category right after listing them was also silently ignored.
+  - **Memory:** `_cooldown_until` grew forever.
+  - **Tests:** the error paths were untested.
+  - **Fix:**
+    - start commands have no command cooldowns; the game cooldown is the only limit, and refusal and category replies are rate-limited separately to one per 5 s per player;
+    - game cooldowns use `Cooldowns`, so they're pruned;
+    - `_finish` checks itself and never runs twice;
+    - a timeout is forced if a game's `on_timeout` doesn't finish, and an unfinished result defaults to "timeout";
+    - coalesce keys are per round;
+    - session names and `reply_to` refresh on every player message;
+    - start handlers are bound per game class, so aliases work later;
+    - the redundant `touch_user` was dropped (`record_round` upserts the player);
+    - 8 tests added.
+- **Task 10 cleanup** (after the re-review): "Couldn't start that game." goes through the 5 s notice rate limit, the stale `record_round` docstring was fixed, and tests were added for a finished timeout with no result, the category-list rate limit, and a real routing test for undeclared in-game commands. Spec §5 and §6 were updated to match (start commands have no command cooldowns; the manager rate-limits its replies).
+- **Task 11** (`d5fba54` + fix): the Opus quality review found three problems.
+  - Fields that weren't strings (e.g. `{"fact": null}`) were posted as "None".
+  - `?cookie give` echoed the typed login ("Couldn't find a user named X"), so a troll could make the mod-badged bot repeat words of their choosing. The same pattern was in `?gamestats`.
+  - Third-party API text was posted with no filter for links, mentions, or control characters, and the bot as a mod skips Twitch's link filter.
+  - Fix:
+    - API text must be a string; it is stripped of invisible and control characters, and falls back if it contains `://`, `www.`, or `@name`;
+    - the no-echo replies are "Couldn't find that user." and "No stats for that user yet." (the latter applied in Task 12's code before it was built);
+    - user lookups time out after 5 s;
+    - self-gifting is also checked by user ID;
+    - `?cookie <anything but give>` shows usage instead of spending the cookie;
+    - mentions use the login for localized display names;
+    - cookie records are always JSON;
+    - HTTP bodies are capped at 64 KB, and the User-Agent carries the version;
+    - 9 tests added.
+- **Task 11, second fix** (after the re-review): the 64 KB body cap used `resp.content.read(n)`, which returns only what has arrived so far. A response arriving in pieces was cut off and silently fell back. The fix reads with an `iter_chunked` loop capped at 64 KB, with tests for a two-piece body and an oversized body. Fact text is NFC-normalized first, so decomposed accents survive. The re-review also found that this Mac's python.org Python 3.12 has no root certificates (every HTTPS call fails), which is handled in Task 17.
+- **Task 12** (`cdf9211` + fix): the quality review found two problems.
+  - `?help <x>` echoed any `^[a-z0-9_]{1,20}$` word, so underscore-joined troll phrases came back from the mod-badged bot.
+  - `?leaderboard` used `str.isdigit()`, so "-5" was reported as an unknown game, and "²" (a digit to `isdigit` but rejected by `int`) crashed the handler.
+  - Fix: `?help` never echoes ("No command by that name."), limits must match `-?[0-9]+` (ASCII) and are clamped, game names are lowercased defensively, and edge-case tests were added.
+- **Task 13** (`7955f12` + fix): the quality review found that several config mistakes were silently accepted instead of exiting 2.
+  - Unknown or misspelled keys, and sections of the wrong type, fell back to defaults.
+  - `outbox.rate_per_second` had no maximum, and `nan` or `inf` passed and disabled throttling entirely.
+  - Non-numeric OWNER_IDS were accepted.
+  - The prefixes `/` and `.` were accepted, though Twitch intercepts them.
+  - Fix: a schema check rejects unknown keys and non-table sections; numbers must be finite; the send rate is capped at 3/s; OWNER_IDS must be numeric on Twitch (console IDs are still allowed); prefixes can't start with `/` or `.`; at least one game must be enabled; duplicate games are dropped; the channel must be a string. Tests were added. Task 17's CLI test config now uses rate 3 with burst 50.
+- **Task 14** (`c26ae03` + fix): the quality review found that a line typed after `?bot shutdown` in interactive console mode raised "Event loop is closed" on the stdin thread and printed a traceback. Fix: the reader is now a testable `pump_lines` function that stops quietly when the loop has closed, and `run()` returns at once if `close()` came first. Tests were added; the closed-loop test fails against the old code. Pushed back on the shared-chat line syntax: that flow test builds the ChatMessage directly. Task 17's CLI test also sends a line after shutdown and asserts there's no traceback.
+- **Task 15** (`ec51cf9` + fix): the Opus quality review confirmed the core is race-free under TwitchIO's one-task-per-message model, and found three things.
+  - Cleanup in `run()` wasn't guarded. An error in `connector.close()` turned a deliberate `?bot shutdown` into exit 1 (and a systemd restart) and skipped the `shutdown` log.
+  - `touch_user` ran outside the handler guard.
+  - Minor: replies arriving after shutdown were lost unlogged; `wait_for(outbox_task, 1.0)` could cancel a send mid-flight; a failing log rollover could kill the tick loop; after a connector failure, drain tried to send to a dead connection; a second signal couldn't force an exit; and the Twitch connector ending without `close()` must count as a crash.
+  - Fix:
+    - each cleanup step is guarded and logged; `close()` is bounded to 5 s; the `shutdown` log is in `finally`; a cancelled `run()` still records games as stopped;
+    - `touch_user` is inside the guard;
+    - `Outbox.close()` makes late enqueues log as dropped, and `Outbox.discard()` is used instead of drain after a connector failure;
+    - the send loop gets up to the send timeout to finish;
+    - each tick step is guarded separately;
+    - `__main__`: a second signal force-exits;
+    - `TwitchConnector.run` raises if the connection ends without `close()`;
+    - 11 tests added. Spans Tasks 5, 15, 16, and 17.
+- **Task 16** (`082fb45` + fix): the Opus quality review, checked against TwitchIO 3.3.2's source, found five problems.
+  - **Critical, token saving was a no-op:** TwitchIO's save returns early unless its own loader ran, so a refreshed token was never written, and later restarts depended on the original refresh token.
+  - **The bot could go silently deaf:** failed reconnects, failed re-subscribes, or a runtime refresh failure leave the process alive with no chat, and the "ended unexpectedly" branch can't be reached with the real TwitchIO.
+  - **Startup outages looked like bad logins:** TwitchIO wraps 5xx and 429 validation errors in InvalidTokenException, so a brief outage became exit 3 with no restart.
+  - **Non-mod sends fail:** an app-token send without mod status or `channel:bot` is refused.
+  - Minors: HTTP errors escaped `send`; a busy port 4343 hung `auth`; a malformed token file crashed; "disconnected" was logged on deliberate shutdown.
+  - Fix:
+    - tokens are written by our own atomic, 0600 `write_token_file`, on close and on every `token_refreshed`, and saving never raises;
+    - a 30 s watchdog fails with AuthRequired if the bot token is dropped, or with RuntimeError after 4 min without a chat subscription;
+    - InvalidTokenException maps to AuthRequired only for 400/401/403, otherwise RuntimeError, so systemd retries;
+    - sends use the app token when modded and the bot's user token otherwise;
+    - HTTP errors become `SendResult(False, "http_<status>")`;
+    - `auth` checks the port first, surfaces token errors, and uses `force_verify=true`;
+    - a malformed token file means AuthRequired;
+    - revocation messages name the reason;
+    - `fetch_client_user=False`;
+    - 9 tests added with fake TwitchIO pieces.
+- **Task 16 follow-up** (after the re-review): the watchdog is cancelled when `run()` exits by any path, and the auth port check covers IPv6 too (using `errno.EADDRNOTAVAIL`, since its number differs between macOS and Linux). Task 17 maps a ConfigError during `auth` (busy port) to exit 2. Task 19's systemd unit now retries every 30 s with no start limit (`StartLimitIntervalSec=0`): the old "5 restarts in 10 minutes" would leave the bot stopped for good after an outage longer than about a minute. Exits 2 and 3 are still never restarted. Spec §15 is updated to match.
+- **Task 17** (`c8b5362` + follow-up): the Opus quality review said ready to merge, and its cheap follow-ups were taken.
+  - Setup problems exit 2 instead of 1, so systemd stops instead of retrying forever: an unreadable `.env`, an unwritable data folder, a corrupt database, a new `DatabaseTooNew`, and Twitch rejecting the client ID or secret (in both `run` and `auth`).
+  - A real signal count: only a genuine second signal force-exits, after flushing output, with the bot's current exit code.
+  - `bot.certs` is imported from `bot/__init__.py`, so no import reordering can break HTTPS. An empty CA folder counts as missing, and a line is logged when certifi is used.
+  - Empty environment variables don't override `.env`; Ctrl+C before startup finishes exits 130 quietly; a test that leaked `SSL_CERT_FILE` is fixed.
+  - Tests added: `.env` precedence, a corrupt database, SIGTERM in a real process, rejected credentials, and the CA folder cases.
+- **Task 17 nits** (after the final re-review): `authorize` maps only HTTP 400/401/403 to the "check your client ID/secret" ConfigError, so a Twitch outage keeps its real error. The SIGTERM test waits at most 10 s for the startup banner instead of possibly hanging.
+- **Task 18** (`c1870e7` + follow-up): the implementer verified every streamer and game against Wikipedia or TwitchTracker (281 sources) and found that random scrambles can spell slurs ("giraffe" about 5% of the time). The Opus content review found nothing wrong or made up.
+  - Code fix: Scramble reshuffles until the scramble contains none of the fragments in `content/blocked_rot13.txt` (ROT13-encoded), and skips a word that can't be scrambled cleanly. Checked on the real lists: 20,760 scrambles, zero blocked fragments, every word scramblable.
+  - Scramble accepts any same-letters word from its category (undertale/deltarune, canoe/ocean).
+  - Content: the ~16 non-streamer words dropped only for scramble risk are restored, the streamer "sneaky" was removed (adult content since 2024), and two imprecise facts were reworded.
+  - For Robert's review: 21 non-English-language streamers that Jason's chat may not recognize, Maya Higa (borderline), and mostly-YouTube creators.
+  - Process note: one research request from the coordinator (4 calls) and one from the reviewer sent Robert's email in a User-Agent header to Wikimedia/Wikipedia. Disclosed to Robert; generic User-Agents only from then on.
+- **Task 18 second follow-up** (after the re-review): 14 fragments added to the blocked list (a self-harm abbreviation, Nazi-salute words, two slurs that could form from 'Pakistan' and 'Japan', and a few sexual and anatomical terms), for 53 in total. Re-verified: no scramble contains a blocked fragment and every word stays scramblable. Scramble logs a warning if the blocked list is missing.
+- **Task 19** (`2246c63` + fix): the review found no wrong claims, but five gaps: (1) `?bot off` didn't mention that it ends all games and ignores everything else while paused; (2) the install step was buried in the optional console section; (3) OWNER_IDS needs a numeric ID and nothing explained how to find it; (4) there was no way to re-run auth on a headless server; (5) secrets copied to the server could stay world-readable. Fix: a separate Install section, a curl lookup for the numeric ID, a server re-auth recipe (copy the token or use an SSH tunnel), `chmod 600` for the secrets, plus the minors (exit 130, 2FA note, "refused" wording, the systemctl restart). The systemd unit gains `TimeoutStopSec=30` and `PYTHONUNBUFFERED=1`.
