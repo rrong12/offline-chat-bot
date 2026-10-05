@@ -26,6 +26,11 @@ def test_parse_command_strips_invisible_and_extra_spaces():
     assert parse_command("  ?cookie   give  bob \U000e0000", "?") == ("cookie", "give  bob")
 
 
+def test_parse_command_splits_on_any_whitespace():
+    assert parse_command("?scramble\tAnimals", "?") == ("scramble", "Animals")
+    assert parse_command("?scramble" + chr(0xA0) + "food", "?") == ("scramble", "food")  # no-break space
+
+
 def test_parse_command_custom_prefix():
     assert parse_command("!scramble", "!") == ("scramble", "")
     assert parse_command("!scramble", "?") is None
@@ -47,8 +52,16 @@ def test_command_cooldown_flags_default_on():
 def test_registry_rejects_duplicates():
     reg = CommandRegistry("?")
     reg.add(cmd("fact"))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="'fact' is already registered"):
         reg.add(cmd("other", aliases=("fact",)))
+
+
+def test_registry_rejects_uppercase_names_and_unknown_groups():
+    reg = CommandRegistry("?")
+    with pytest.raises(ValueError, match="lowercase"):
+        reg.add(cmd("Fact"))
+    with pytest.raises(ValueError, match="unknown group"):
+        reg.add(cmd("fact", group="Game"))
 
 
 def test_help_overview_groups_in_order_and_skips_unlisted():

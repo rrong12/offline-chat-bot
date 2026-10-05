@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from bot.connectors.base import ChatMessage
 from bot.text import strip_invisible, truncate
 
-GROUP_ORDER = ("Games", "Stats", "Fun")
+GROUP_ORDER = ("Games", "Stats", "Fun")  # groups shown in the ?help overview, in this order
+GROUPS = (*GROUP_ORDER, "Control", "Info")
 
 
 def parse_command(text: str, prefix: str) -> tuple[str, str] | None:
@@ -19,8 +20,8 @@ def parse_command(text: str, prefix: str) -> tuple[str, str] | None:
     body = text[len(prefix):]
     if not body or body[0].isspace():
         return None
-    name, _, args = body.partition(" ")
-    return name.lower(), args.strip()
+    name, *rest = body.split(maxsplit=1)
+    return name.lower(), rest[0].strip() if rest else ""
 
 
 @dataclass
@@ -61,9 +62,13 @@ class CommandRegistry:
     _order: list[Command] = field(default_factory=list)
 
     def add(self, cmd: Command) -> None:
+        if cmd.group not in GROUPS:
+            raise ValueError(f"command {cmd.name!r} has unknown group {cmd.group!r} (known: {', '.join(GROUPS)})")
         for name in (cmd.name, *cmd.aliases):
+            if name != name.lower() or not name:
+                raise ValueError(f"command names must be lowercase and non-empty, got {name!r}")
             if name in self._commands:
-                raise ValueError(f"duplicate command name: {name}")
+                raise ValueError(f"command name or alias {name!r} is already registered")
         for name in (cmd.name, *cmd.aliases):
             self._commands[name] = cmd
         self._order.append(cmd)
