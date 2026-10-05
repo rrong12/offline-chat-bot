@@ -24,6 +24,7 @@ from bot.help import register_help
 from bot.http import HttpClient
 from bot.outbox import Outbox
 from bot.permissions import is_controller
+from bot.rng import register_rng
 from bot.stats import StatsStore
 from bot.stats_commands import register_stats
 from bot.text import format_duration
@@ -82,7 +83,7 @@ class BotCore:
             is_busy=self.is_busy,
         )
         self.games.register(self.registry)
-        register_stats(self.registry, stats=stats, game_names=list(games))
+        register_stats(self.registry, stats=stats, game_names=[*games, "rng"])
         register_fun(
             self.registry,
             assets=assets,
@@ -92,6 +93,7 @@ class BotCore:
             clock=clock,
             lookup_user=connector.lookup_user,
         )
+        register_rng(self.registry, stats=stats, clock=clock, rng=rng, meme_badges=config.rng_meme_badges)
         register_help(self.registry)
         register_admin(self.registry, self)
         self.paused = stats.get_state("paused", "0") == "1"

@@ -25,6 +25,7 @@ bot's outgoing messages are backed up.
 | `?gamestats [game] [username]` | anyone | Wins, games played, points |
 | `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke` | anyone | Quick fun |
 | `?cookie`, `?cookie give <username>` | anyone | Daily fortune cookie (resets 00:00 UTC) |
+| `?rng`, `?rng me\|today\|top\|<username>` | anyone | Your daily roll from 0 to 1,000,000 (resets 00:00 UTC), scored by about 27 badges in four tiers (legendary 100, rare 40, uncommon 15, common 5). Points count on the main leaderboard. `[rng] meme_badges = false` in `config.toml` turns off the 69 and 420 badges |
 | `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check. `?bot off` ends every running game with no points, and while paused the bot ignores everything except `?bot` from a mod |
 | `?bot shutdown` | mods, broadcaster, owners | Stop the bot process. Only someone with access to the machine can start it again |
 | `?stopgame` | mods, broadcaster, owners | End all running games with no points |

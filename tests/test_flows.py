@@ -266,7 +266,7 @@ async def test_help_overview_lists_real_commands_under_500_chars(bot: Bot):
     text = bot.out[-1]
     assert text == (
         "Games: ?scramble ?hangman ?skip | Stats: ?leaderboard ?gamestats | "
-        "Fun: ?8ball ?coinflip ?catfact ?dogfact ?fact ?dadjoke ?cookie · ?help <command> for details"
+        "Fun: ?8ball ?coinflip ?catfact ?dogfact ?fact ?dadjoke ?cookie ?rng · ?help <command> for details"
     )
     for cmd in bot.core.registry.all():
         assert cmd.usage and cmd.description
@@ -493,3 +493,15 @@ async def test_higherlower_streak_then_timeout_keeps_the_points(allbot: Bot):
     assert allbot.out[-1].startswith("⏰ Time's up! ") and allbot.out[-1].endswith("Streak 1 (+1)")
     await allbot.say("bob: ?leaderboard higherlower")
     assert allbot.out[-1] == "🏆 Top 1 higherlower: 1. alice (1)"
+
+
+async def test_rng_roll_counts_on_the_main_leaderboard(bot: Bot):
+    await bot.say("alice: ?rng")  # the seeded RNG's first roll
+    assert bot.out[-1] == "🎲 alice rolled 140,891 · 🏅 Prime (common, 5) · 5 pts"
+    await bot.say("bob: ?gamestats alice")
+    assert bot.out[-1] == "📊 alice: 5 pts, 0 wins, 1 played | rng 0W/1P 5pts"
+    await bot.say("carol: ?leaderboard rng")
+    assert bot.out[-1] == "🏆 Top 1 rng: 1. alice (5)"
+    await bot.wait(6)  # ?leaderboard has a 5 s chat-wide cooldown
+    await bot.say("dave: ?leaderboard")
+    assert bot.out[-1] == "🏆 Top 1 overall: 1. alice (5)"
