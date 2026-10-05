@@ -85,6 +85,11 @@ class Game(ABC):
     @abstractmethod
     def on_timeout(self) -> Outcome: ...
 
+    def banked(self) -> tuple[int, bool]:
+        """Points the player has already earned and keeps if the game ends early (skip, a mod's stop,
+        shutdown, an error), and whether that counts as a win. Most games bank nothing."""
+        return 0, False
+
     @abstractmethod
     def reveal(self) -> str:
         """The answer, for skip and stop messages."""

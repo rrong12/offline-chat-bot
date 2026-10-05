@@ -145,7 +145,9 @@ Reviews of the built games led to these refinements; the plan's execution log ha
   and words from the riddle don't make it a list, but naming other answers, "either or", a negation
   ("not a clock"), a different number, or another letter (for the letter riddles) doesn't win.
 - **Higher or Lower:** a streak of 5 or more counts as a win in `?gamestats`; display names say
-  what's meant when ambiguous ("Venom (the movie)").
+  what's meant when ambiguous ("Venom (the movie)"). A streak's points are kept when the game ends
+  early: `?skip`, `?stopgame`, `?bot off`, shutdown, or an error (Robert, 2026-10-05). Games report
+  such points through `Game.banked()`; the others bank nothing, so skipping them still scores nothing.
 - **Starting games:** a game without options ignores extra words (`?hl lets go`); `?leaderboard hl`
   works.
 

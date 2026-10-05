@@ -6078,3 +6078,7 @@ Content (trivia download, riddles, page views) was generated while prototyping a
   answers nobody types. 2,826 remain. Matching now also accepts question words left out, initials,
   epithets, pairs in either order, plurals and words before the answer. Riddles gained a few answers.
   Higher or Lower dropped two creators and clarified ambiguous names.
+- **After the build (Robert's call):** a Higher or Lower streak's points are kept when the game ends
+  early (`?skip`, `?stopgame`, `?bot off`, shutdown, an error). `Game.banked()` reports points a game
+  has already earned (only Higher or Lower banks any), the manager awards them on every early end,
+  and `?skip` says "You keep N points".

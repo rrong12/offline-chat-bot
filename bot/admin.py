@@ -44,7 +44,8 @@ def register_admin(registry: CommandRegistry, core: BotCore) -> None:
             return
         core.log.write("admin", user_id=ctx.msg.user_id, login=ctx.msg.login, action="stopgame")
         stopped = core.games.stop_all()
-        ctx.reply(f"🛑 Stopped {stopped} game{'s' if stopped != 1 else ''}. No points awarded.")
+        games = f"{stopped} game{'s' if stopped != 1 else ''}"
+        ctx.reply(f"🛑 Stopped {games}. Only streak points already earned are kept.")
 
     registry.add(
         Command(
@@ -63,7 +64,7 @@ def register_admin(registry: CommandRegistry, core: BotCore) -> None:
             "stopgame",
             stopgame,
             "{p}stopgame",
-            "End all running games with no points.",
+            "End all running games. Only Higher or Lower streak points already earned are kept.",
             "Control",
             controller_only=True,
             cooldown=False,

@@ -182,7 +182,7 @@ async def test_stopgame_stops_everyones_games(bot: Bot):
     await bot.say("random: ?stopgame")  # not a mod: ignored
     assert len(bot.core.games.sessions) == 2
     await bot.say("@mod: ?stopgame")
-    assert bot.out[-1] == "🛑 Stopped 2 games. No points awarded."
+    assert bot.out[-1] == "🛑 Stopped 2 games. Only streak points already earned are kept."
     assert bot.core.games.sessions == {}
 
 
@@ -518,3 +518,17 @@ async def test_rng_subcommands_through_the_bot(bot: Bot):
     await bot.wait(11)  # alice's per-user cooldown on ?rng
     await bot.say("alice: ?rng me")
     assert bot.out[-1] == "🎲 alice: today 140,891 (5 pts) · best ever 140,891 (5 pts)"
+
+
+async def test_a_higherlower_streak_is_kept_when_skipped_or_stopped(allbot: Bot):
+    for player in ("alice", "bob"):
+        await allbot.say(f"{player}: ?hl")
+        game = allbot.core.games.sessions[f"console-{player}"].game
+        guess = "higher" if game.next["views"] >= game.current["views"] else "lower"
+        await allbot.say(f"{player}: ?g {guess}")
+    await allbot.say("alice: ?skip")
+    assert allbot.out[-1].endswith(" You keep 1 point.")
+    await allbot.say("@mod: ?stopgame")  # ends bob's game; his streak point is kept too
+    await allbot.wait(6)
+    await allbot.say("carol: ?leaderboard higherlower")
+    assert allbot.out[-1] == "🏆 Top 2 higherlower: 1. alice (1) 2. bob (1)"

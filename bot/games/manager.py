@@ -140,7 +140,7 @@ class GameManager:
                 traceback=traceback.format_exc(),
             )
             if self.sessions.get(session.user_id) is session:
-                self._finish(session, "stopped", ["Game ended due to an error."], {}, set())
+                self._finish(session, "stopped", ["Game ended due to an error."], *self._banked(session))
             return None
 
     # commands
@@ -238,7 +238,10 @@ class GameManager:
         self._seen(session, ctx.msg)
         answer = self._guard(session, f"{session.game.name}.reveal", session.game.reveal)
         if answer is not None:
-            self._finish(session, "skipped", [f"⏭️ Skipped. It was {answer}."], {}, set())
+            awards, winners = self._banked(session)
+            kept = awards.get(session.user_id, 0)
+            note = f" You keep {kept} point{'' if kept == 1 else 's'}." if kept else ""
+            self._finish(session, "skipped", [f"⏭️ Skipped. It was {answer}.{note}"], awards, winners)
 
     async def _game_command(self, ctx: CommandContext) -> None:
         session = self.sessions.get(ctx.msg.user_id)
@@ -271,7 +274,7 @@ class GameManager:
             return elapsed >= limit
         self.log.write("error", where=f"game:{session.game.name}.time_limit", type="ValueError",
                        message=f"time_limit is {limit!r}")
-        self._finish(session, "stopped", ["Game ended due to an error."], {}, set())
+        self._finish(session, "stopped", ["Game ended due to an error."], *self._banked(session))
         return None
 
     def tick(self) -> None:
@@ -293,11 +296,23 @@ class GameManager:
                 self._handle(session, outcome)
 
     def stop_all(self) -> int:
-        """End every running game with no points (?stopgame, ?bot off, shutdown). Returns how many."""
+        """End every running game (?stopgame, ?bot off, shutdown), keeping only points already banked
+        (a Higher or Lower streak). Returns how many."""
         stopped = list(self.sessions.values())
         for session in stopped:
-            self._finish(session, "stopped", [], {}, set())
+            self._finish(session, "stopped", [], *self._banked(session))
         return len(stopped)
+
+    def _banked(self, session: Session) -> tuple[dict[str, int], set[str]]:
+        """The awards and winners for points a game had already banked when it ended early."""
+        try:
+            points, won = session.game.banked()
+        except Exception as exc:  # a broken game keeps nothing, and never stops the others from ending
+            logger.exception("banked points failed in %s", session.game.name)
+            self.log.write("error", where=f"game:{session.game.name}.banked", type=type(exc).__name__, message=str(exc))
+            return {}, set()
+        uid = session.user_id
+        return ({uid: points} if points > 0 else {}), ({uid} if won else set())
 
     # outcomes
 

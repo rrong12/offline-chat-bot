@@ -114,5 +114,8 @@ class HigherLower(Game):
     def on_timeout(self) -> Outcome:
         return self._end(f"⏰ Time's up! {self._result()}. Streak {self.streak} (+{self.streak})", "timeout")
 
+    def banked(self) -> tuple[int, bool]:
+        return self.streak, self.streak >= WIN_STREAK  # a streak is kept if the game is skipped or stopped
+
     def reveal(self) -> str:
         return self._result()

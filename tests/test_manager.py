@@ -589,3 +589,45 @@ async def test_a_broken_content_file_gets_a_reply(tmp_path, clock, assets):
     h = Harness(tmp_path, clock, assets, extra_games={"brokencontent": BrokenContent})
     await h.command("?brokencontent")
     assert h.replies == ["Couldn't start that game."]
+
+
+class Banker(Streak):
+    """Each right answer banks a point the player keeps even if the game ends early."""
+
+    name = "banker"
+
+    def __init__(self, category, rng, assets, *, level=None, recent=()):
+        super().__init__(category, rng, assets, level=level, recent=recent)
+        self.score = 0
+
+    def on_command(self, name, args, msg, now):
+        self.score += 1
+        return Outcome(messages=["right"], restart_timer=True)
+
+    def banked(self):
+        return self.score, self.score >= 2
+
+
+async def test_skipping_keeps_banked_points(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"banker": Banker})
+    await h.command("?banker")
+    await h.command("?g x")
+    await h.command("?skip")
+    assert h.texts()[-1] == "⏭️ Skipped. It was nothing. You keep 1 point."
+    assert [(r.user_id, r.points, r.wins) for r in h.stats.leaderboard("banker", 5)] == [("id-alice", 1, 0)]
+
+
+async def test_stopping_keeps_banked_points_and_wins(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"banker": Banker})
+    await h.command("?banker")
+    await h.command("?g x")
+    await h.command("?g x")
+    assert h.manager.stop_all() == 1
+    assert [(r.user_id, r.points, r.wins) for r in h.stats.leaderboard("banker", 5)] == [("id-alice", 2, 1)]
+
+
+async def test_games_without_banked_points_still_score_nothing_on_skip(h: Harness):
+    await h.command("?scramble animals")
+    await h.command("?skip")
+    assert h.texts()[-1] == "⏭️ Skipped. It was ALLIGATOR."
+    assert h.stats.leaderboard(None, 5) == []

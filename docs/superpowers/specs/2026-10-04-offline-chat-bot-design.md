@@ -192,7 +192,7 @@ threaded reply (`reply_to`). Game messages are threaded under the player's lates
 | `?bot on` | controller | Resume and persist `paused=0`. |
 | `?bot status` | controller | "ON/PAUSED · up 3h12m · games: 4 running · v0.1.0". Works while paused. |
 | `?bot shutdown` | controller | Sends "Shutting down (requested by \<name\>)." at priority, ends all games, logs `admin`/`shutdown` with the user, flushes the outbox (max 3 s), closes the connector, exits with code 0. |
-| `?stopgame` | controller | Ends all running games. Outcome `stopped`, no points. Replies "🛑 Stopped N games. No points awarded." |
+| `?stopgame` | controller | Ends all running games. Outcome `stopped`, no points (Phase 2: a Higher or Lower streak keeps its points). Replies "🛑 Stopped N games. Only streak points already earned are kept." |
 | `?skip` | anyone with a game running | Ends your own game: "⏭️ Skipped. It was ALLIGATOR." Outcome `skipped`, no points. |
 | `?help` / `?commands` | anyone | One message listing the public commands, grouped (Games, Stats, Fun), ending with "?help <command> for details". Built from the registry, so it never drifts. Control commands are left out to keep it short. |
 | `?help <command>` | anyone | The usage line and description for one command, with or without the `?`. Works for control commands too (`?help bot`). Unknown command: "No command named \<x\>. Try ?help." |

@@ -19,16 +19,16 @@ bot's outgoing messages are backed up.
 | `?hangman [category]`, `?hangman categories` | anyone | Your own Hangman; guess with `?g <letter>` or `?g <answer>` |
 | `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`; medium 10/7/4, hard 15/10/6 points). Questions from Open Trivia DB (CC BY-SA 4.0) |
 | `?riddle` | anyone | Your own riddle: `?g <answer>`, 3 guesses, `?hint` for a clue then the letter count (10/7/4 points) |
-| `?higherlower` / `?hl` | anyone | Does the next thing get more monthly Wikipedia views? `?g higher` or `?g lower`; 1 point per right answer, one miss ends the streak |
-| `?skip` | anyone | End your current game (no points) |
+| `?higherlower` / `?hl` | anyone | Does the next thing get more monthly Wikipedia views? `?g higher` or `?g lower`; 1 point per right answer, one miss ends the streak. Your streak's points are kept even if you `?skip` or a mod stops games |
+| `?skip` | anyone | End your current game (no points, except a Higher or Lower streak you've already built) |
 | `?leaderboard [game] [1-10]` | anyone | Top players by points |
 | `?gamestats [game] [username]` | anyone | Wins, games played, points |
 | `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke` | anyone | Quick fun |
 | `?cookie`, `?cookie give <username>` | anyone | Daily fortune cookie (resets 00:00 UTC) |
 | `?rng`, `?rng me\|today\|top\|<username>` | anyone | Your daily roll from 0 to 1,000,000 (resets 00:00 UTC), scored by about 27 badges in four tiers (legendary 100, rare 40, uncommon 15, common 5). Points count on the main leaderboard. `[rng] meme_badges = false` in `config.toml` turns off the 69 and 420 badges |
-| `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check. `?bot off` ends every running game with no points, and while paused the bot ignores everything except `?bot` from a mod |
+| `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check. `?bot off` ends every running game (only Higher or Lower streaks keep their points), and while paused the bot ignores everything except `?bot` from a mod |
 | `?bot shutdown` | mods, broadcaster, owners | Stop the bot process. Only someone with access to the machine can start it again |
-| `?stopgame` | mods, broadcaster, owners | End all running games with no points |
+| `?stopgame` | mods, broadcaster, owners | End all running games (only Higher or Lower streaks keep their points) |
 
 Scramble and Hangman categories: animals, countries, food, games, general, streamers. Trivia
 categories: animals, anime, games, general, geography, history, movies, music, science, sports, tv.

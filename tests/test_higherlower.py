@@ -106,3 +106,12 @@ def test_close_numbers_are_never_paired(tmp_path):
     for seed in range(30):
         game = HigherLower(None, random.Random(seed), Assets(root))
         assert {game.current["name"], game.next["name"]} != {"A", "B"}  # only 10% apart
+
+
+def test_the_streak_is_banked(assets):
+    game = make(assets)
+    assert game.banked() == (0, False)
+    g(game, right(game))
+    assert game.banked() == (1, False)
+    game.streak = 5
+    assert game.banked() == (5, True)  # a streak of 5+ also counts as a win
