@@ -36,8 +36,21 @@ def test_migrations_create_schema_and_are_idempotent(tmp_path: Path):
     path = tmp_path / "bot.db"
     StatsStore(path).close()
     again = StatsStore(path)
-    assert again.schema_version() == 1
+    assert again.schema_version() == 2
     again.close()
+
+
+def test_version_1_database_upgrades_and_keeps_its_data(tmp_path: Path, monkeypatch):
+    path = tmp_path / "bot.db"
+    monkeypatch.setattr(stats_module, "MIGRATIONS", stats_module.MIGRATIONS[:1])
+    old = StatsStore(path)
+    old.set_state("paused", "1")
+    old.close()
+    monkeypatch.undo()
+    s = StatsStore(path)
+    assert s.schema_version() == 2 and s.get_state("paused") == "1"
+    assert s.top_rng_rolls(None, 5) == []
+    s.close()
 
 
 def test_failed_migration_rolls_back_completely(tmp_path: Path, monkeypatch):
@@ -160,3 +173,33 @@ def test_file_database_uses_wal_with_normal_sync(tmp_path: Path):
     s = StatsStore(tmp_path / "bot.db")
     assert s._conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert s._conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
+
+
+def _player(uid="u1", points=45):
+    from bot.stats import PlayerResult
+
+    return PlayerResult(uid, uid, uid.upper(), points, False)
+
+
+def test_rng_roll_once_per_day_and_counts_on_the_leaderboard(store: StatsStore):
+    assert store.record_rng_roll(_player(points=45), "2026-10-05", 123321, ["Palindrome", "Prime"], T0)
+    assert not store.record_rng_roll(_player(points=100), "2026-10-05", 0, ["Zero"], T0)  # already rolled
+    roll = store.rng_roll("u1", "2026-10-05")
+    assert (roll.number, roll.score, roll.badges, roll.display_name) == (123321, 45, ["Palindrome", "Prime"], "U1")
+    assert store.rng_roll("u1", "2026-10-06") is None
+    board = store.leaderboard("rng", 5)
+    assert [(r.user_id, r.points, r.wins) for r in board] == [("u1", 45, 0)]
+    assert store.leaderboard(None, 5)[0].points == 45
+    assert [(g.game, g.played) for g in store.user_stats("u1")] == [("rng", 1)]
+
+
+def test_rng_top_and_best(store: StatsStore):
+    store.record_rng_roll(_player("u1", 5), "2026-10-05", 7, ["Prime"], T0)
+    store.record_rng_roll(_player("u2", 40), "2026-10-05", 524288, ["Power of two"], T0 + timedelta(minutes=1))
+    store.record_rng_roll(_player("u3", 40), "2026-10-05", 1337, ["1337"], T0 + timedelta(minutes=2))
+    store.record_rng_roll(_player("u1", 155), "2026-10-06", 0, ["Zero"], T0 + timedelta(days=1))
+    today = store.top_rng_rolls("2026-10-05", 5)
+    assert [(r.user_id, r.score) for r in today] == [("u2", 40), ("u3", 40), ("u1", 5)]  # tie: earlier first
+    assert [r.user_id for r in store.top_rng_rolls(None, 2)] == ["u1", "u2"]
+    assert store.best_rng_roll("u1").number == 0
+    assert store.best_rng_roll("nobody") is None

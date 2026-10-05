@@ -1,7 +1,8 @@
-"""SQLite storage: users, game rounds and players, daily uses, and persistent bot state."""
+"""SQLite storage: users, game rounds and players, daily uses, ?rng rolls, and persistent bot state."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -49,6 +50,20 @@ MIGRATIONS: list[str] = [
     CREATE INDEX round_players_user ON round_players(user_id, points, won);
     CREATE INDEX rounds_game ON rounds(game);
     """,
+    """
+    -- ?rng: one roll per user per UTC day. Its points also go into rounds as game 'rng'.
+    CREATE TABLE rng_rolls (
+      user_id     TEXT NOT NULL REFERENCES users(user_id),
+      utc_date    TEXT NOT NULL,
+      number      INTEGER NOT NULL,
+      score       INTEGER NOT NULL,
+      badges_json TEXT NOT NULL,
+      rolled_at   TEXT NOT NULL,
+      PRIMARY KEY (user_id, utc_date)
+    );
+    CREATE INDEX rng_rolls_day ON rng_rolls(utc_date, score);
+    CREATE INDEX rng_rolls_score ON rng_rolls(score);
+    """,
 ]
 
 
@@ -90,6 +105,16 @@ class LeaderRow:
     display_name: str
     points: int
     wins: int
+
+
+@dataclass(frozen=True)
+class RngRoll:
+    user_id: str
+    display_name: str
+    utc_date: str
+    number: int
+    score: int
+    badges: list[str]
 
 
 @dataclass(frozen=True)
@@ -246,6 +271,65 @@ class StatsStore:
             (user_id, feature, utc_date),
         ).fetchone()
         return row["result"] if row else None
+
+    # ?rng
+
+    def record_rng_roll(
+        self, player: PlayerResult, utc_date: str, number: int, badges: list[str], now: datetime
+    ) -> bool:
+        """Store today's roll and its points (as an 'rng' round) together. False if already rolled today."""
+        with self._conn:
+            self._upsert_user(player.user_id, player.login, player.display_name, now)
+            cur = self._conn.execute(
+                """INSERT INTO rng_rolls (user_id, utc_date, number, score, badges_json, rolled_at)
+                   VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, utc_date) DO NOTHING""",
+                (player.user_id, utc_date, number, player.points, json.dumps(badges), _iso(now)),
+            )
+            if cur.rowcount != 1:
+                return False
+            round_cur = self._conn.execute(
+                """INSERT INTO rounds (game, category, started_by, started_at, ended_at, outcome)
+                   VALUES ('rng', NULL, ?, ?, ?, 'won')""",
+                (player.user_id, _iso(now), _iso(now)),
+            )
+            self._conn.execute(
+                "INSERT INTO round_players (round_id, user_id, points, won) VALUES (?, ?, ?, 0)",
+                (int(round_cur.lastrowid), player.user_id, player.points),
+            )
+        return True
+
+    _ROLL_COLUMNS = "r.user_id, u.display_name, r.utc_date, r.number, r.score, r.badges_json"
+
+    @staticmethod
+    def _roll(row: sqlite3.Row) -> RngRoll:
+        return RngRoll(row["user_id"], row["display_name"], row["utc_date"], row["number"], row["score"],
+                       json.loads(row["badges_json"]))
+
+    def rng_roll(self, user_id: str, utc_date: str) -> RngRoll | None:
+        row = self._conn.execute(
+            f"""SELECT {self._ROLL_COLUMNS} FROM rng_rolls r JOIN users u ON u.user_id = r.user_id
+                WHERE r.user_id = ? AND r.utc_date = ?""",
+            (user_id, utc_date),
+        ).fetchone()
+        return self._roll(row) if row else None
+
+    def best_rng_roll(self, user_id: str) -> RngRoll | None:
+        row = self._conn.execute(
+            f"""SELECT {self._ROLL_COLUMNS} FROM rng_rolls r JOIN users u ON u.user_id = r.user_id
+                WHERE r.user_id = ? ORDER BY r.score DESC, r.rolled_at ASC LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+        return self._roll(row) if row else None
+
+    def top_rng_rolls(self, utc_date: str | None, limit: int) -> list[RngRoll]:
+        """Best single rolls by score, for one day or all time; ties go to whoever rolled first."""
+        where = "WHERE r.utc_date = :day" if utc_date is not None else ""
+        rows = self._conn.execute(
+            f"""SELECT {self._ROLL_COLUMNS} FROM rng_rolls r JOIN users u ON u.user_id = r.user_id
+                {where} ORDER BY r.score DESC, r.rolled_at ASC LIMIT :limit""",
+            {"day": utc_date, "limit": max(0, limit)},
+        ).fetchall()
+        return [self._roll(r) for r in rows]
 
     # bot state
 
