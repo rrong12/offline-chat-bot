@@ -87,3 +87,17 @@ def test_nonsense_gets_one_reminder(assets):
 def test_reveal(assets):
     game = make(assets)
     assert game.reveal().startswith(f"{game.next['name']}: ")
+
+
+def test_close_numbers_are_never_paired(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir()
+    terms = [{"name": "A", "views": 100_000}, {"name": "B", "views": 110_000}, {"name": "C", "views": 200_000}]
+    (root / "higherlower.json").write_text(json.dumps({"terms": terms}), encoding="utf-8")
+    for seed in range(30):
+        game = HigherLower(None, random.Random(seed), Assets(root))
+        assert {game.current["name"], game.next["name"]} != {"A", "B"}  # only 10% apart

@@ -2584,6 +2584,20 @@ def test_nonsense_gets_one_reminder(assets):
 def test_reveal(assets):
     game = make(assets)
     assert game.reveal().startswith(f"{game.next['name']}: ")
+
+
+def test_close_numbers_are_never_paired(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir()
+    terms = [{"name": "A", "views": 100_000}, {"name": "B", "views": 110_000}, {"name": "C", "views": 200_000}]
+    (root / "higherlower.json").write_text(json.dumps({"terms": terms}), encoding="utf-8")
+    for seed in range(30):
+        game = HigherLower(None, random.Random(seed), Assets(root))
+        assert {game.current["name"], game.next["name"]} != {"A", "B"}  # only 10% apart
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2716,7 +2730,7 @@ class HigherLower(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_higherlower.py -q`, then `.venv/bin/pytest -q`.
-Expected: `9 passed`, then the whole suite passes (365 passed).
+Expected: `10 passed`, then the whole suite passes (366 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -3712,7 +3726,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - [ ] **Step 9: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py -q`, then `.venv/bin/pytest -q`.
-Expected: `71 passed`, then the whole suite passes (370 passed).
+Expected: `71 passed`, then the whole suite passes (371 passed).
 
 - [ ] **Step 10: Commit**
 
@@ -3724,7 +3738,7 @@ git commit -m "Phase 2: register Trivia, Riddle and Higher or Lower; flows and R
 ### Task 7: Trivia question bank
 
 **Files:**
-- Create: `scripts/fetch_trivia.py`, `bot/content/TRIVIA_CREDITS.md`
+- Replace: `scripts/fetch_trivia.py`, `bot/content/TRIVIA_CREDITS.md`
 - Generate: `bot/content/trivia.json`
 
 `scripts/fetch_trivia.py` downloads every verified multiple-choice question for the 11 categories (spec §3's mapping) from Open Trivia DB, one request every 5.5 s with a session token so nothing repeats. With a token the API may answer "fewer left than you asked for" with either response code 1 or 4, so both halve the batch size. It drops questions with blocked words, questions over 300 characters, easy questions too long for one message, and medium/hard questions that can't be typed (answer over 3 words or 25 characters, or the question mentions "of these", "of the following", "all of the above", "none of the" or a capitalised NOT). The credits file covers CC BY-SA 4.0.
@@ -3882,7 +3896,7 @@ Expected: it takes about 25 minutes; the last line reads `wrote N questions` wit
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 370 passed.
+Expected: 371 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3894,7 +3908,7 @@ git commit -m "Phase 2: trivia question bank from Open Trivia DB"
 ### Task 8: Riddles
 
 **Files:**
-- Create: `bot/content/riddles.json`
+- Replace: `bot/content/riddles.json`
 
 About 200 classic, clean riddles, written for the bot by one agent and checked by a second (answers right, clues helpful but not giving the answer away, no generic alternative answers that a wrong guess could hit, nothing inappropriate). Task 10's content test enforces the mechanical rules.
 
@@ -4122,7 +4136,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
 - [ ] **Step 2: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 370 passed.
+Expected: 371 passed.
 
 - [ ] **Step 3: Commit**
 
@@ -4134,7 +4148,7 @@ git commit -m "Phase 2: riddles"
 ### Task 9: Higher or Lower terms and page views
 
 **Files:**
-- Create: `scripts/higherlower_terms.txt`, `scripts/fetch_pageviews.py`
+- Replace: `scripts/higherlower_terms.txt`, `scripts/fetch_pageviews.py`
 - Generate: `bot/content/higherlower.json`
 
 `scripts/higherlower_terms.txt` lists about 440 well-known, family-friendly terms (display name, exact English Wikipedia title, category). `scripts/fetch_pageviews.py` resolves each title through redirects, then sums last month's user page views from the Wikimedia REST API. It sends a generic User-Agent with the repo URL (no personal email), waits 1 s between requests, and backs off on HTTP 429. Missing pages are reported and skipped.
@@ -4732,7 +4746,7 @@ Expected: it takes a few minutes; it prints `wrote N terms for <month>` and any 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 370 passed.
+Expected: 371 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4941,7 +4955,7 @@ def test_higherlower_terms():
 - [ ] **Step 2: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `23 passed`, then the whole suite passes (374 passed).
+Expected: `23 passed`, then the whole suite passes (375 passed).
 
 - [ ] **Step 3: Commit**
 
