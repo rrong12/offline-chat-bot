@@ -231,6 +231,13 @@ async def test_send_maps_http_errors_to_a_drop(tmp_path, clock):
     assert (result.sent, result.drop_code) == (False, "http_403")
 
 
+def test_auth_accepts_a_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    twitch._check_port_free(port)  # free again after the with-block: must not raise
+
+
 def test_auth_refuses_a_busy_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("localhost", 0))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 import os
@@ -150,8 +151,12 @@ class TwitchConnector:
     async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
         self._on_message, self._on_ready = on_message, on_ready
         self._client = _Client(self)
-        async with self._client:
-            await self._client.start(with_adapter=False)
+        try:
+            async with self._client:
+                await self._client.start(with_adapter=False)
+        finally:
+            if self._watchdog is not None:
+                self._watchdog.cancel()
         if self._fatal is not None:
             raise self._fatal
         if not self._closing:  # nobody asked to stop: treat it as a crash so systemd restarts us
@@ -256,11 +261,18 @@ class TwitchConnector:
 
 
 def _check_port_free(port: int) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
         try:
-            sock.bind(("localhost", port))
-        except OSError:
-            raise ConfigError(f"port {port} is in use; close whatever is using it and run auth again") from None
+            sock = socket.socket(family, socket.SOCK_STREAM)
+        except OSError:  # this address family isn't available here
+            continue
+        with sock:
+            try:
+                sock.bind((host, port))
+            except OSError as exc:
+                if family == socket.AF_INET6 and exc.errno == errno.EADDRNOTAVAIL:  # no IPv6 loopback here
+                    continue
+                raise ConfigError(f"port {port} is in use; close whatever is using it and run auth again") from None
 
 
 async def authorize(config: Config) -> UserRef:
