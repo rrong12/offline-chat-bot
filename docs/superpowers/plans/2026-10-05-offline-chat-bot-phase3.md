@@ -357,7 +357,7 @@ meme_badges = true          # ?rng's 69 and 420 badges; false turns them off
 - [ ] **Step 5: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_config.py -q`, then `.venv/bin/pytest -q`.
-Expected: `26 passed`, then the whole suite passes (422 passed).
+Expected: `26 passed`, then the whole suite passes (454 passed).
 
 - [ ] **Step 6: Commit**
 
@@ -371,7 +371,7 @@ git commit -m "Phase 3: [rng] meme_badges setting"
 **Files:**
 - Replace: `tests/test_stats.py`, `bot/stats.py`
 
-Spec §3. Migration 2 adds `rng_rolls(user_id, utc_date, number, score, badges_json, rolled_at)` with primary key `(user_id, utc_date)`, so a second roll the same day can't be stored. `record_rng_roll` writes the roll and an `rng` round (outcome `won`, no win counted, points = score) in one transaction, which is how rng points reach `?leaderboard` and `?gamestats`. Ties in the top lists go to whoever rolled first (`rolled_at`). An existing version-1 database upgrades in place.
+Spec §3. Migration 2 adds `rng_rolls(user_id, utc_date, number, score, badges_json, rolled_at)` with primary key `(user_id, utc_date)`, so a second roll the same day can't be stored. `record_rng_roll` writes the roll and an `rng` round (outcome `won`, no win counted, points = score) in one transaction, which is how rng points reach `?leaderboard` and `?gamestats`; a test forces the round insert to fail and checks the roll was rolled back with it. Ties in the top lists go to whoever rolled first (`rolled_at`, a column the spec's table didn't list). An existing version-1 database upgrades in place.
 
 - [ ] **Step 1: Write `tests/test_stats.py`**
 
@@ -581,6 +581,15 @@ def test_rng_top_and_best(store: StatsStore):
     assert [r.user_id for r in store.top_rng_rolls(None, 2)] == ["u1", "u2"]
     assert store.best_rng_roll("u1").number == 0
     assert store.best_rng_roll("nobody") is None
+
+
+def test_rng_roll_and_its_round_are_written_together(store: StatsStore):
+    store._conn.execute("CREATE TRIGGER fail BEFORE INSERT ON rounds BEGIN SELECT RAISE(ABORT, 'boom'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.record_rng_roll(_player(points=45), "2026-10-05", 123321, ["Palindrome"], T0)
+    store._conn.execute("DROP TRIGGER fail")
+    assert store.rng_roll("u1", "2026-10-05") is None  # the roll was rolled back with its round
+    assert store.record_rng_roll(_player(points=45), "2026-10-05", 123321, ["Palindrome"], T0)
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -942,7 +951,7 @@ class StatsStore:
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_stats.py -q`, then `.venv/bin/pytest -q`.
-Expected: `19 passed`, then the whole suite passes (425 passed).
+Expected: `20 passed`, then the whole suite passes (458 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -954,13 +963,14 @@ git commit -m "Phase 3: rng_rolls table and roll storage"
 ### Task 3: Badges and the ?rng command
 
 **Files:**
-- Create: `tests/test_rng.py`, `bot/rng.py`
+- Replace: `tests/test_rng.py`, `bot/rng.py`
 
-Spec §1-2, with the tiers set by real rarity. The test counts every badge over all 1,000,001 numbers (about 4 s) and checks that legendary badges match at most 10 numbers, rare at most 1,000, uncommon at most 25,000, and that each tier is strictly rarer than the next. Measured, a few badges moved from the spec's draft lists: Round hundred-thousand (9 numbers) is legendary, Round ten-thousand (90), Palindrome and Perfect square (1,000 each) are rare, and Ends in 00 (9,900) is uncommon. Numbers are checked as 6-digit strings with leading zeros; 1,000,000 is the only 7-digit roll and earns Max.
+Spec §1-2, with the tiers set by real rarity. The test counts every badge over all 1,000,001 numbers (about 4 s) and pins each badge's exact count and tier, and checks each tier is strictly rarer than the next. Measured, a few badges moved from the spec's draft lists: Round hundred-thousand (9 numbers) is legendary; Round ten-thousand (90), Palindrome and Perfect square (1,000 each) are rare; Ends in 00 (9,900) is uncommon; Contains 69 and Contains 67 (49,401 each) are common. "Palindrome (5 digits)" is called "Five-digit palindrome". Numbers are scored and shown as 6 digits with leading zeros ("rolled 001,337"), so the zeros that earn a badge are visible; 1,000,000 is the only 7-digit roll and earns Max.
 
 - `?rng`: today's roll, or today's roll again plus the time until 00:00 UTC.
 - `?rng me` / `?rng <user>`: today's roll and best ever; a name that isn't found is never echoed.
-- `?rng today` / `?rng top`: the top 5 single rolls today or ever.
+- `?rng today` / `?rng top`: the top 5 single rolls today or ever. Everyone gets the same reply, so each is limited to once per 5 s chat-wide.
+- `?rng help` lists the forms. The time is read once per command, so a roll at midnight can't be checked on one day and stored on the next.
 - It's a Fun-group command with only the per-user cooldown, so the busy brake applies.
 
 - [ ] **Step 1: Write `tests/test_rng.py`**
@@ -972,9 +982,41 @@ import pytest
 
 from bot.clock import FakeClock
 from bot.commands import CommandContext, CommandRegistry
-from bot.rng import BADGES, MAX_ROLL, TIER_POINTS, badges_for, register_rng
+from bot.rng import BADGES, MAX_ROLL, badges_for, register_rng, show
 from bot.stats import StatsStore
 from tests.helpers import make_msg
+
+# Every badge's tier and exact count over all 1,000,001 numbers (measured; the tiers follow the counts).
+EXPECTED = {
+    "Zero": ("legendary", 1),
+    "Max": ("legendary", 1),
+    "Six of a kind": ("legendary", 9),
+    "Straight": ("legendary", 10),
+    "Round hundred-thousand": ("legendary", 9),
+    "Nice nice nice": ("legendary", 1),
+    "Blaze it": ("legendary", 1),
+    "Power of two": ("rare", 20),
+    "Fibonacci": ("rare", 29),
+    "Round ten-thousand": ("rare", 90),
+    "Perfect cube": ("rare", 100),
+    "Five in a row": ("rare", 180),
+    "1337": ("rare", 300),
+    "Palindrome": ("rare", 1_000),
+    "Perfect square": ("rare", 1_000),
+    "Four in a row": ("uncommon", 2_610),
+    "Contains 420": ("uncommon", 3_999),
+    "Ends in 00": ("uncommon", 9_900),
+    "All even digits": ("uncommon", 15_625),
+    "All odd digits": ("uncommon", 15_625),
+    "Five-digit palindrome": ("uncommon", 19_890),
+    "Triple": ("common", 34_110),
+    "Doubles": ("common", 47_160),
+    "Lucky sum": ("common", 48_686),
+    "Contains 69": ("common", 49_401),
+    "Contains 67": ("common", 49_401),
+    "Prime": ("common", 78_498),
+}
+MEME = {"Nice nice nice", "Blaze it", "Contains 420", "Contains 69"}
 
 
 def names(number: int, meme: bool = True) -> set[str]:
@@ -984,26 +1026,38 @@ def names(number: int, meme: bool = True) -> set[str]:
 @pytest.mark.parametrize("number, expected", [
     (0, {"Zero", "Palindrome", "All even digits"}),
     (MAX_ROLL, {"Max", "Perfect cube", "Perfect square"}),
-    (777_777, {"Six of a kind", "Palindrome", "All odd digits"}),
-    (123_456, {"Straight", "Lucky sum"}),  # 1+2+3+4+5+6 = 21
-    (300_000, {"Round hundred-thousand", "Five in a row", "Near palindrome"}),
-    (524_288, {"Power of two"}),
+    (1, {"Power of two", "Fibonacci", "Perfect cube", "Perfect square", "Five in a row", "Five-digit palindrome"}),
+    (7, {"Five in a row", "Five-digit palindrome", "Lucky sum", "Prime"}),
     (13, {"Fibonacci", "Prime", "Four in a row"}),  # 000013
     (1_337, {"1337", "Doubles"}),  # 001337: two different repeated pairs
+    (1_039, {"Lucky sum", "Prime"}),
+    (9_900, {"Palindrome", "Ends in 00", "Doubles"}),
+    (10_000, {"Round ten-thousand", "Perfect square", "Four in a row"}),
+    (12_345, {"Straight"}),  # 012345
     (50_000, {"Round ten-thousand", "Four in a row"}),
+    (106_700, {"Ends in 00", "Contains 67"}),
     (111_222, {"Triple", "Doubles"}),
     (123_321, {"Palindrome"}),  # one repeated pair is not Doubles
+    (123_456, {"Straight", "Lucky sum"}),  # 1+2+3+4+5+6 = 21
+    (300_000, {"Round hundred-thousand", "Five in a row", "Five-digit palindrome"}),
     (482_193, set()),
+    (524_288, {"Power of two"}),
+    (777_777, {"Six of a kind", "Palindrome", "All odd digits"}),
+    (864_202, {"All even digits", "Contains 420"}),
+    (975_319, {"All odd digits"}),
+    (987_654, {"Straight"}),
+    (999_983, {"Four in a row", "Prime"}),
 ])
 def test_badge_rules(number, expected):
     assert names(number) == expected
 
 
 def test_meme_badges_can_be_turned_off():
-    assert names(696_969) == {"Nice nice nice", "Contains 69", "Near palindrome"}
-    assert names(696_969, meme=False) == {"Near palindrome"}
+    assert names(696_969) == {"Nice nice nice", "Contains 69", "Five-digit palindrome"}
+    assert names(696_969, meme=False) == {"Five-digit palindrome"}
     assert names(420_420) == {"Blaze it", "Contains 420", "All even digits"}
     assert names(420_420, meme=False) == {"All even digits"}
+    assert {b.name for b in BADGES if b.meme} == MEME
 
 
 def test_badges_are_listed_highest_tier_first():
@@ -1011,21 +1065,20 @@ def test_badges_are_listed_highest_tier_first():
     assert points == sorted(points, reverse=True) == [100, 40, 15]
 
 
-def test_tiers_match_real_rarity_over_every_number():
-    counts = Counter()
-    for n in range(MAX_ROLL + 1):
-        digits = f"{n:06d}"
-        for b in BADGES:
-            if b.test(n, digits):
-                counts[b.name] += 1
-    by_tier = {tier: [counts[b.name] for b in BADGES if b.tier == tier] for tier in TIER_POINTS}
-    assert all(c >= 1 for c in counts.values()) and len(counts) == len(BADGES)  # every badge can happen
-    assert max(by_tier["legendary"]) <= 10  # about 1 in 100,000 or rarer
-    assert max(by_tier["rare"]) <= 1_000  # 1 in 1,000 or rarer
-    assert max(by_tier["uncommon"]) <= 25_000  # up to about 1 in 40
+def test_every_badge_has_its_measured_count_and_tier():
+    counts = Counter(b.name for n in range(MAX_ROLL + 1) for b in badges_for(n))
+    assert {b.name: (b.tier, counts[b.name]) for b in BADGES} == EXPECTED
+    by_tier = {}
+    for tier, count in EXPECTED.values():
+        by_tier.setdefault(tier, []).append(count)
+    # each tier is strictly rarer than the next
     assert max(by_tier["legendary"]) < min(by_tier["rare"])
     assert max(by_tier["rare"]) < min(by_tier["uncommon"])
     assert max(by_tier["uncommon"]) < min(by_tier["common"])
+
+
+def test_rolls_show_six_digits():
+    assert (show(1_337), show(13), show(140_891), show(MAX_ROLL)) == ("001,337", "000,013", "140,891", "1,000,000")
 
 
 class FixedRng:
@@ -1044,49 +1097,70 @@ class Rng:
         register_rng(self.registry, stats=self.stats, clock=self.clock, rng=FixedRng(*numbers), meme_badges=meme)
         self.replies: list[str] = []
 
-    async def run(self, text: str, login: str = "alice") -> str:
+    async def run(self, text: str, login: str = "alice") -> str | None:
         name, _, args = text.removeprefix("?").partition(" ")
+        before = len(self.replies)
         ctx = CommandContext(make_msg(text, login), name, args, "?", lambda t, **kw: self.replies.append(t), None)
         await self.registry.get(name).handler(ctx)
-        return self.replies[-1]
+        return self.replies[-1] if len(self.replies) > before else None
 
 
 async def test_daily_roll_then_repeat_then_next_day():
     r = Rng(1_337, 482_193)
-    assert await r.run("?rng") == "🎲 alice rolled 1,337 · 🏅 1337 (rare, 40) · 🏅 Doubles (common, 5) · 45 pts"
-    assert await r.run("?rng") == "🎲 You already rolled 1,337 (45 pts) today. Next roll in 12h 0m (00:00 UTC)."
+    assert await r.run("?rng") == "🎲 alice rolled 001,337 · 🏅 1337 (rare, 40) · 🏅 Doubles (common, 5) · 45 pts"
+    assert await r.run("?rng") == "🎲 You already rolled 001,337 (45 pts) today. Next roll in 12h 0m (00:00 UTC)."
     r.clock.advance(12 * 3600)
     assert await r.run("?rng") == "🎲 alice rolled 482,193 · no badges this time"
     assert [(row.user_id, row.points) for row in r.stats.leaderboard("rng", 5)] == [("id-alice", 45)]
+
+
+async def test_a_roll_stored_by_a_racing_message_is_shown(monkeypatch):
+    from bot.stats import PlayerResult
+
+    r = Rng(482_193)
+    real = r.stats.record_rng_roll
+
+    def racing(player, day, number, badges, now):
+        real(PlayerResult("id-alice", "alice", "alice", 45, False), day, 1_337, ["1337", "Doubles"], now)
+        return real(player, day, number, badges, now)  # the other message got there first: refused
+
+    monkeypatch.setattr(r.stats, "record_rng_roll", racing)
+    assert await r.run("?rng") == "🎲 You already rolled 001,337 (45 pts) today. Next roll in 12h 0m (00:00 UTC)."
 
 
 async def test_me_other_user_and_unknown_user():
     r = Rng(1_337)
     assert await r.run("?rng me") == "You haven't rolled yet. Try ?rng."
     await r.run("?rng", "bob")
-    assert await r.run("?rng me", "bob") == "🎲 bob: today 1,337 (45 pts) · best ever 1,337 (45 pts)"
-    assert await r.run("?rng @Bob") == "🎲 bob: today 1,337 (45 pts) · best ever 1,337 (45 pts)"
+    assert await r.run("?rng me", "bob") == "🎲 bob: today 001,337 (45 pts) · best ever 001,337 (45 pts)"
+    assert await r.run("?rng @Bob") == "🎲 bob: today 001,337 (45 pts) · best ever 001,337 (45 pts)"
     r.clock.advance(24 * 3600)
-    assert await r.run("?rng bob") == "🎲 bob: no roll today yet · best ever 1,337 (45 pts)"
+    assert await r.run("?rng bob") == "🎲 bob: no roll today yet · best ever 001,337 (45 pts)"
     assert await r.run("?rng some_troll_name") == "No rolls for that user yet."  # never echoed
+    r.stats.touch_user("id-carol", "carol", "carol", r.clock.now())  # chatted, never rolled
+    assert await r.run("?rng carol") == "No rolls for that user yet."
+    assert await r.run("?rng help") == "Try ?rng, ?rng me, ?rng today, ?rng top or ?rng <username>."
 
 
-async def test_today_and_top():
+async def test_today_and_top_with_a_chat_wide_limit():
     r = Rng(13, 0, 1_337)
     assert await r.run("?rng today") == "No rolls today."
     assert await r.run("?rng top") == "No rolls yet."
     await r.run("?rng", "alice")
     await r.run("?rng", "bob")
     await r.run("?rng", "carol")
-    assert await r.run("?rng today") == "🎲 Today's best rolls: 1. bob 0 (155) 2. alice 13 (60) 3. carol 1,337 (45)"
+    assert await r.run("?rng today", "dave") is None  # the same reply went out less than 5 s ago
+    r.clock.advance(5)
+    expected = "🎲 Today's best rolls: 1. bob 000,000 (155) 2. alice 000,013 (60) 3. carol 001,337 (45)"
+    assert await r.run("?rng today", "dave") == expected
     r.clock.advance(24 * 3600)
     assert await r.run("?rng today") == "No rolls today."
-    assert (await r.run("?rng top")).startswith("🎲 Best rolls ever: 1. bob 0 (155)")
+    assert (await r.run("?rng top")).startswith("🎲 Best rolls ever: 1. bob 000,000 (155)")
 
 
 async def test_meme_badges_off_changes_the_score():
     r = Rng(696_969, meme=False)
-    assert await r.run("?rng") == "🎲 alice rolled 696,969 · 🏅 Near palindrome (uncommon, 15) · 15 pts"
+    assert await r.run("?rng") == "🎲 alice rolled 696,969 · 🏅 Five-digit palindrome (uncommon, 15) · 15 pts"
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -1100,8 +1174,9 @@ Expected: `ModuleNotFoundError: No module named 'bot.rng'`.
 """?rng: one roll per person per UTC day, from 0 to 1,000,000, scored by badges.
 
 Badge tiers follow each badge's real rarity over all 1,000,001 numbers (see tests/test_rng.py):
-legendary about 1 in 100,000 or rarer, rare 1 in 1,000 or rarer, uncommon up to about 1 in 50,
-common the rest. A roll earns every badge it matches; its score is the sum.
+legendary about 1 in 100,000 or rarer, rare 1 in 1,000 or rarer, uncommon up to about 1 in 40,
+common the rest. Numbers are scored and shown as six digits with leading zeros ("001,337"), so the
+zeros that earn a badge are visible. A roll earns every badge it matches; its score is the sum.
 """
 
 from __future__ import annotations
@@ -1119,6 +1194,7 @@ from bot.text import clean_username, format_duration
 
 MAX_ROLL = 1_000_000
 TOP_LIMIT = 5
+SHARED_COOLDOWN = 5.0  # seconds: ?rng today/top give everyone the same reply, so they're limited chat-wide
 TIER_POINTS = {"legendary": 100, "rare": 40, "uncommon": 15, "common": 5}
 STRAIGHTS = {"012345", "123456", "234567", "345678", "456789", "987654", "876543", "765432", "654321", "543210"}
 
@@ -1193,7 +1269,7 @@ BADGES: tuple[Badge, ...] = (
     Badge("All even digits", "uncommon", lambda n, s: all(ch in "02468" for ch in s)),
     Badge("All odd digits", "uncommon", lambda n, s: all(ch in "13579" for ch in s)),
     Badge(  # five of the six digits read the same backwards
-        "Near palindrome", "uncommon",
+        "Five-digit palindrome", "uncommon",
         lambda n, s: n < MAX_ROLL and s != s[::-1] and (s[:5] == s[4::-1] or s[1:] == s[:0:-1]),
     ),
     Badge("Triple", "common", lambda n, s: _longest_run(s) == 3),
@@ -1212,69 +1288,87 @@ def badges_for(number: int, meme_badges: bool = True) -> list[Badge]:
     return sorted(earned, key=lambda b: -b.points)
 
 
+def show(number: int) -> str:
+    """The roll as players see it: six digits, so leading zeros that earn badges are visible."""
+    if number >= MAX_ROLL:
+        return f"{number:,}"
+    digits = f"{number:06d}"
+    return f"{digits[:3]},{digits[3:]}"
+
+
 def _describe(roll: RngRoll) -> str:
-    return f"{roll.number:,} ({roll.score} pts)"
+    return f"{show(roll.number)} ({roll.score} pts)"
 
 
 def register_rng(
     registry: CommandRegistry, *, stats: StatsStore, clock: Clock, rng: random.Random, meme_badges: bool
 ) -> None:
-    def today() -> str:
-        return clock.now().date().isoformat()
+    last_shared: dict[str, float] = {}  # "today"/"top" -> when that reply last went out (monotonic)
 
-    def until_reset() -> str:
-        now = clock.now()
+    def until_reset(now: datetime) -> str:
         midnight = datetime.combine(now.date() + timedelta(days=1), time(0), tzinfo=timezone.utc)
         return format_duration((midnight - now).total_seconds())
 
-    def roll(ctx: CommandContext) -> None:
+    def roll(ctx: CommandContext, now: datetime, day: str) -> None:
         uid = ctx.msg.user_id
-        existing = stats.rng_roll(uid, today())
+        existing = stats.rng_roll(uid, day)
         if existing is None:
             number = rng.randint(0, MAX_ROLL)
             earned = badges_for(number, meme_badges)
             score = sum(b.points for b in earned)
             player = PlayerResult(uid, ctx.msg.login, ctx.msg.display_name, score, False)
-            if stats.record_rng_roll(player, today(), number, [b.name for b in earned], clock.now()):
+            if stats.record_rng_roll(player, day, number, [b.name for b in earned], now):
                 parts = [f"🏅 {b.name} ({b.tier}, {b.points})" for b in earned]
                 tail = " · ".join([*parts, f"{score} pts"]) if earned else "no badges this time"
-                ctx.reply(f"🎲 {ctx.msg.display_name} rolled {number:,} · {tail}")
+                ctx.reply(f"🎲 {ctx.msg.display_name} rolled {show(number)} · {tail}")
                 return
-            existing = stats.rng_roll(uid, today())  # rolled at the same moment in another message
-        assert existing is not None
-        ctx.reply(f"🎲 You already rolled {_describe(existing)} today. Next roll in {until_reset()} (00:00 UTC).")
+            existing = stats.rng_roll(uid, day)  # rolled at the same moment in another message
+        if existing is not None:
+            wait = until_reset(now)
+            ctx.reply(f"🎲 You already rolled {_describe(existing)} today. Next roll in {wait} (00:00 UTC).")
 
-    def player_summary(user_id: str, name: str) -> str | None:
+    def player_summary(user_id: str, name: str, day: str) -> str | None:
         best = stats.best_rng_roll(user_id)
         if best is None:
             return None
-        current = stats.rng_roll(user_id, today())
+        current = stats.rng_roll(user_id, day)
         today_text = f"today {_describe(current)}" if current else "no roll today yet"
         return f"🎲 {name}: {today_text} · best ever {_describe(best)}"
 
-    def top(day: str | None, label: str) -> str:
+    def top(day: str | None, label: str) -> str | None:
+        key = "today" if day else "top"
+        if clock.mono() - last_shared.get(key, -SHARED_COOLDOWN) < SHARED_COOLDOWN:
+            return None
+        last_shared[key] = clock.mono()
         rows = stats.top_rng_rolls(day, TOP_LIMIT)
         if not rows:
             return f"No rolls {'today' if day else 'yet'}."
-        body = " ".join(f"{i}. {r.display_name} {r.number:,} ({r.score})" for i, r in enumerate(rows, start=1))
+        body = " ".join(f"{i}. {r.display_name} {show(r.number)} ({r.score})" for i, r in enumerate(rows, start=1))
         return f"🎲 {label}: {body}"
 
     async def rng_command(ctx: CommandContext) -> None:
+        now = clock.now()  # read once, so a roll at midnight can't be checked on one day and stored on the next
+        day = now.date().isoformat()
         arg = ctx.argv[0].lower() if ctx.argv else ""
+        reply: str | None
         if not arg:
-            roll(ctx)
-        elif arg == "today":
-            ctx.reply(top(today(), "Today's best rolls"))
-        elif arg == "top":
-            ctx.reply(top(None, "Best rolls ever"))
+            roll(ctx, now, day)
+            return
+        if arg in ("today", "top"):
+            reply = top(day if arg == "today" else None, "Today's best rolls" if arg == "today" else "Best rolls ever")
         elif arg == "me":
-            summary = player_summary(ctx.msg.user_id, ctx.msg.display_name)
-            ctx.reply(summary or f"You haven't rolled yet. Try {ctx.prefix}rng.")
+            reply = player_summary(ctx.msg.user_id, ctx.msg.display_name, day)
+            reply = reply or f"You haven't rolled yet. Try {ctx.prefix}rng."
+        elif arg == "help":
+            reply = f"Try {ctx.prefix}rng, {ctx.prefix}rng me, {ctx.prefix}rng today, {ctx.prefix}rng top or " \
+                    f"{ctx.prefix}rng <username>."
         else:
             login = clean_username(ctx.argv[0])
             user = stats.find_user(login) if login else None
-            summary = player_summary(user.user_id, user.display_name) if user else None
-            ctx.reply(summary or "No rolls for that user yet.")  # never repeat the name the user typed
+            reply = player_summary(user.user_id, user.display_name, day) if user else None
+            reply = reply or "No rolls for that user yet."  # never repeat the name the user typed
+        if reply:
+            ctx.reply(reply)
 
     registry.add(
         Command(
@@ -1292,7 +1386,7 @@ def register_rng(
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_rng.py -q`, then `.venv/bin/pytest -q`.
-Expected: `19 passed`, then the whole suite passes (444 passed).
+Expected: `32 passed`, then the whole suite passes (490 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -1306,7 +1400,7 @@ git commit -m "Phase 3: ?rng badges and commands"
 **Files:**
 - Replace: `tests/test_flows.py`, `bot/core.py`, `README.md`
 
-`BotCore` registers `?rng` with the config's meme setting, and `rng` joins the game names `?leaderboard` and `?gamestats` accept. The flow test rolls with the seeded RNG and checks the main leaderboard; the help overview gains `?rng`.
+`BotCore` registers `?rng` with the config's meme setting, and `rng` joins the game names `?leaderboard` and `?gamestats` accept. The flow tests roll with the seeded RNG, check the main leaderboard, and run `?rng <user>`, `today`, `top` and `me` through the bot; the help overview gains `?rng`.
 
 - [ ] **Step 1: Write `tests/test_flows.py`**
 
@@ -1818,6 +1912,19 @@ async def test_rng_roll_counts_on_the_main_leaderboard(bot: Bot):
     await bot.wait(6)  # ?leaderboard has a 5 s chat-wide cooldown
     await bot.say("dave: ?leaderboard")
     assert bot.out[-1] == "🏆 Top 1 overall: 1. alice (5)"
+
+
+async def test_rng_subcommands_through_the_bot(bot: Bot):
+    await bot.say("alice: ?rng")
+    await bot.say("bob: ?rng alice")
+    assert bot.out[-1] == "🎲 alice: today 140,891 (5 pts) · best ever 140,891 (5 pts)"
+    await bot.say("carol: ?rng today")
+    assert bot.out[-1] == "🎲 Today's best rolls: 1. alice 140,891 (5)"
+    await bot.say("dave: ?rng top")
+    assert bot.out[-1] == "🎲 Best rolls ever: 1. alice 140,891 (5)"
+    await bot.wait(11)  # alice's per-user cooldown on ?rng
+    await bot.say("alice: ?rng me")
+    assert bot.out[-1] == "🎲 alice: today 140,891 (5 pts) · best ever 140,891 (5 pts)"
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2278,7 +2385,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - [ ] **Step 5: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_flows.py -q`, then `.venv/bin/pytest -q`.
-Expected: `40 passed`, then the whole suite passes (445 passed).
+Expected: `41 passed`, then the whole suite passes (492 passed).
 
 - [ ] **Step 6: Commit**
 

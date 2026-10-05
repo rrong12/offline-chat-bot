@@ -392,8 +392,12 @@ def strip_article(text: str) -> str:
     return _LEADING_ARTICLE.sub("", text, count=1)
 
 
+_LIGATURES = str.maketrans({"æ": "ae", "Æ": "AE", "ø": "o", "Ø": "O", "œ": "oe", "Œ": "OE", "ß": "ss", "ł": "l"})
+
+
 def fold_accents(text: str) -> str:
-    """'pokémon' -> 'pokemon', so a missing accent never costs a player their one typo."""
+    """'pokémon' -> 'pokemon', 'solskjær' -> 'solskjaer', so a missing accent never costs a player their typo."""
+    text = text.translate(_LIGATURES)
     return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
 
 
@@ -547,6 +551,7 @@ Framework changes from spec §6, all backwards compatible with Scramble and Hang
 ```python
 import json
 import random
+import re
 
 import pytest
 
@@ -646,7 +651,7 @@ class Quiz(Boom):
 
     def __init__(self, category, rng, assets, *, level=None, recent=()):
         super().__init__(category, rng, assets, level=level, recent=recent)
-        self.item_id = next((i for i in self.ITEMS if i not in recent), None) or min(self.ITEMS, key=recent.index)
+        self.item_id = self.pick_unseen(list(self.ITEMS), lambda item: item)
 
     def start(self) -> str:
         return f"quiz {self.category} {self.level} {self.item_id}"
@@ -984,7 +989,7 @@ async def test_category_and_level_in_either_order(h: Harness):
 
 async def test_level_without_category_picks_a_category(h: Harness):
     await h.command("?quiz easy")
-    assert h.texts()[-1].startswith("quiz ") and h.texts()[-1].endswith(" easy q1")
+    assert re.fullmatch(r"quiz (science|history) easy q[123]", h.texts()[-1])
 
 
 async def test_categories_list_includes_levels(h: Harness):
@@ -1010,7 +1015,7 @@ async def test_recent_questions_are_not_repeated_for_that_player(h: Harness):
         seen.append(h.texts()[-1].split()[-1])
         await h.command("?skip")
         h.clock.advance(10)
-    assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the one seen longest ago comes back
+    assert sorted(seen[:3]) == ["q1", "q2", "q3"] and seen[3] == seen[0]  # all seen: the oldest comes back
 
 
 async def test_each_player_has_their_own_question_history(h: Harness):
@@ -1019,7 +1024,7 @@ async def test_each_player_has_their_own_question_history(h: Harness):
         await h.command("?skip", "alice")
         h.clock.advance(10)
     await h.command("?quiz science", "bob")
-    assert h.texts()[-1].endswith("q1")  # a shared history would have given bob q3
+    assert h.manager.sessions["id-bob"].game.recent == ()  # alice's history isn't bob's
 
 
 async def test_refusal_notices_are_limited_per_game_even_through_an_alias(h: Harness):
@@ -1105,6 +1110,21 @@ async def test_a_restart_timer_from_on_timeout_cannot_extend_a_game(tmp_path, cl
     h.clock.advance(10)
     h.manager.tick()
     assert h.manager.sessions == {}  # force-finished anyway
+
+
+class BadId(Quiz):
+    name = "badid"
+    aliases = ()
+
+    def __init__(self, category, rng, assets, *, level=None, recent=()):
+        super().__init__(category, rng, assets, level=level, recent=recent)
+        self.item_id = ["not", "a", "string"]
+
+
+async def test_a_non_string_item_id_is_not_remembered(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"badid": BadId})
+    await h.command("?badid science")
+    assert "id-alice" in h.manager.sessions and h.manager._recent == {}
 ```
 
 - [ ] **Step 2: Write `tests/test_scramble.py`**
@@ -1966,7 +1986,7 @@ class Hangman(Game):
 - [ ] **Step 8: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_manager.py tests/test_scramble.py -q`, then `.venv/bin/pytest -q`.
-Expected: `56 passed`, then the whole suite passes (325 passed).
+Expected: `57 passed`, then the whole suite passes (326 passed).
 
 - [ ] **Step 9: Commit**
 
@@ -1984,8 +2004,8 @@ Spec §3. Questions come from `content/trivia.json` (built in Task 7). Each has 
 
 - **Starting:** the category comes from the manager. A missing difficulty, or one this category has no questions for, becomes a random available one. Recently seen questions are skipped (`pick_unseen`).
 - **Easy:** the four options are shuffled once and lettered A-D, 20 s. One guess: a letter or the option's text (if the text matches two options that read alike, the player is asked for the letter). Right: 5 points; wrong ends the game showing the right option. Nonsense gets one "Answer with ?g and a letter" reminder, then silence. No hints.
-- **Medium and hard:** typed, 30 s, 3 guesses. A guess matches if `typo_match` accepts it against any accepted form of the answer (`accepted_answers`): with and without a leading article, accents folded, "&" read as "and", number words, Roman numerals II-XX and ordinals as digits ("World War II" = "world war 2", "Three" = "3"), the part before a comma ("Cupertino, California"), a number without its unit ("88 mph"), a name without its middle initial, "Mt." as "mount" or left out, the answer without a parenthetical (or the parenthetical itself when the rest can't be typed, "Φ (phi)"), and for "Who..." questions the surname alone.
-- **Hints:** word and letter count with the first letter, then about half the letters in place, both ignoring a parenthetical and counting "characters" when there are digits. A number, or an answer of 1-2 characters, gets one hint that gives nothing away ("A 2-digit number"). Points: medium 10/7/4, hard 15/10/6 by hints used; hints never use up guesses.
+- **Medium and hard:** typed, 30 s, 3 guesses. A guess matches if `typo_match` accepts it against any accepted form of the answer (`accepted_answers`): with and without a leading article, accents and ligatures folded ("Solskjær"), apostrophes removed inside words ("Xi'an"), "&" read as "and", number words ("fifty seven"), ordinal words, Roman numerals II-XX and "WW2" as digits ("World War II" = "ww2" = "world war 2"), "St." as "saint"; the place before a comma ("Cupertino, California", "Laika, the dog"; not numbers or lists like "1,776 ft" or "2, 3, 1"), a number without its unit ("88 mph", "1000 km/h", "50's"), a name without its middle initial (letters only: "Class 3-E" keeps its 3), "Mt." as "mount" or left out, a name without its title ("Sir", "Pope", "Professor"...), the answer without a parenthetical (or the parenthetical itself when the rest can't be typed, "Φ (phi)"), and for "Who..." questions the surname alone (with its particle: "van halen").
+- **Hints:** word and letter count with the first letter, then about half the letters in place, describing what is typed (no parenthetical; "phi" for "Φ (phi)"; "characters" when there are digits). A number (also with a unit, "7 years"), or an answer of 1-2 characters, gets one hint that gives nothing away ("A 1-digit number"). Points: medium 10/7/4, hard 15/10/6 by hints used; hints never use up guesses.
 - `?help trivia` credits Open Trivia DB and its CC BY-SA 4.0 license, since chat can't see the credits file.
 - `opening()` builds the question message; the content test (Task 10) uses it to check every question fits in one chat message.
 
@@ -2157,6 +2177,16 @@ def test_typed_matching_rules(tmp_path, answer, guess, right):
     ("Mt. Everest", "mount everest"),
     ("Paris (France)", "paris"),
     ("Φ (phi)", "phi"),
+    ("Laika, the dog", "laika"),
+    ("World War II", "ww2"),
+    ("Second World War", "world war 2"),
+    ("Sir Alex Ferguson", "alex ferguson"),
+    ("Pope Leo III", "leo iii"),
+    ("Fifty-Seven", "57"),
+    ("Third", "3rd"),
+    ("1000 km/h", "1000"),
+    ("Xi'an", "xian"),
+    ("Ole Gunnar Solskjær", "ole gunnar solskjaer"),
 ])
 def test_natural_variants_of_the_answer_count(tmp_path, answer, guess):
     assert g(one_question(tmp_path, answer), guess).result == "won"
@@ -2222,6 +2252,37 @@ def test_who_questions_accept_the_surname(tmp_path):
 
 def test_help_credits_open_trivia_db():
     assert "Open Trivia DB, CC BY-SA 4.0" in Trivia.description
+
+
+@pytest.mark.parametrize("answer, guess", [
+    ("1,776 ft", "1"),  # the comma rule is for "City, Region", not numbers
+    ("Oh, Inverted World", "oh"),
+    ("2, 3, 1", "2"),
+    ("low, all", "low"),
+    ("Class 3-E", "class e"),  # only middle letters can be dropped, not numbers
+])
+def test_partial_answers_dont_win(tmp_path, answer, guess):
+    assert g(one_question(tmp_path, answer), guess).result != "won"
+
+
+def test_surname_with_a_particle(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir()
+    q = {"id": "x", "category": "music", "difficulty": "medium", "question": "Who founded the band?",
+         "answer": "Eddie Van Halen"}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    assert g(Trivia("music", random.Random(1), Assets(root), level="medium"), "van halen").result == "won"
+
+
+@pytest.mark.parametrize("answer, hint", [("7 years", "💡 A 1-digit number"), ("50's", "💡 A 2-digit number"),
+                                          ("Φ (phi)", "💡 3 letters, starts with P")])
+def test_hints_describe_what_is_typed(tmp_path, answer, hint):
+    game = one_question(tmp_path, answer)
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages == [hint]
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2251,17 +2312,29 @@ from bot.text import fold_accents, normalize, strip_article, typo_match
 LETTERS = "ABCD"
 TYPO_MIN_LETTERS = 5  # words this long forgive one typo; shorter words and numbers must be exact
 _PARENTHETICAL = re.compile(r"\s*\(([^)]*)\)")
-_NUMBER_WITH_UNIT = re.compile(r"^\s*(\d[\d,]*)\s+[A-Za-z][A-Za-z.]*(?:\s+[A-Za-z.]+)?\s*$")  # "88 mph"
+_NUMBER_WITH_UNIT = re.compile(r"^\s*(\d[\d,]*)\s*'?s?\s+[A-Za-z][A-Za-z./]*(?:\s+[A-Za-z./]+)?\s*$")  # 88 mph
+_DECADE = re.compile(r"^\s*(\d+)'?s\s*$")  # "50's", "1980s"
 _ORDINAL = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
-# Same meaning, different spelling: number words, Roman numerals II-XX (single letters are too ambiguous).
+_APOSTROPHES = re.compile("['\u2018\u2019`]")  # removed inside words: "Xi'an" is "xian", not the numeral XI
+_UNITS = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen " \
+         "sixteen seventeen eighteen nineteen twenty".split()
+_TENS = {w: 10 * n for n, w in enumerate("thirty forty fifty sixty seventy eighty ninety".split(), start=3)}
+_ORDINAL_WORDS = "first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth " \
+                 "fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth twentieth".split()
+# Same meaning, different spelling: number words, ordinals, Roman numerals II-XX (single letters are too ambiguous).
 _CANONICAL = {
-    **{w: str(n) for n, w in enumerate(
-        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
-        "sixteen seventeen eighteen nineteen twenty".split())},
+    **{w: str(n) for n, w in enumerate(_UNITS)},
+    **{w: str(n) for w, n in _TENS.items()},
+    **{w: str(n) for n, w in enumerate(_ORDINAL_WORDS, start=1)},
     **{r: str(n) for n, r in enumerate(
-        "_ _ ii iii iv _ vi vii viii ix _ xi xii xiii xiv xv xvi xvii xviii xix xx".split()) if r != "_"},
+        "- - ii iii iv - vi vii viii ix - xi xii xiii xiv xv xvi xvii xviii xix xx".split()) if r != "-"},
     "mt": "mount",
+    "st": "saint",
+    "ww1": "world war 1", "wwi": "world war 1", "ww2": "world war 2", "wwii": "world war 2",
 }
+_PHRASES = {"first world war": "world war 1", "second world war": "world war 2"}
+_TITLES = frozenset("sir dame count countess professor prof pope officer doctor dr captain lord lady".split())
+_PARTICLES = frozenset("van von de del della da di du la le".split())
 
 
 def _questions(assets: Assets) -> list[dict[str, Any]]:
@@ -2269,9 +2342,18 @@ def _questions(assets: Assets) -> list[dict[str, Any]]:
 
 
 def _canonical(text: str) -> str:
-    words = fold_accents(normalize(text.replace("&", " and "))).split()
-    words = [_CANONICAL.get(w, w) for w in words]
-    return " ".join(m.group(1) if (m := _ORDINAL.match(w)) else w for w in words)
+    words = fold_accents(normalize(_APOSTROPHES.sub("", text.replace("&", " and ")))).split()
+    joined = " ".join(words)
+    for phrase, same in _PHRASES.items():
+        joined = joined.replace(phrase, same)
+    out: list[str] = []
+    for w in " ".join(_CANONICAL.get(w, w) for w in joined.split()).split():
+        w = m.group(1) if (m := _ORDINAL.match(w)) else w
+        if out and out[-1] in {str(n) for n in _TENS.values()} and w.isdigit() and len(w) == 1 and w != "0":
+            out[-1] = str(int(out[-1]) + int(w))  # "fifty seven" -> 57
+        else:
+            out.append(w)
+    return " ".join(out)
 
 
 def _forms(text: str) -> set[str]:
@@ -2287,21 +2369,26 @@ def accepted_answers(answer: str, question: str = "") -> set[str]:
     inner = _PARENTHETICAL.search(answer)
     if inner and not re.search(r"[A-Za-z0-9]", outside):  # "Φ (phi)": the bracket is the typeable part
         variants.add(inner.group(1))
-    if "," in outside:  # "Cupertino, California" -> "Cupertino"
-        variants.add(outside.split(",")[0])
-    if m := _NUMBER_WITH_UNIT.match(outside):  # "88 mph" -> "88"
+    place = re.fullmatch(r"\s*([^,\d]*[A-Za-z]{3}[^,\d]*),\s*((?:the\s+\w|[A-Z])[^,]*)", outside)
+    if place:  # "Cupertino, California" -> "Cupertino", "Laika, the dog" -> "Laika"; not "1,776 ft" or lists
+        variants.add(place.group(1))
+    if (m := _NUMBER_WITH_UNIT.match(outside)) or (m := _DECADE.match(outside)):  # "88 mph" -> "88"
         variants.add(m.group(1).replace(",", ""))
     forms = set().union(*(_forms(v) for v in variants))
     for form in list(forms):
         words = form.split()
-        if len(words) >= 3:  # "harry s truman" -> "harry truman"
-            forms.add(" ".join([words[0], *(w for w in words[1:-1] if len(w) > 1), words[-1]]))
+        if len(words) >= 3:  # "harry s truman" -> "harry truman" (letters only: "class 3 e" keeps its 3)
+            forms.add(" ".join([words[0], *(w for w in words[1:-1] if not (len(w) == 1 and w.isalpha())), words[-1]]))
         if words[:1] == ["mount"] and len(words) > 1:  # "Mt. Everest" -> "everest"
             forms.add(" ".join(words[1:]))
-    person = re.match(r"(?i)\s*who\b", question)
-    name_words = _PARENTHETICAL.sub("", answer).split()
-    if person and 2 <= len(name_words) <= 3 and len(name_words[-1]) >= 4:  # "Who directed ...?" -> "miyazaki"
-        forms |= _forms(name_words[-1])
+        if words[:1] and words[0] in _TITLES and len(words) > 1:  # "Sir Alex Ferguson" -> "alex ferguson"
+            forms.add(" ".join(words[1:]))
+    if re.match(r"(?i)\s*who\b", question):  # "Who directed ...?" -> "miyazaki", "van halen"
+        name = _canonical(_PARENTHETICAL.sub("", answer)).split()
+        if 2 <= len(name) <= 4 and len(name[-1]) >= 4:
+            forms.add(name[-1])
+            if name[-2] in _PARTICLES:
+                forms.add(" ".join(name[-2:]))
     return forms
 
 
@@ -2374,7 +2461,10 @@ class Trivia(Game):
         self.guesses_left = self.GUESSES
         self.hints_used = 0
         self._told_how = False  # the "answer with A-D" reminder is sent at most once
-        self._hint_text = _PARENTHETICAL.sub("", self.answer).strip() or self.answer  # hints skip "(Clown)"
+        outside = _PARENTHETICAL.sub("", self.answer).strip()
+        inner = _PARENTHETICAL.search(self.answer)
+        # hints describe what's typed: skip "(Clown)", but use "phi" for "Φ (phi)"
+        self._hint_text = inner.group(1) if inner and not re.search(r"[A-Za-z0-9]", outside) else outside or self.answer
         letters = [i for i, ch in enumerate(self._hint_text) if ch.isalnum()]
         middle = letters[1:-1]
         rng.shuffle(middle)
@@ -2440,6 +2530,9 @@ class Trivia(Game):
 
     def _hint(self) -> Outcome | None:
         text = self._hint_text
+        number = _NUMBER_WITH_UNIT.match(text) or _DECADE.match(text)  # "7 years": the number is the answer
+        if number:
+            text = number.group(1)
         chars = [ch for ch in text if ch.isalnum()]
         short = len(chars) <= 2 or text.replace(",", "").isdigit()  # "starts with 8" would give these away
         if self.easy or self.hints_used >= (1 if short else len(self.POINTS[self.level]) - 1):
@@ -2476,7 +2569,7 @@ class Trivia(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_trivia.py -q`, then `.venv/bin/pytest -q`.
-Expected: `47 passed`, then the whole suite passes (372 passed).
+Expected: `66 passed`, then the whole suite passes (392 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2494,7 +2587,7 @@ Spec §4. Riddles come from `content/riddles.json` (Task 8): `riddle`, `answers`
 
 - **Start:** `🧩 <riddle> · 60s · ?g <answer> · ?hint`. The id is a hash of the riddle text, so it survives reordering the file.
 - **Guesses:** 3. Guess and answers are compared as words: apostrophes removed (all kinds, after NFKC), so "I'm" can't leave a lone "m" that wins the letter riddles; a leading article dropped; accents folded. A guess wins if it contains an accepted answer, preferring the longest one it contains. Spacing may differ by one word ("rain bow") and the answer may be plural ("es" only after s, x, z, ch or sh, so "pin" never matches "pines").
-- **Not a win:** a list (more than 2 words beyond the answer, not counting filler like "I think it's a" or words from the riddle itself; any either-or with "or"), which costs a guess as "One answer per guess"; a negation right before the answer ("not a clock"); a different number ("3-2=1" when the answer is 2); and, for single-letter answers, any other letter in the guess ("a, e, i").
+- **Not a win:** a list, which costs a guess as "One answer per guess": more than 2 words beyond the answer (not counting filler like "I think it's a" or words from the riddle itself), or an either-or naming anything else ("nunu or mary"; a trailing "or something" is fine). Also not a win: a negation right before the answer ("not a clock", unless the answer appears again un-negated; an opening "no," is just an interjection); for number answers, a different number not in the riddle ("3-2=1" when the answer is 2); and for single-letter answers, any other letter ("a, e, i", "a e"; but "is it a m" and "e I think" are fine) or any "or".
 - **Hints:** the clue, then the main answer's word and letter count and first letter (no first letter for a 1-2 letter answer, which it would give away). Points 10/7/4.
 
 - [ ] **Step 1: Write `tests/test_riddle.py`**
@@ -2657,6 +2750,24 @@ def test_multi_word_hint(tmp_path):
     game = riddle(tmp_path, "What do you call a deer with no eyes?", ["no idea"])
     game.on_command("hint", "", make_msg("?hint"), None)
     assert game.on_command("hint", "", make_msg("?hint"), None).messages == ["💡 2 words, 6 letters, starts with N"]
+
+
+@pytest.mark.parametrize("riddle_text, answers, guess, expected", [
+    ("Mary's father has five daughters: Nana, Nene, Nini, Nono. What's the fifth called?", ["mary"],
+     "nunu or mary", "list"),  # either-or counts the riddle's own words too
+    ("What has hands but can't clap?", ["clock"], "I know this one, it's a clock", "won"),  # "one" isn't a guess
+    ("Some months have 30 days and some have 31. How many have 28?", ["all", "12"], "all 12 have 28 days", "won"),
+    ("What has hands but can't clap?", ["clock"], "no, a clock", "won"),  # "no," is an interjection
+    ("What has hands but can't clap?", ["clock", "watch"], "not a clock, it's a watch", "won"),
+    ("What has hands but can't clap?", ["clock"], "a clock or something", "won"),
+    ("What appears once in a year and twice in a week?", ["e", "letter e"], "a or e", "list"),
+    ("What appears once in a year and twice in a week?", ["e", "letter e"], "a e", "list"),
+    ("What appears once in a year and twice in a week?", ["e", "letter e"], "e I think", "won"),
+    ("What comes once in a minute?", ["m", "letter m"], "I´m guessing time", "wrong"),  # ´ as an apostrophe
+    ("What comes once in a minute?", ["m", "letter m"], "I'm pretty sure it's m", "won"),
+])
+def test_review_cases(tmp_path, riddle_text, answers, guess, expected):
+    assert outcome(riddle(tmp_path, riddle_text, answers), guess) == expected
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2695,10 +2806,16 @@ FILLER = frozenset(
     "isnt wont didnt letter".split()
 )
 NEGATIONS = frozenset("not no never isnt neither nor".split())  # "not a clock" doesn't name the clock
-NUMBER_WORDS = frozenset(
-    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
-    "seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand".split()
-)
+NUMBER_VALUES = {
+    **{w: str(n) for n, w in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+        "seventeen eighteen nineteen twenty".split())},
+    **{w: str(10 * n) for n, w in enumerate("thirty forty fifty sixty seventy eighty ninety".split(), start=3)},
+    "hundred": "100",
+    "thousand": "1000",
+}
+_INTERJECTION = re.compile(r"(?i)\b(?:no|nope|nah)\s*[,.!;:]+")  # "no, a clock" isn't a negation
+_VAGUE_TAIL = re.compile(r"(?i)\s+or\s+(?:something|smth|whatever|so|anything)(?:\s+like\s+that)?[\s.!?]*$")
 _PLURAL_ES = ("s", "x", "z", "ch", "sh")  # not "o": "sho" must not match "shoes"
 
 
@@ -2725,14 +2842,20 @@ def _same_word(guess: str, answer: str) -> bool:
     return False
 
 
-def _words(text: str) -> list[str]:
-    """A guess or answer as comparable words: apostrophes and a leading article dropped, accents folded."""
+def _words(text: str, drop_article: bool = True) -> list[str]:
+    """A guess or answer as comparable words: apostrophes, a leading article, an opening "no," and a
+    trailing "or something" dropped; accents folded."""
+    text = _APOSTROPHES.sub("", text)  # before NFKC too, which turns "´" into a space and an accent
     text = _APOSTROPHES.sub("", unicodedata.normalize("NFKC", text))
-    return fold_accents(normalize(strip_article(text))).split()
+    text = _VAGUE_TAIL.sub("", _INTERJECTION.sub(" ", text))
+    if drop_article:
+        text = strip_article(text)
+    return fold_accents(normalize(text)).split()
 
 
 def _numbers(words: list[str]) -> set[str]:
-    return {w for w in words if w.isdigit() or w in NUMBER_WORDS}
+    """Numbers named, as digits: "three" and "3" are the same number."""
+    return {str(int(w)) if w.isdigit() else NUMBER_VALUES[w] for w in words if w.isdigit() or w in NUMBER_VALUES}
 
 
 def _content(words: list[str], context: list[str] = ()) -> int:
@@ -2774,55 +2897,63 @@ class Riddle(Game):
         self.clue: str = entry["clue"]
         self._accepted = [_words(a) for a in self.answers]
         self._context = _words(self.riddle)  # "roosters don't lay eggs" reuses the riddle's words: not a list
-        # a guess naming a different number ("3-2=1" when the answer is 2) is wrong even if it contains the answer
+        # when the answer is a number, a guess naming a different one ("3-2=1" for 2) is wrong
         self._answer_numbers = set().union(*(_numbers(a) for a in self._accepted))
+        self._riddle_numbers = _numbers(self._context)
         self.guesses_left = self.GUESSES
         self.hints_used = 0
 
     def start(self) -> str:
         return f"🧩 {self.riddle} · {self.time_limit}s · {{p}}g <answer> · {{p}}hint"
 
-    def _match(self, words: list[str]) -> tuple[list[str], int] | None:
-        """The longest accepted answer the guess contains as whole words, and where it starts; None if none.
+    def _matches(self, words: list[str]) -> list[tuple[list[str], int, int]]:
+        """Every place the guess names an accepted answer: (answer, start, length in guess words).
         Spacing may differ by one word ("rain bow", "tea pot"), and the answer may be plural."""
-        found: tuple[list[str], int] | None = None
+        found = []
         for answer in self._accepted:
             joined = "".join(answer)
             for size in sorted({len(answer) - 1, len(answer), len(answer) + 1} - {0}):
                 for i in range(len(words) - size + 1):
-                    if _same_word("".join(words[i : i + size]), joined) and (
-                        found is None or _content(answer) > _content(found[0])
-                    ):
-                        found = (answer, i)
+                    if _same_word("".join(words[i : i + size]), joined):
+                        found.append((answer, i, size))
         return found
 
-    def _is_answer(self, words: list[str]) -> tuple[bool, bool]:
-        """(right, a list): does the guess name the answer, and is it really several guesses at once?"""
-        found = self._match(words)
-        if found is None:
-            return False, False
-        answer, start = found
-        letter = len(answer) == 1 and len(answer[0]) == 1 and answer[0].isalpha()  # the M, E and W riddles
-        extra = 0 if letter or "or" in words else EXTRA_WORDS
-        if _content(words, self._context) > max(1, _content(answer)) + extra:
-            return False, True
+    @staticmethod
+    def _negated(words: list[str], start: int) -> bool:
         before = [w for w in words[:start] if w not in ("a", "an", "the")]
-        if before and before[-1] in NEGATIONS:
+        return bool(before) and before[-1] in NEGATIONS
+
+    def _is_answer(self, words: list[str], raw: list[str]) -> tuple[bool, bool]:
+        """(right, a list): does the guess name the answer, and is it really several guesses at once?
+        `raw` is the guess with its leading article kept, for the single-letter riddles."""
+        found = [m for m in self._matches(words) if not self._negated(words, m[1])]  # "not a clock" doesn't count
+        if not found:
             return False, False
-        if _numbers(words) - self._answer_numbers:  # "3-2=1" names another number
-            return False, False
-        if letter and any(self._other_letter(words, i, answer[0]) for i in range(len(words))):
+        answer, start, size = max(found, key=lambda m: _content(m[0]))  # the longest answer named
+        letter = len(answer) == 1 and len(answer[0]) == 1 and answer[0].isalpha()  # the M, E and W riddles
+        if "or" in words:  # either-or: anything else named besides the answer makes it a hedge
+            outside = words[:start] + words[start + size :]
+            if letter or any(w not in FILLER for w in outside):
+                return False, True
+        elif _content(words, self._context) > max(1, _content(answer)) + EXTRA_WORDS:
+            return False, True
+        if self._answer_numbers and _numbers(words) - self._answer_numbers - self._riddle_numbers:
+            return False, False  # "3-2=1" when the answer is 2
+        if letter and any(self._other_letter(raw, i, answer[0]) for i in range(len(raw))):
             return False, True  # "a, e, i" or "y e a r" hedges between letters
         return True, False
 
     @staticmethod
     def _other_letter(words: list[str], i: int, answer: str) -> bool:
-        """Is words[i] a single letter other than the answer? "I" opening a sentence and "a" right before
-        the answer ("is it a m") don't count."""
+        """Is words[i] a single letter other than the answer? The pronoun "I" ("e I think") and "a" right
+        before a consonant answer ("is it a m") don't count; "a e" is a hedge (it would be "an e")."""
         w = words[i]
         if len(w) != 1 or not w.isalpha() or w == answer:
             return False
-        if (w == "i" and i == 0) or (w == "a" and i + 1 < len(words) and len(words[i + 1]) == 1):
+        following = words[i + 1] if i + 1 < len(words) else None
+        if w == "i" and (i == 0 or (following is not None and len(following) > 1)):
+            return False
+        if w == "a" and following == answer and answer not in "aeiou":
             return False
         return True
 
@@ -2832,7 +2963,7 @@ class Riddle(Game):
         words = _words(args)
         if name != "g" or not words:
             return None
-        right, too_long = self._is_answer(words)
+        right, too_long = self._is_answer(words, _words(args, drop_article=False))
         if right:
             points = self.POINTS[self.hints_used]
             return Outcome(
@@ -2872,7 +3003,7 @@ class Riddle(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_riddle.py -q`, then `.venv/bin/pytest -q`.
-Expected: `27 passed`, then the whole suite passes (399 passed).
+Expected: `38 passed`, then the whole suite passes (430 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2889,9 +3020,9 @@ git commit -m "Phase 2: Riddle game"
 Spec §5. Terms come from `content/higherlower.json` (Task 9): `name` and monthly `views`.
 
 - **Pairs:** the next term differs from the current one by at least 15% and hasn't been used this game.
-- **Answers:** `?g higher|h|more` or `?g lower|l|less`; a tie counts as right either way.
+- **Answers:** `?g higher|h|more|high|up` or `?g lower|l|less|low|down`; a tie counts as right either way.
 - **Right:** reveal the number, streak +1, the revealed term becomes the comparison, and `restart_timer` gives the next answer a fresh 20 s.
-- **Wrong or timeout:** the game ends and the streak is the points. A streak of 5 or more counts as a win in `?gamestats` (a choice made while building; the spec only fixes the points). Running out of terms wins.
+- **Wrong or timeout:** the game ends and the streak is the points (a first wrong answer just says "Game over."). A streak of 5 or more counts as a win in `?gamestats` (a choice made while building; the spec only fixes the points). Running out of terms wins.
 - The game remembers the player from their answers, so a timeout can credit the streak.
 
 - [ ] **Step 1: Write `tests/test_higherlower.py`**
@@ -2948,13 +3079,18 @@ def test_wrong_answer_ends_the_game_with_the_streak_as_points(assets):
     g(game, right(game))
     out = g(game, wrong(game))
     assert out.finished and out.result == "lost" and out.awards == {"id-alice": 2} and out.winners == set()
-    assert out.messages[0].endswith("Game over, streak 2 (+2)")
+    assert out.messages[0].endswith("Game over, streak 2 (+2).")
 
 
 def test_wrong_first_answer_scores_nothing(assets):
     game = make(assets)
     out = g(game, wrong(game))
-    assert out.finished and out.awards == {}
+    assert out.finished and out.awards == {} and out.messages[0].endswith(". Game over.")
+
+
+def test_up_and_down_work_too(assets):
+    game = make(assets)
+    assert g(game, "up" if right(game) == "higher" else "down").restart_timer
 
 
 def test_using_up_every_term_wins(assets):
@@ -3025,8 +3161,8 @@ from bot.text import normalize, short_number
 
 MIN_RATIO = 1.15  # the two numbers in a pair differ by at least 15%, so a guess is never a coin flip
 WIN_STREAK = 5  # a streak this long counts as a win in ?gamestats
-HIGHER = {"higher", "h", "more"}
-LOWER = {"lower", "l", "less"}
+HIGHER = {"higher", "h", "more", "high", "up"}
+LOWER = {"lower", "l", "less", "low", "down"}
 
 
 class HigherLower(Game):
@@ -3110,7 +3246,8 @@ class HigherLower(Game):
         before, after = self.current["views"], self.next["views"]
         right = after >= before if guess in HIGHER else after <= before
         if not right:
-            return self._end(f"❌ {self._result()}. Game over, streak {self.streak} (+{self.streak})", "lost")
+            score = f", streak {self.streak} (+{self.streak})" if self.streak else ""
+            return self._end(f"❌ {self._result()}. Game over{score}.", "lost")
         self.streak += 1
         revealed = self._result()
         self.current = self.next
@@ -3132,7 +3269,7 @@ class HigherLower(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_higherlower.py -q`, then `.venv/bin/pytest -q`.
-Expected: `10 passed`, then the whole suite passes (409 passed).
+Expected: `11 passed`, then the whole suite passes (441 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -4362,7 +4499,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - [ ] **Step 11: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py tests/test_stats_help_commands.py -q`, then `.venv/bin/pytest -q`.
-Expected: `83 passed`, then the whole suite passes (415 passed).
+Expected: `83 passed`, then the whole suite passes (447 passed).
 
 - [ ] **Step 12: Commit**
 
@@ -4379,9 +4516,9 @@ git commit -m "Phase 2: register Trivia, Riddle and Higher or Lower; flows and R
 
 `scripts/fetch_trivia.py` downloads every verified multiple-choice question for the 11 categories (spec §3's mapping) from Open Trivia DB, one request every 5.5 s with a session token so nothing repeats. With a token the API may answer "fewer left than you asked for" with either response code 1 or 4, so both halve the batch size; network errors and HTTP 429 are retried with backoff. Text is cleaned (invisible characters, spaces). `keep()` holds every rule, and `--refilter` re-applies them to the existing file offline. It drops:
 
-- questions with blocked words or mature topics (drugs, alcohol, tobacco, sexual themes, self-harm, a few fan-service anime titles), questions over 300 characters, duplicates (ignoring punctuation and case), and a short list of ids checked and found wrong or dated;
+- questions with blocked words or mature topics (drugs, alcohol, tobacco, sexual themes, self-harm, a few fan-service anime titles), questions over 300 characters, duplicates (ignoring punctuation and case), and a list of ids checked by hand and found wrong, dated, mature, option-dependent or unwinnable;
 - easy questions too long for one message, or whose options read alike or include a lone letter ("E", which a player would read as A-D);
-- medium/hard questions that can't be typed fairly: answer over 3 words or 25 characters, empty once normalized ("?:"), carrying meaning in symbols (C++, -40, 13.8, 2-3, 4/4, %), a date with a month, a number of 5+ digits, an exact number for an "approximately" question, or a question that needs its options ("these", "following", "not", "except").
+- medium/hard questions that can't be typed fairly: answer over 3 words or 25 characters, empty once normalized ("?:"), carrying meaning in symbols (C++, -40, 13.8, 2-3, 4/4, %), a date with a month, a number of 5+ digits, an exact number for an "approximately" question, or a question that needs its options ("these", "following", "not", "except"), except a short list of ids checked by hand.
 
 The credits file covers CC BY-SA 4.0 and lists the changes made.
 
@@ -4440,8 +4577,9 @@ DIFFICULTIES = ("easy", "medium", "hard")
 # Typed questions must make sense without seeing the options ("Which is not a country in Africa?").
 NEEDS_OPTIONS = re.compile(r"\b(?:these|following|below|above|not|except|none of)\b", re.IGNORECASE)
 # Typed answers nobody types the same way twice: dates with a month, long numbers, approximate figures.
-MONTH_DATE = re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b.*\d|\d.*\b(?:jan|feb|mar"
-                        r"|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.IGNORECASE)
+_MONTH = (r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?"
+          r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b")  # whole month names only: not "Mario Party 4"
+MONTH_DATE = re.compile(rf"{_MONTH}.*\d|\d.*{_MONTH}", re.IGNORECASE)
 LONG_NUMBER = re.compile(r"\d{5,}")
 APPROXIMATE = re.compile(r"\b(?:approximately|roughly|about how|around how|estimated)\b", re.IGNORECASE)
 # Topics that don't belong in a young, family-friendly chat, beyond the blocked-word list: drugs, alcohol,
@@ -4449,14 +4587,23 @@ APPROXIMATE = re.compile(r"\b(?:approximately|roughly|about how|around how|estim
 MATURE_TOPICS = re.compile(
     r"\b(?:cocaine|heroin|cannabis|marijuana|thc|weed|drugs?|cartel|overdose|beer|brewery|vodka|whisk(?:e)?y|rum"
     r"|cocktails?|alcohol(?:ic)?|liquor|drunk|tobacco|cigarettes?|smoking|sex(?:ual|y)?|breasts?|harem|hot coffee"
-    r"|stripper|suicide|kill (?:themselves|himself|herself|yourself)|schutzstaffel|to love-ru|highschool dxd"
-    r"|highschool of the dead)\b",
+    r"|stripper|suicide|kill (?:themselves|himself|herself|yourself)|schutzstaffel|to love-ru"
+    r"|high ?school (?:dxd|of the dead)|copulat\w*|courtesans?|testicles?|morenatsu)\b",
     re.IGNORECASE,
 )
 # Checked and wrong, garbled, or out of date (see docs/superpowers/plans, Phase 2 execution log).
 EXCLUDED_IDS = frozenset({
     "4be33db662", "5efa52ea29", "0d5228c649", "ac2967fc00", "0508b9f490", "358cd17e26", "01495b878f",
     "7732c495a3", "96ae8a7764", "5db409db5a",
+    # second review: mature, need their options, out of date, unwinnable or too loose as typed questions
+    "0a60a0d744", "9b1d123380", "8c394874bc", "4ed32265c4", "4edefa5a85", "975a5db97b", "c51570b283",
+    "1059611032", "5561256950", "edee009d10", "6e0ed953fc", "9ea627bce0", "6addd9f6e9", "87737bf23e",
+    "58c424f37e", "2a4bb44099",
+})
+# Checked by hand: typed questions the "needs its options" or date filter would wrongly drop.
+KEEP_IDS = frozenset({
+    "95c4855061", "cc8223f928", "9a3af53f71", "60cde368d5", "e3b9706abe", "c39015cf72", "1df1830466",
+    "af81c2f47c", "cbd1fcc6c2", "769ed5ba08",
 })
 MAX_TYPED_WORDS = 3
 MAX_TYPED_CHARS = 25
@@ -4486,8 +4633,9 @@ def clean(text: str) -> str:
     return " ".join(strip_invisible(text).split())
 
 
-def typeable(question: str, answer: str) -> bool:
+def typeable(question: str, answer: str, qid: str = "") -> bool:
     lowered = question.lower()
+    reviewed = qid in KEEP_IDS
     return (
         len(answer.split()) <= MAX_TYPED_WORDS
         and len(answer) <= MAX_TYPED_CHARS
@@ -4496,7 +4644,7 @@ def typeable(question: str, answer: str) -> bool:
         and not MONTH_DATE.search(answer)
         and not LONG_NUMBER.search(answer.replace(",", ""))
         and not (APPROXIMATE.search(lowered) and re.search(r"\d", answer))
-        and not NEEDS_OPTIONS.search(question)
+        and (reviewed or not NEEDS_OPTIONS.search(question))
     )
 
 
@@ -4519,7 +4667,7 @@ def keep(entry: dict, blocked: BlockedWords) -> bool:
     if entry["difficulty"] == "easy":
         options = [answer, *entry["wrong"]]
         return sum(len(t) + 4 for t in options) + len(question) <= MAX_EASY_TEXT and clear_options(options)
-    return typeable(question, answer)
+    return typeable(question, answer, entry["id"])
 
 
 def fetch_all(token: str, category_id: int, difficulty: str) -> list[dict]:
@@ -4635,7 +4783,7 @@ Expected: it takes about 25 minutes; the last line reads `wrote N questions` wit
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 415 passed.
+Expected: 447 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4659,7 +4807,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What has to be broken before you can use it?", "answers": ["egg", "eggs"], "clue": "Breakfast often starts by cracking one open."},
   {"riddle": "What gets wetter the more it dries?", "answers": ["towel", "towels"], "clue": "You grab one after a shower or a swim."},
   {"riddle": "What has 88 keys but can't open a single door?", "answers": ["piano", "pianos", "keyboard"], "clue": "It makes music when you press its black and white parts."},
-  {"riddle": "What has a head and a tail but no body?", "answers": ["coin", "coins", "penny", "quarter"], "clue": "Flip me to settle a tough choice."},
+  {"riddle": "What has a head and a tail but no body?", "answers": ["coin", "coins", "penny", "pennies", "quarter"], "clue": "Flip me to settle a tough choice."},
   {"riddle": "What goes up but never comes down?", "answers": ["age"], "clue": "Every birthday makes this number bigger."},
   {"riddle": "What has one eye but can't see, and is very sharp at the other end?", "answers": ["needle", "needles"], "clue": "Tailors push thread through me."},
   {"riddle": "What has lots of teeth but never bites?", "answers": ["comb", "combs", "zipper"], "clue": "You run me through your hair to tidy it."},
@@ -4674,7 +4822,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "I'm tall when I'm young and short when I'm old. What am I?", "answers": ["candle", "candles"], "clue": "I have a wick and I melt as I glow."},
   {"riddle": "What can travel around the world while staying in a corner?", "answers": ["stamp", "stamps", "postage stamp"], "clue": "You stick me on an envelope before mailing it."},
   {"riddle": "I have a spine but no bones, a cover but no blanket, and pages full of stories. What am I?", "answers": ["book", "books", "novel"], "clue": "Libraries are full of me."},
-  {"riddle": "What has an eye but can't see, and spins with powerful winds?", "answers": ["hurricane", "hurricanes", "tornado", "storm", "cyclone", "typhoon"], "clue": "Weather reporters warn people when one is coming."},
+  {"riddle": "What has an eye but can't see, and spins with powerful winds?", "answers": ["hurricane", "hurricanes", "tornado", "tornadoes", "storm", "cyclone", "typhoon"], "clue": "Weather reporters warn people when one is coming."},
   {"riddle": "What belongs to you, but other people use it more than you do?", "answers": ["name", "names"], "clue": "People call it out when they want your attention."},
   {"riddle": "What can you hold in your right hand but never in your left hand?", "answers": ["left hand", "left elbow", "left arm"], "clue": "Think about a body part on the opposite side."},
   {"riddle": "What room has no doors, no windows, and no walls?", "answers": ["mushroom", "mushrooms"], "clue": "It's a fungus you might find on a pizza."},
@@ -4703,7 +4851,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "I follow you everywhere and copy every move, but you can never touch me or catch me. What am I?", "answers": ["shadow", "shadows"], "clue": "I show up when the sun is behind you."},
   {"riddle": "What has lots of needles but never sews, and stays green all year long?", "answers": ["pine tree", "pine trees", "pine", "pines", "evergreen", "fir", "fir tree", "spruce", "christmas tree", "cactus"], "clue": "You'll find cones and sticky sap on me in the forest."},
   {"riddle": "What starts with an E, ends with an E, but usually has only one letter inside?", "answers": ["envelope", "envelopes"], "clue": "You seal me and send me through the mail."},
-  {"riddle": "Some months have 30 days and some have 31. How many have 28?", "answers": ["all", "every", "each", "twelve", "12", "all of them"], "clue": "Think about whether any month has fewer than that."},
+  {"riddle": "Some months have 30 days and some have 31. How many have 28?", "answers": ["all", "all of them", "all months", "every month", "each month", "every one", "twelve", "12"], "clue": "Does February have at least that many days?"},
   {"riddle": "I have keys but no locks, space but no room, and you can enter but never go inside. What am I?", "answers": ["keyboard", "keyboards"], "clue": "Gamers press WASD on me to move around."},
   {"riddle": "What's black when you buy it, red when you use it, and gray when you throw it away?", "answers": ["charcoal", "coal", "coals"], "clue": "It's used to grill burgers at a cookout."},
   {"riddle": "What gets sharper the more you use it?", "answers": ["brain", "brains", "mind", "skill", "skills"], "clue": "Puzzles like this one help exercise it."},
@@ -4724,7 +4872,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What gets cut on a table but is never eaten?", "answers": ["cards", "card", "deck", "deck of cards", "playing cards"], "clue": "You shuffle it before poker or solitaire."},
   {"riddle": "What is orange and sounds like a parrot?", "answers": ["carrot", "carrots"], "clue": "Rabbits love to munch on this vegetable."},
   {"riddle": "What can you serve but never eat?", "answers": ["ball", "balls", "tennis ball", "tennis", "volleyball", "shuttlecock", "badminton"], "clue": "Athletes hit it over a net to start a point."},
-  {"riddle": "Which weighs more, a pound of feathers or a pound of bricks?", "answers": ["neither", "same", "equal", "both", "even", "weigh the same"], "clue": "Look closely at how much of each there is."},
+  {"riddle": "Which weighs more, a pound of feathers or a pound of bricks?", "answers": ["neither", "same", "equal", "weigh the same", "same weight"], "clue": "Look closely at how much of each there is."},
   {"riddle": "What starts with P, ends with E, and has thousands of letters?", "answers": ["post office", "post offices", "postoffice"], "clue": "You go there to send packages and buy stamps."},
   {"riddle": "What kind of cup can you eat?", "answers": ["cupcake", "cupcakes", "cup cake"], "clue": "It's a small frosted treat at birthday parties."},
   {"riddle": "What has a neck but no head, and two arms but no hands?", "answers": ["shirt", "shirts", "t shirt", "tshirt", "sweater", "hoodie", "jacket", "coat"], "clue": "You pull it over your head every morning."},
@@ -4748,7 +4896,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What flies without wings when you're having fun?", "answers": ["time"], "clue": "Clocks and calendars keep track of it."},
   {"riddle": "What has a crown but no head, and roots but no leaves?", "answers": ["tooth", "teeth", "molar"], "clue": "The dentist checks these at every visit."},
   {"riddle": "I'm an odd number, but take away one letter and I become even. What am I?", "answers": ["seven", "7"], "clue": "Try dropping the first letter from the names of a few odd numbers."},
-  {"riddle": "What is taller than the trees, has roots no one can see, and never grows an inch?", "answers": ["mountain", "mountains", "mount", "hill", "volcano"], "clue": "Hikers and climbers try to reach my peak."},
+  {"riddle": "What is taller than the trees, has roots no one can see, and never grows an inch?", "answers": ["mountain", "mountains", "mount", "hill", "volcano", "volcanoes"], "clue": "Hikers and climbers try to reach my peak."},
   {"riddle": "What looks like a horse wearing black-and-white striped pajamas?", "answers": ["zebra", "zebras"], "clue": "It lives on the African savanna."},
   {"riddle": "What animal is always ready to play baseball?", "answers": ["bat", "bats"], "clue": "It sleeps upside down in caves."},
   {"riddle": "What has a trunk but no suitcase, big flappy ears, and never forgets?", "answers": ["elephant", "elephants"], "clue": "It's the largest animal that lives on land."},
@@ -4780,7 +4928,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What do you call cheese that isn't yours?", "answers": ["nacho cheese", "nacho", "nachos"], "clue": "Say 'not your' really fast."},
   {"riddle": "Why can't a nose be twelve inches long?", "answers": ["foot", "feet", "be a foot"], "clue": "Think about units of length."},
   {"riddle": "What do you call a sleeping bull?", "answers": ["bulldozer", "bulldozers", "bull dozer"], "clue": "Construction sites use this big yellow machine."},
-  {"riddle": "What has a head like a cat, feet like a cat, and a tail like a cat, but isn't a cat?", "answers": ["kitten", "kittens", "kitty"], "clue": "It's a baby version of a pet that purrs."},
+  {"riddle": "What has a head like a cat, feet like a cat, and a tail like a cat, but isn't a cat?", "answers": ["kitten", "kittens", "kitty", "kitties"], "clue": "It's a baby version of a pet that purrs."},
   {"riddle": "What is full of holes but as strong as steel?", "answers": ["chain", "chains"], "clue": "Bikes and swings both use links of this."},
   {"riddle": "I have no feet, hands, or wings, but I climb up to the sky. What am I?", "answers": ["smoke", "steam"], "clue": "Chimneys puff it out."},
   {"riddle": "What do you call a snowman in the summer?", "answers": ["puddle", "puddles", "water"], "clue": "It's what's left after warm sunshine melts the ice."},
@@ -4850,7 +4998,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What jumps when it walks and sits when it stands?", "answers": ["kangaroo", "kangaroos", "roo"], "clue": "It carries its baby in a pouch."},
   {"riddle": "I carry my house on my back, move very slowly, and leave a shiny trail. What am I?", "answers": ["snail", "snails"], "clue": "Gardeners find me munching lettuce after the rain."},
   {"riddle": "What has a bill but never pays it?", "answers": ["duck", "ducks", "platypus"], "clue": "It quacks and paddles across ponds."},
-  {"riddle": "What animal can jump higher than a house?", "answers": ["any animal", "any", "all", "every", "cant jump", "cannot jump", "dont jump", "doesnt jump"], "clue": "Think about how high a building is able to leap."},
+  {"riddle": "What animal can jump higher than a house?", "answers": ["any animal", "every animal", "all animals", "cant jump", "cannot jump", "dont jump", "doesnt jump", "do not jump", "does not jump", "never jump"], "clue": "Think about how high a building is able to leap."},
   {"riddle": "What has to be taken before you can get it?", "answers": ["picture", "pictures", "photo", "photos", "photograph", "selfie"], "clue": "Someone says cheese right before it happens."},
   {"riddle": "Turn me on my side and I'm everything. Cut me in half and I'm nothing. What am I?", "answers": ["eight", "8"], "clue": "Sideways, I look like the infinity symbol."},
   {"riddle": "What gets smaller every time it takes a bath?", "answers": ["soap", "soaps", "soap bar"], "clue": "It makes bubbles when you wash your hands."},
@@ -4875,7 +5023,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
 - [ ] **Step 2: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 415 passed.
+Expected: 447 passed.
 
 - [ ] **Step 3: Commit**
 
@@ -4890,7 +5038,7 @@ git commit -m "Phase 2: riddles"
 - Replace: `scripts/higherlower_terms.txt`, `scripts/fetch_pageviews.py`
 - Generate: `bot/content/higherlower.json`
 
-`scripts/higherlower_terms.txt` lists about 440 well-known, family-friendly terms (display name, exact English Wikipedia title, category). `scripts/fetch_pageviews.py` resolves each title through redirects, then sums last month's user page views from the Wikimedia REST API. It sends a generic User-Agent with the repo URL (no personal email), waits 1 s between requests, and retries HTTP 429 and dropped connections with backoff. Missing and disambiguation pages are skipped; a term whose article differs from the title asked for, or with under 3,000 views, is printed for a check by hand. A run that finds fewer than 100 terms leaves the old file alone. Films use their film articles ("Moana (2016 film)"), and "It" and "Up" display as "It (the movie)" and "Up (the movie)" so the question reads well.
+`scripts/higherlower_terms.txt` lists about 440 well-known, family-friendly terms (display name, exact English Wikipedia title, category). `scripts/fetch_pageviews.py` resolves each title through redirects, then sums last month's user page views from the Wikimedia REST API. It sends a generic User-Agent with the repo URL (no personal email), waits 1 s between requests, and retries HTTP 429 and dropped connections with backoff. Missing and disambiguation pages are skipped; a term whose article differs from the title asked for, or with under 3,000 views, is printed for a check by hand. If more than 5% of the terms fail, the old file is left alone. The game never shows a category, so a display name says what is meant when it could be read two ways: "Venom (the movie)", "Titanic (the movie)", "FIFA (video games)", "Wednesday (TV show)"; Star Wars and Harry Potter use the franchise articles.
 
 - [ ] **Step 1: Write `scripts/higherlower_terms.txt`**
 
@@ -4901,7 +5049,7 @@ git commit -m "Phase 2: riddles"
 # A later script fetches each title's English Wikipedia monthly page views. Do not reorder
 # fields. Keep display names short (<=30 chars) and free of disambiguation text.
 
-# --- games (60) ---
+# --- games ---
 Minecraft|Minecraft|games
 Fortnite|Fortnite|games
 Roblox|Roblox|games
@@ -4915,7 +5063,7 @@ Counter-Strike|Counter-Strike 2|games
 Rainbow Six Siege|Tom Clancy's Rainbow Six Siege|games
 Super Mario Bros.|Super Mario Bros.|games
 The Legend of Zelda|The Legend of Zelda|games
-Pokemon|Pokémon|games
+Pokémon|Pokémon|games
 Animal Crossing|Animal Crossing|games
 Super Smash Bros.|Super Smash Bros.|games
 Mario Kart|Mario Kart|games
@@ -4949,7 +5097,7 @@ Pac-Man|Pac-Man|games
 Donkey Kong|Donkey Kong|games
 Street Fighter|Street Fighter|games
 Mortal Kombat|Mortal Kombat|games
-FIFA|FIFA (video game series)|games
+FIFA (video games)|FIFA (video game series)|games
 NBA 2K|NBA 2K|games
 Madden NFL|Madden NFL|games
 Splatoon|Splatoon|games
@@ -4963,11 +5111,10 @@ Clash Royale|Clash Royale|games
 Brawl Stars|Brawl Stars|games
 Angry Birds|Angry Birds|games
 
-# --- streamers (40) ---
+# --- streamers ---
 Kai Cenat|Kai Cenat|streamers
 xQc|xQc|streamers
 Pokimane|Pokimane|streamers
-Ninja|Ninja (Internet personality)|streamers
 Dream|Dream (YouTuber)|streamers
 Technoblade|Technoblade|streamers
 Shroud|Shroud (streamer)|streamers
@@ -4986,7 +5133,6 @@ Wilbur Soot|Wilbur Soot|streamers
 Quackity|Quackity|streamers
 TommyInnit|TommyInnit|streamers
 Summit1g|Summit1g|streamers
-LIRIK|LIRIK|streamers
 Forsen|Forsen|streamers
 Nadeshot|Nadeshot|streamers
 FaZe Rug|FaZe Rug|streamers
@@ -5003,11 +5149,11 @@ DrLupo|DrLupo|streamers
 Tfue|Tfue|streamers
 Jerma985|Jerma985|streamers
 
-# --- celebrities: musicians, actors, athletes, internet personalities (60) ---
+# --- celebrities: musicians, actors, athletes, internet personalities ---
 Taylor Swift|Taylor Swift|celebrities
 Drake|Drake (musician)|celebrities
 Ariana Grande|Ariana Grande|celebrities
-Beyonce|Beyoncé|celebrities
+Beyoncé|Beyoncé|celebrities
 Ed Sheeran|Ed Sheeran|celebrities
 Billie Eilish|Billie Eilish|celebrities
 The Weeknd|The Weeknd|celebrities
@@ -5065,7 +5211,7 @@ Addison Rae|Addison Rae|celebrities
 Zach King|Zach King|celebrities
 Liza Koshy|Liza Koshy|celebrities
 
-# --- food (50) ---
+# --- food ---
 Pizza|Pizza|food
 Sushi|Sushi|food
 Hamburger|Hamburger|food
@@ -5117,7 +5263,7 @@ Apple|Apple|food
 Pineapple|Pineapple|food
 Peanut Butter|Peanut butter|food
 
-# --- brands (50) ---
+# --- brands ---
 YouTube|YouTube|brands
 Google|Google|brands
 Amazon|Amazon (company)|brands
@@ -5169,7 +5315,7 @@ Taco Bell|Taco Bell|brands
 Wendy's|Wendy's|brands
 Dunkin'|Dunkin'|brands
 
-# --- animals (50) ---
+# --- animals ---
 Dog|Dog|animals
 Cat|Cat|animals
 Lion|Lion|animals
@@ -5221,7 +5367,7 @@ Crab|Crab|animals
 Turtle|Turtle|animals
 Snake|Snake|animals
 
-# --- countries (40) ---
+# --- countries ---
 United States|United States|countries
 Canada|Canada|countries
 Mexico|Mexico|countries
@@ -5263,24 +5409,24 @@ Indonesia|Indonesia|countries
 Jamaica|Jamaica|countries
 Cuba|Cuba|countries
 
-# --- movies (40) ---
-Titanic|Titanic (1997 film)|movies
+# --- movies ---
+Titanic (the movie)|Titanic (1997 film)|movies
 The Avengers|The Avengers (2012 film)|movies
 Avengers: Endgame|Avengers: Endgame|movies
 Spider-Man: No Way Home|Spider-Man: No Way Home|movies
-Star Wars|Star Wars (film)|movies
+Star Wars|Star Wars|movies
 The Lion King|The Lion King (1994 film)|movies
 Frozen|Frozen (2013 film)|movies
 Shrek|Shrek|movies
 The Dark Knight|The Dark Knight|movies
 Jurassic Park|Jurassic Park (film)|movies
-Harry Potter|Harry Potter and the Philosopher's Stone (film)|movies
+Harry Potter|Harry Potter|movies
 Toy Story|Toy Story|movies
 Finding Nemo|Finding Nemo|movies
 The Matrix|The Matrix|movies
 Inception|Inception|movies
-Deadpool|Deadpool (film)|movies
-Barbie|Barbie (film)|movies
+Deadpool (the movie)|Deadpool (film)|movies
+Barbie (the movie)|Barbie (film)|movies
 Oppenheimer|Oppenheimer (film)|movies
 Minions|Minions (film)|movies
 Despicable Me|Despicable Me|movies
@@ -5290,22 +5436,22 @@ Coco|Coco (2017 film)|movies
 Up (the movie)|Up (2009 film)|movies
 The Incredibles|The Incredibles|movies
 Cars|Cars (film)|movies
-Ratatouille|Ratatouille (film)|movies
+Ratatouille (the movie)|Ratatouille (film)|movies
 WALL-E|WALL-E|movies
 Inside Out|Inside Out (2015 film)|movies
 Guardians of the Galaxy|Guardians of the Galaxy (film)|movies
-Black Panther|Black Panther (film)|movies
-Iron Man|Iron Man (2008 film)|movies
-Joker|Joker (2019 film)|movies
+Black Panther (the movie)|Black Panther (film)|movies
+Iron Man (the movie)|Iron Man (2008 film)|movies
+Joker (the movie)|Joker (2019 film)|movies
 It (the movie)|It (2017 film)|movies
-Venom|Venom (2018 film)|movies
+Venom (the movie)|Venom (2018 film)|movies
 The Super Mario Bros. Movie|The Super Mario Bros. Movie|movies
 Jaws|Jaws (film)|movies
 E.T. the Extra-Terrestrial|E.T. the Extra-Terrestrial|movies
 Home Alone|Home Alone|movies
 Night at the Museum|Night at the Museum|movies
 
-# --- tv (30, incl. anime) ---
+# --- tv ---
 The Office|The Office (American TV series)|tv
 Friends|Friends|tv
 Breaking Bad|Breaking Bad|tv
@@ -5329,7 +5475,7 @@ How I Met Your Mother|How I Met Your Mother|tv
 Brooklyn Nine-Nine|Brooklyn Nine-Nine|tv
 Grey's Anatomy|Grey's Anatomy|tv
 The Mandalorian|The Mandalorian|tv
-Wednesday|Wednesday (TV series)|tv
+Wednesday (TV show)|Wednesday (TV series)|tv
 Squid Game|Squid Game|tv
 The Boys|The Boys (TV series)|tv
 Doctor Who|Doctor Who|tv
@@ -5337,7 +5483,7 @@ The Walking Dead|The Walking Dead (TV series)|tv
 Cobra Kai|Cobra Kai|tv
 Suits|Suits (American TV series)|tv
 
-# --- sports (20, sports/leagues/events, not people) ---
+# --- sports ---
 Basketball|Basketball|sports
 Soccer|Association football|sports
 American Football|American football|sports
@@ -5392,7 +5538,7 @@ USER_AGENT = "offline-chat-bot/0.1 (https://github.com/rrong12/offline-chat-bot)
 ACTION_API = "https://en.wikipedia.org/w/api.php"
 VIEWS_API = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user"
 REVIEW_BELOW = 3000  # monthly views this low usually mean the wrong article
-MIN_TERMS = 100
+MAX_FAILURES = 0.05  # if more terms than this fail, keep the old file rather than lose them
 
 
 def get(url: str) -> dict:
@@ -5475,8 +5621,8 @@ def main() -> None:
         time.sleep(1.0)  # stay well under Wikimedia's rate limit
     for problem in problems:
         print("  " + problem)
-    if len(terms) < MIN_TERMS:  # don't overwrite good data with a failed run
-        sys.exit(f"only {len(terms)} terms found; {OUT} left unchanged")
+    if len(terms) < (1 - MAX_FAILURES) * len(rows):  # don't overwrite good data with a failed run
+        sys.exit(f"only {len(terms)} of {len(rows)} terms found; {OUT} left unchanged")
     payload = {
         "source": "English Wikipedia page views (Wikimedia REST API), user agents only",
         "month": f"{start:%Y-%m}",
@@ -5498,7 +5644,7 @@ Expected: it takes a few minutes; it prints `wrote N terms for <month>` and any 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 415 passed.
+Expected: 447 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -5653,6 +5799,7 @@ def test_trivia_bank():
     assert len({q["id"] for q in questions}) == len(questions)
     assert Trivia.category_names(REAL) == sorted(TRIVIA_CATEGORIES)
     blocked = BlockedWords.load(REAL)
+    assert all(fetch.keep(q, blocked) for q in questions)  # every filter in the script, incl. mature topics
     for category in TRIVIA_CATEGORIES:
         assert sum(q["category"] == category for q in questions) >= 30, category
     for q in questions:
@@ -5664,7 +5811,7 @@ def test_trivia_bank():
             assert len(q["wrong"]) == 3 and len({o.lower() for o in options}) == 4, q["id"]
             assert clear_options(options), q["id"]  # options don't read alike, and none is a lone letter
         else:
-            assert typeable(q["question"], q["answer"]), q["id"]  # short, typeable, no symbols like C++ or 13.8
+            assert typeable(q["question"], q["answer"], q["id"]), q["id"]  # short, typeable, no C++ or 13.8
             assert accepted_answers(q["answer"]), q["id"]
             options = []
         assert len(opening(q["category"], q["difficulty"], q["question"], options, 30)) <= 480, q["id"]
@@ -5725,7 +5872,7 @@ def test_no_game_has_a_category_named_like_a_level():
 - [ ] **Step 2: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `24 passed`, then the whole suite passes (420 passed).
+Expected: `24 passed`, then the whole suite passes (452 passed).
 
 - [ ] **Step 3: Commit**
 

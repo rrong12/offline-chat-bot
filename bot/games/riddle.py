@@ -26,10 +26,16 @@ FILLER = frozenset(
     "isnt wont didnt letter".split()
 )
 NEGATIONS = frozenset("not no never isnt neither nor".split())  # "not a clock" doesn't name the clock
-NUMBER_WORDS = frozenset(
-    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
-    "seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand".split()
-)
+NUMBER_VALUES = {
+    **{w: str(n) for n, w in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+        "seventeen eighteen nineteen twenty".split())},
+    **{w: str(10 * n) for n, w in enumerate("thirty forty fifty sixty seventy eighty ninety".split(), start=3)},
+    "hundred": "100",
+    "thousand": "1000",
+}
+_INTERJECTION = re.compile(r"(?i)\b(?:no|nope|nah)\s*[,.!;:]+")  # "no, a clock" isn't a negation
+_VAGUE_TAIL = re.compile(r"(?i)\s+or\s+(?:something|smth|whatever|so|anything)(?:\s+like\s+that)?[\s.!?]*$")
 _PLURAL_ES = ("s", "x", "z", "ch", "sh")  # not "o": "sho" must not match "shoes"
 
 
@@ -56,14 +62,20 @@ def _same_word(guess: str, answer: str) -> bool:
     return False
 
 
-def _words(text: str) -> list[str]:
-    """A guess or answer as comparable words: apostrophes and a leading article dropped, accents folded."""
+def _words(text: str, drop_article: bool = True) -> list[str]:
+    """A guess or answer as comparable words: apostrophes, a leading article, an opening "no," and a
+    trailing "or something" dropped; accents folded."""
+    text = _APOSTROPHES.sub("", text)  # before NFKC too, which turns "´" into a space and an accent
     text = _APOSTROPHES.sub("", unicodedata.normalize("NFKC", text))
-    return fold_accents(normalize(strip_article(text))).split()
+    text = _VAGUE_TAIL.sub("", _INTERJECTION.sub(" ", text))
+    if drop_article:
+        text = strip_article(text)
+    return fold_accents(normalize(text)).split()
 
 
 def _numbers(words: list[str]) -> set[str]:
-    return {w for w in words if w.isdigit() or w in NUMBER_WORDS}
+    """Numbers named, as digits: "three" and "3" are the same number."""
+    return {str(int(w)) if w.isdigit() else NUMBER_VALUES[w] for w in words if w.isdigit() or w in NUMBER_VALUES}
 
 
 def _content(words: list[str], context: list[str] = ()) -> int:
@@ -105,55 +117,63 @@ class Riddle(Game):
         self.clue: str = entry["clue"]
         self._accepted = [_words(a) for a in self.answers]
         self._context = _words(self.riddle)  # "roosters don't lay eggs" reuses the riddle's words: not a list
-        # a guess naming a different number ("3-2=1" when the answer is 2) is wrong even if it contains the answer
+        # when the answer is a number, a guess naming a different one ("3-2=1" for 2) is wrong
         self._answer_numbers = set().union(*(_numbers(a) for a in self._accepted))
+        self._riddle_numbers = _numbers(self._context)
         self.guesses_left = self.GUESSES
         self.hints_used = 0
 
     def start(self) -> str:
         return f"🧩 {self.riddle} · {self.time_limit}s · {{p}}g <answer> · {{p}}hint"
 
-    def _match(self, words: list[str]) -> tuple[list[str], int] | None:
-        """The longest accepted answer the guess contains as whole words, and where it starts; None if none.
+    def _matches(self, words: list[str]) -> list[tuple[list[str], int, int]]:
+        """Every place the guess names an accepted answer: (answer, start, length in guess words).
         Spacing may differ by one word ("rain bow", "tea pot"), and the answer may be plural."""
-        found: tuple[list[str], int] | None = None
+        found = []
         for answer in self._accepted:
             joined = "".join(answer)
             for size in sorted({len(answer) - 1, len(answer), len(answer) + 1} - {0}):
                 for i in range(len(words) - size + 1):
-                    if _same_word("".join(words[i : i + size]), joined) and (
-                        found is None or _content(answer) > _content(found[0])
-                    ):
-                        found = (answer, i)
+                    if _same_word("".join(words[i : i + size]), joined):
+                        found.append((answer, i, size))
         return found
 
-    def _is_answer(self, words: list[str]) -> tuple[bool, bool]:
-        """(right, a list): does the guess name the answer, and is it really several guesses at once?"""
-        found = self._match(words)
-        if found is None:
-            return False, False
-        answer, start = found
-        letter = len(answer) == 1 and len(answer[0]) == 1 and answer[0].isalpha()  # the M, E and W riddles
-        extra = 0 if letter or "or" in words else EXTRA_WORDS
-        if _content(words, self._context) > max(1, _content(answer)) + extra:
-            return False, True
+    @staticmethod
+    def _negated(words: list[str], start: int) -> bool:
         before = [w for w in words[:start] if w not in ("a", "an", "the")]
-        if before and before[-1] in NEGATIONS:
+        return bool(before) and before[-1] in NEGATIONS
+
+    def _is_answer(self, words: list[str], raw: list[str]) -> tuple[bool, bool]:
+        """(right, a list): does the guess name the answer, and is it really several guesses at once?
+        `raw` is the guess with its leading article kept, for the single-letter riddles."""
+        found = [m for m in self._matches(words) if not self._negated(words, m[1])]  # "not a clock" doesn't count
+        if not found:
             return False, False
-        if _numbers(words) - self._answer_numbers:  # "3-2=1" names another number
-            return False, False
-        if letter and any(self._other_letter(words, i, answer[0]) for i in range(len(words))):
+        answer, start, size = max(found, key=lambda m: _content(m[0]))  # the longest answer named
+        letter = len(answer) == 1 and len(answer[0]) == 1 and answer[0].isalpha()  # the M, E and W riddles
+        if "or" in words:  # either-or: anything else named besides the answer makes it a hedge
+            outside = words[:start] + words[start + size :]
+            if letter or any(w not in FILLER for w in outside):
+                return False, True
+        elif _content(words, self._context) > max(1, _content(answer)) + EXTRA_WORDS:
+            return False, True
+        if self._answer_numbers and _numbers(words) - self._answer_numbers - self._riddle_numbers:
+            return False, False  # "3-2=1" when the answer is 2
+        if letter and any(self._other_letter(raw, i, answer[0]) for i in range(len(raw))):
             return False, True  # "a, e, i" or "y e a r" hedges between letters
         return True, False
 
     @staticmethod
     def _other_letter(words: list[str], i: int, answer: str) -> bool:
-        """Is words[i] a single letter other than the answer? "I" opening a sentence and "a" right before
-        the answer ("is it a m") don't count."""
+        """Is words[i] a single letter other than the answer? The pronoun "I" ("e I think") and "a" right
+        before a consonant answer ("is it a m") don't count; "a e" is a hedge (it would be "an e")."""
         w = words[i]
         if len(w) != 1 or not w.isalpha() or w == answer:
             return False
-        if (w == "i" and i == 0) or (w == "a" and i + 1 < len(words) and len(words[i + 1]) == 1):
+        following = words[i + 1] if i + 1 < len(words) else None
+        if w == "i" and (i == 0 or (following is not None and len(following) > 1)):
+            return False
+        if w == "a" and following == answer and answer not in "aeiou":
             return False
         return True
 
@@ -163,7 +183,7 @@ class Riddle(Game):
         words = _words(args)
         if name != "g" or not words:
             return None
-        right, too_long = self._is_answer(words)
+        right, too_long = self._is_answer(words, _words(args, drop_article=False))
         if right:
             points = self.POINTS[self.hints_used]
             return Outcome(

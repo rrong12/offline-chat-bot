@@ -74,8 +74,12 @@ def strip_article(text: str) -> str:
     return _LEADING_ARTICLE.sub("", text, count=1)
 
 
+_LIGATURES = str.maketrans({"æ": "ae", "Æ": "AE", "ø": "o", "Ø": "O", "œ": "oe", "Œ": "OE", "ß": "ss", "ł": "l"})
+
+
 def fold_accents(text: str) -> str:
-    """'pokémon' -> 'pokemon', so a missing accent never costs a player their one typo."""
+    """'pokémon' -> 'pokemon', 'solskjær' -> 'solskjaer', so a missing accent never costs a player their typo."""
+    text = text.translate(_LIGATURES)
     return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
 
 

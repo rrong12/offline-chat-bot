@@ -1,5 +1,6 @@
 import json
 import random
+import re
 
 import pytest
 
@@ -99,7 +100,7 @@ class Quiz(Boom):
 
     def __init__(self, category, rng, assets, *, level=None, recent=()):
         super().__init__(category, rng, assets, level=level, recent=recent)
-        self.item_id = next((i for i in self.ITEMS if i not in recent), None) or min(self.ITEMS, key=recent.index)
+        self.item_id = self.pick_unseen(list(self.ITEMS), lambda item: item)
 
     def start(self) -> str:
         return f"quiz {self.category} {self.level} {self.item_id}"
@@ -437,7 +438,7 @@ async def test_category_and_level_in_either_order(h: Harness):
 
 async def test_level_without_category_picks_a_category(h: Harness):
     await h.command("?quiz easy")
-    assert h.texts()[-1].startswith("quiz ") and h.texts()[-1].endswith(" easy q1")
+    assert re.fullmatch(r"quiz (science|history) easy q[123]", h.texts()[-1])
 
 
 async def test_categories_list_includes_levels(h: Harness):
@@ -463,7 +464,7 @@ async def test_recent_questions_are_not_repeated_for_that_player(h: Harness):
         seen.append(h.texts()[-1].split()[-1])
         await h.command("?skip")
         h.clock.advance(10)
-    assert seen == ["q1", "q2", "q3", "q1"]  # all three seen: the one seen longest ago comes back
+    assert sorted(seen[:3]) == ["q1", "q2", "q3"] and seen[3] == seen[0]  # all seen: the oldest comes back
 
 
 async def test_each_player_has_their_own_question_history(h: Harness):
@@ -472,7 +473,7 @@ async def test_each_player_has_their_own_question_history(h: Harness):
         await h.command("?skip", "alice")
         h.clock.advance(10)
     await h.command("?quiz science", "bob")
-    assert h.texts()[-1].endswith("q1")  # a shared history would have given bob q3
+    assert h.manager.sessions["id-bob"].game.recent == ()  # alice's history isn't bob's
 
 
 async def test_refusal_notices_are_limited_per_game_even_through_an_alias(h: Harness):
@@ -558,3 +559,18 @@ async def test_a_restart_timer_from_on_timeout_cannot_extend_a_game(tmp_path, cl
     h.clock.advance(10)
     h.manager.tick()
     assert h.manager.sessions == {}  # force-finished anyway
+
+
+class BadId(Quiz):
+    name = "badid"
+    aliases = ()
+
+    def __init__(self, category, rng, assets, *, level=None, recent=()):
+        super().__init__(category, rng, assets, level=level, recent=recent)
+        self.item_id = ["not", "a", "string"]
+
+
+async def test_a_non_string_item_id_is_not_remembered(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"badid": BadId})
+    await h.command("?badid science")
+    assert "id-alice" in h.manager.sessions and h.manager._recent == {}

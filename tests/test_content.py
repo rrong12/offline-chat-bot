@@ -129,6 +129,7 @@ def test_trivia_bank():
     assert len({q["id"] for q in questions}) == len(questions)
     assert Trivia.category_names(REAL) == sorted(TRIVIA_CATEGORIES)
     blocked = BlockedWords.load(REAL)
+    assert all(fetch.keep(q, blocked) for q in questions)  # every filter in the script, incl. mature topics
     for category in TRIVIA_CATEGORIES:
         assert sum(q["category"] == category for q in questions) >= 30, category
     for q in questions:
@@ -140,7 +141,7 @@ def test_trivia_bank():
             assert len(q["wrong"]) == 3 and len({o.lower() for o in options}) == 4, q["id"]
             assert clear_options(options), q["id"]  # options don't read alike, and none is a lone letter
         else:
-            assert typeable(q["question"], q["answer"]), q["id"]  # short, typeable, no symbols like C++ or 13.8
+            assert typeable(q["question"], q["answer"], q["id"]), q["id"]  # short, typeable, no C++ or 13.8
             assert accepted_answers(q["answer"]), q["id"]
             options = []
         assert len(opening(q["category"], q["difficulty"], q["question"], options, 30)) <= 480, q["id"]

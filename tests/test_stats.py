@@ -203,3 +203,12 @@ def test_rng_top_and_best(store: StatsStore):
     assert [r.user_id for r in store.top_rng_rolls(None, 2)] == ["u1", "u2"]
     assert store.best_rng_roll("u1").number == 0
     assert store.best_rng_roll("nobody") is None
+
+
+def test_rng_roll_and_its_round_are_written_together(store: StatsStore):
+    store._conn.execute("CREATE TRIGGER fail BEFORE INSERT ON rounds BEGIN SELECT RAISE(ABORT, 'boom'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.record_rng_roll(_player(points=45), "2026-10-05", 123321, ["Palindrome"], T0)
+    store._conn.execute("DROP TRIGGER fail")
+    assert store.rng_roll("u1", "2026-10-05") is None  # the roll was rolled back with its round
+    assert store.record_rng_roll(_player(points=45), "2026-10-05", 123321, ["Palindrome"], T0)

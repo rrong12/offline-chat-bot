@@ -2084,6 +2084,13 @@
 "answer": "15"
 },
 {
+"id": "95c4855061",
+"category": "general",
+"difficulty": "medium",
+"question": "In what year did Halley's Comet, which will not appear again until the year 2061, previously approach Earth?",
+"answer": "1986"
+},
+{
 "id": "cd164f14b5",
 "category": "general",
 "difficulty": "medium",
@@ -2313,6 +2320,13 @@
 "difficulty": "medium",
 "question": "The Fields Medal, one of the most sought after awards in mathematics, is awarded every how many years?",
 "answer": "4"
+},
+{
+"id": "cc8223f928",
+"category": "general",
+"difficulty": "medium",
+"question": "Death Valley's Badwater Basin is North America's point of lowest elevation at how many feet below sea level?",
+"answer": "282 feet"
 },
 {
 "id": "6f8f129156",
@@ -2581,13 +2595,6 @@
 "answer": "Wasabi"
 },
 {
-"id": "87737bf23e",
-"category": "general",
-"difficulty": "medium",
-"question": "What is the Portuguese word for \"Brazil\"?",
-"answer": "Brasil"
-},
-{
 "id": "36c06af8e7",
 "category": "general",
 "difficulty": "medium",
@@ -2768,6 +2775,13 @@
 "difficulty": "hard",
 "question": "What type of dog is 'Handsome Dan', the mascot of Yale University?",
 "answer": "Bulldog"
+},
+{
+"id": "9a3af53f71",
+"category": "general",
+"difficulty": "hard",
+"question": "Going by the International Code of Signals, which single flag is interpreted as \"I require assistance (not distress)\"?",
+"answer": "Victor"
 },
 {
 "id": "51fd529824",
@@ -3496,18 +3510,6 @@
 "Reinhardt",
 "Sombra",
 "Mercy"
-]
-},
-{
-"id": "6e0ed953fc",
-"category": "games",
-"difficulty": "easy",
-"question": "As of the year 2026, how many known moons does Jupiter have?",
-"answer": "97",
-"wrong": [
-"11",
-"43",
-"104"
 ]
 },
 {
@@ -7693,13 +7695,6 @@
 "answer": "Valkyrie"
 },
 {
-"id": "4edefa5a85",
-"category": "games",
-"difficulty": "medium",
-"question": "Which character is from \"Splatoon\"?",
-"answer": "Marie"
-},
-{
 "id": "3a58ec0031",
 "category": "games",
 "difficulty": "medium",
@@ -8596,6 +8591,13 @@
 "answer": "Shun Akiyama"
 },
 {
+"id": "898fea2e08",
+"category": "games",
+"difficulty": "medium",
+"question": "In which Mario game did the Mega Mushroom make its debut?",
+"answer": "Mario Party 4"
+},
+{
 "id": "76f4a3d010",
 "category": "games",
 "difficulty": "medium",
@@ -8692,13 +8694,6 @@
 "difficulty": "medium",
 "question": "In Call of Duty: United Offensive, what two soldiers share a name of a video game character?",
 "answer": "Gordon & Freeman"
-},
-{
-"id": "6addd9f6e9",
-"category": "games",
-"difficulty": "medium",
-"question": "How much did the indie game \"Cave Story\" cost when it was first released in 2004?",
-"answer": "$0 USD"
 },
 {
 "id": "00b52df6a2",
@@ -9224,13 +9219,6 @@
 "difficulty": "hard",
 "question": "Which monster in \"Monster Hunter Tri\" was causing earthquakes in Moga Village?",
 "answer": "Ceadeus"
-},
-{
-"id": "4ed32265c4",
-"category": "games",
-"difficulty": "hard",
-"question": "Which character, in the game \"Morenatsu\", has the most possible endings to their route, at a total of four different endings?",
-"answer": "Shin Kuroi"
 },
 {
 "id": "8e64cde390",
@@ -11496,6 +11484,13 @@
 "difficulty": "medium",
 "question": "What is the name of the dog that played Toto in the 1939 film \"The Wizard of Oz\"?",
 "answer": "Terry"
+},
+{
+"id": "60cde368d5",
+"category": "movies",
+"difficulty": "medium",
+"question": "What character in the Winnie the Pooh films was added by Disney and does not appear in the original books?",
+"answer": "Gopher"
 },
 {
 "id": "ae919af144",
@@ -13837,13 +13832,6 @@
 "answer": "Flute"
 },
 {
-"id": "0a60a0d744",
-"category": "music",
-"difficulty": "medium",
-"question": "Which Beatle wrote and sang the song \"Why Don't We Do It in the Road\" after being inspired by seeing two monkeys copulating in the street?",
-"answer": "Paul"
-},
-{
 "id": "ee14ea0da9",
 "category": "music",
 "difficulty": "medium",
@@ -14465,6 +14453,13 @@
 "difficulty": "hard",
 "question": "Which year was the album \"Floral Shoppe\" by Macintosh Plus released?",
 "answer": "2011"
+},
+{
+"id": "769ed5ba08",
+"category": "music",
+"difficulty": "hard",
+"question": "What is the first track on the Dave Matthews Band album \"Before These Crowded Streets\"?",
+"answer": "Pantala Naga Pampa"
 },
 {
 "id": "ce7ce5d817",
@@ -16276,18 +16271,6 @@
 ]
 },
 {
-"id": "e41ae996d7",
-"category": "anime",
-"difficulty": "easy",
-"question": "Which of the following originated as a manga?",
-"answer": "Akira",
-"wrong": [
-"Cowboy Bebop",
-"High School DxD",
-"Gurren Lagann"
-]
-},
-{
 "id": "7be80eeb3e",
 "category": "anime",
 "difficulty": "easy",
@@ -18074,6 +18057,13 @@
 "answer": "Puma"
 },
 {
+"id": "e3b9706abe",
+"category": "sports",
+"difficulty": "medium",
+"question": "The 1988 Formula 1 season had McLaren win all but one race, what race did they not win?",
+"answer": "Italian Grand Prix"
+},
+{
 "id": "faa18c936d",
 "category": "sports",
 "difficulty": "medium",
@@ -18123,11 +18113,11 @@
 "answer": "Russia"
 },
 {
-"id": "edee009d10",
+"id": "c39015cf72",
 "category": "sports",
 "difficulty": "medium",
-"question": "Who was the topscorer for England national football team?",
-"answer": "Wayne Rooney"
+"question": "In Formula 1, the Virtual Safety Car was introduced following the fatal crash of which driver?",
+"answer": "Jules Bianchi"
 },
 {
 "id": "d5c86fb8ce",
@@ -21561,6 +21551,13 @@
 "answer": "1F"
 },
 {
+"id": "cbd1fcc6c2",
+"category": "science",
+"difficulty": "hard",
+"question": "The notion of a \"set that contains all sets which do not contain themselves\" is a paradoxical idea attributed to which English philosopher?",
+"answer": "Bertrand Russel"
+},
+{
 "id": "fdc90fc076",
 "category": "science",
 "difficulty": "hard",
@@ -22837,13 +22834,6 @@
 "answer": "New Zealand"
 },
 {
-"id": "1059611032",
-"category": "geography",
-"difficulty": "medium",
-"question": "The US state of New York has about as many inhabitants as?",
-"answer": "Romania"
-},
-{
 "id": "d50309f141",
 "category": "geography",
 "difficulty": "medium",
@@ -23551,13 +23541,6 @@
 "answer": "Ouagadougou"
 },
 {
-"id": "5561256950",
-"category": "geography",
-"difficulty": "hard",
-"question": "What is the name of one of the Neo-Aramaic languages spoken by the Jewish population from Northwestern Iraq?",
-"answer": "Lishana Deni"
-},
-{
 "id": "7fa8c9b584",
 "category": "geography",
 "difficulty": "hard",
@@ -23705,6 +23688,13 @@
 "answer": "Indonesia"
 },
 {
+"id": "1df1830466",
+"category": "geography",
+"difficulty": "hard",
+"question": "The emblem on the flag of the Republic of Tajikistan features a sunrise over mountains below what symbol?",
+"answer": "Crown"
+},
+{
 "id": "bf84cb5b42",
 "category": "geography",
 "difficulty": "hard",
@@ -23773,6 +23763,13 @@
 "difficulty": "hard",
 "question": "What is the tallest mountain in Canada?",
 "answer": "Mount Logan"
+},
+{
+"id": "af81c2f47c",
+"category": "geography",
+"difficulty": "hard",
+"question": "How many countries share a land border with Russia? (Not including disputed territories)",
+"answer": "14"
 },
 {
 "id": "7fa53c97bb",
@@ -24881,13 +24878,6 @@
 "answer": "1901"
 },
 {
-"id": "58c424f37e",
-"category": "history",
-"difficulty": "medium",
-"question": "Who was Hannibal?",
-"answer": "Carthaginian general"
-},
-{
 "id": "6be7ff5a07",
 "category": "history",
 "difficulty": "medium",
@@ -24977,13 +24967,6 @@
 "difficulty": "medium",
 "question": "What happened on June 6, 1944?",
 "answer": "D-Day"
-},
-{
-"id": "9ea627bce0",
-"category": "history",
-"difficulty": "medium",
-"question": "Where was Portuguese explorer Ferdinand Magellan killed in 1521?",
-"answer": "The Phillipines"
 },
 {
 "id": "f335983d6c",
@@ -25126,13 +25109,6 @@
 "answer": "Chile"
 },
 {
-"id": "2a4bb44099",
-"category": "history",
-"difficulty": "medium",
-"question": "What were the first states to break away from Yugoslavia?",
-"answer": "Slovenia, Croatia"
-},
-{
 "id": "8aa90a9310",
 "category": "history",
 "difficulty": "medium",
@@ -25236,13 +25212,6 @@
 "difficulty": "medium",
 "question": "In relation to the British Occupation in Ireland, what does the IRA stand for.",
 "answer": "Irish Republican Army"
-},
-{
-"id": "8c394874bc",
-"category": "history",
-"difficulty": "medium",
-"question": "The fraudelent doctor John R. Brinkley acummulated great fame and wealth in the early 1900s offering what service?",
-"answer": "Goat testicles transplant"
 },
 {
 "id": "7deb2933ed",
@@ -25593,13 +25562,6 @@
 "difficulty": "medium",
 "question": "Which of his six wives was Henry VIII married to the longest?",
 "answer": "Catherine of Aragon"
-},
-{
-"id": "975a5db97b",
-"category": "history",
-"difficulty": "medium",
-"question": "Which country was an allied power in World War II?",
-"answer": "Soviet Union"
 },
 {
 "id": "f00ecb5b1a",
@@ -26176,13 +26138,6 @@
 "answer": "1808"
 },
 {
-"id": "9b1d123380",
-"category": "history",
-"difficulty": "hard",
-"question": "The son of which pope supposedly held a lecherous fête involving 50 courtesans in the papal palace?",
-"answer": "Alexander VI"
-},
-{
 "id": "2c9a739fc2",
 "category": "history",
 "difficulty": "hard",
@@ -26570,13 +26525,6 @@
 "difficulty": "medium",
 "question": "A carnivorous animal eats flesh, what does a nucivorous animal eat?",
 "answer": "Nuts"
-},
-{
-"id": "c51570b283",
-"category": "animals",
-"difficulty": "medium",
-"question": "What dog breed is one of the oldest breeds of dog and has flourished since before 400 BCE.",
-"answer": "Pugs"
 },
 {
 "id": "12cf0b4e64",

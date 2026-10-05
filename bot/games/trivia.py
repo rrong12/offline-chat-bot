@@ -17,17 +17,29 @@ from bot.text import fold_accents, normalize, strip_article, typo_match
 LETTERS = "ABCD"
 TYPO_MIN_LETTERS = 5  # words this long forgive one typo; shorter words and numbers must be exact
 _PARENTHETICAL = re.compile(r"\s*\(([^)]*)\)")
-_NUMBER_WITH_UNIT = re.compile(r"^\s*(\d[\d,]*)\s+[A-Za-z][A-Za-z.]*(?:\s+[A-Za-z.]+)?\s*$")  # "88 mph"
+_NUMBER_WITH_UNIT = re.compile(r"^\s*(\d[\d,]*)\s*'?s?\s+[A-Za-z][A-Za-z./]*(?:\s+[A-Za-z./]+)?\s*$")  # 88 mph
+_DECADE = re.compile(r"^\s*(\d+)'?s\s*$")  # "50's", "1980s"
 _ORDINAL = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
-# Same meaning, different spelling: number words, Roman numerals II-XX (single letters are too ambiguous).
+_APOSTROPHES = re.compile("['\u2018\u2019`]")  # removed inside words: "Xi'an" is "xian", not the numeral XI
+_UNITS = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen " \
+         "sixteen seventeen eighteen nineteen twenty".split()
+_TENS = {w: 10 * n for n, w in enumerate("thirty forty fifty sixty seventy eighty ninety".split(), start=3)}
+_ORDINAL_WORDS = "first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth " \
+                 "fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth twentieth".split()
+# Same meaning, different spelling: number words, ordinals, Roman numerals II-XX (single letters are too ambiguous).
 _CANONICAL = {
-    **{w: str(n) for n, w in enumerate(
-        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
-        "sixteen seventeen eighteen nineteen twenty".split())},
+    **{w: str(n) for n, w in enumerate(_UNITS)},
+    **{w: str(n) for w, n in _TENS.items()},
+    **{w: str(n) for n, w in enumerate(_ORDINAL_WORDS, start=1)},
     **{r: str(n) for n, r in enumerate(
-        "_ _ ii iii iv _ vi vii viii ix _ xi xii xiii xiv xv xvi xvii xviii xix xx".split()) if r != "_"},
+        "- - ii iii iv - vi vii viii ix - xi xii xiii xiv xv xvi xvii xviii xix xx".split()) if r != "-"},
     "mt": "mount",
+    "st": "saint",
+    "ww1": "world war 1", "wwi": "world war 1", "ww2": "world war 2", "wwii": "world war 2",
 }
+_PHRASES = {"first world war": "world war 1", "second world war": "world war 2"}
+_TITLES = frozenset("sir dame count countess professor prof pope officer doctor dr captain lord lady".split())
+_PARTICLES = frozenset("van von de del della da di du la le".split())
 
 
 def _questions(assets: Assets) -> list[dict[str, Any]]:
@@ -35,9 +47,18 @@ def _questions(assets: Assets) -> list[dict[str, Any]]:
 
 
 def _canonical(text: str) -> str:
-    words = fold_accents(normalize(text.replace("&", " and "))).split()
-    words = [_CANONICAL.get(w, w) for w in words]
-    return " ".join(m.group(1) if (m := _ORDINAL.match(w)) else w for w in words)
+    words = fold_accents(normalize(_APOSTROPHES.sub("", text.replace("&", " and ")))).split()
+    joined = " ".join(words)
+    for phrase, same in _PHRASES.items():
+        joined = joined.replace(phrase, same)
+    out: list[str] = []
+    for w in " ".join(_CANONICAL.get(w, w) for w in joined.split()).split():
+        w = m.group(1) if (m := _ORDINAL.match(w)) else w
+        if out and out[-1] in {str(n) for n in _TENS.values()} and w.isdigit() and len(w) == 1 and w != "0":
+            out[-1] = str(int(out[-1]) + int(w))  # "fifty seven" -> 57
+        else:
+            out.append(w)
+    return " ".join(out)
 
 
 def _forms(text: str) -> set[str]:
@@ -53,21 +74,26 @@ def accepted_answers(answer: str, question: str = "") -> set[str]:
     inner = _PARENTHETICAL.search(answer)
     if inner and not re.search(r"[A-Za-z0-9]", outside):  # "Φ (phi)": the bracket is the typeable part
         variants.add(inner.group(1))
-    if "," in outside:  # "Cupertino, California" -> "Cupertino"
-        variants.add(outside.split(",")[0])
-    if m := _NUMBER_WITH_UNIT.match(outside):  # "88 mph" -> "88"
+    place = re.fullmatch(r"\s*([^,\d]*[A-Za-z]{3}[^,\d]*),\s*((?:the\s+\w|[A-Z])[^,]*)", outside)
+    if place:  # "Cupertino, California" -> "Cupertino", "Laika, the dog" -> "Laika"; not "1,776 ft" or lists
+        variants.add(place.group(1))
+    if (m := _NUMBER_WITH_UNIT.match(outside)) or (m := _DECADE.match(outside)):  # "88 mph" -> "88"
         variants.add(m.group(1).replace(",", ""))
     forms = set().union(*(_forms(v) for v in variants))
     for form in list(forms):
         words = form.split()
-        if len(words) >= 3:  # "harry s truman" -> "harry truman"
-            forms.add(" ".join([words[0], *(w for w in words[1:-1] if len(w) > 1), words[-1]]))
+        if len(words) >= 3:  # "harry s truman" -> "harry truman" (letters only: "class 3 e" keeps its 3)
+            forms.add(" ".join([words[0], *(w for w in words[1:-1] if not (len(w) == 1 and w.isalpha())), words[-1]]))
         if words[:1] == ["mount"] and len(words) > 1:  # "Mt. Everest" -> "everest"
             forms.add(" ".join(words[1:]))
-    person = re.match(r"(?i)\s*who\b", question)
-    name_words = _PARENTHETICAL.sub("", answer).split()
-    if person and 2 <= len(name_words) <= 3 and len(name_words[-1]) >= 4:  # "Who directed ...?" -> "miyazaki"
-        forms |= _forms(name_words[-1])
+        if words[:1] and words[0] in _TITLES and len(words) > 1:  # "Sir Alex Ferguson" -> "alex ferguson"
+            forms.add(" ".join(words[1:]))
+    if re.match(r"(?i)\s*who\b", question):  # "Who directed ...?" -> "miyazaki", "van halen"
+        name = _canonical(_PARENTHETICAL.sub("", answer)).split()
+        if 2 <= len(name) <= 4 and len(name[-1]) >= 4:
+            forms.add(name[-1])
+            if name[-2] in _PARTICLES:
+                forms.add(" ".join(name[-2:]))
     return forms
 
 
@@ -140,7 +166,10 @@ class Trivia(Game):
         self.guesses_left = self.GUESSES
         self.hints_used = 0
         self._told_how = False  # the "answer with A-D" reminder is sent at most once
-        self._hint_text = _PARENTHETICAL.sub("", self.answer).strip() or self.answer  # hints skip "(Clown)"
+        outside = _PARENTHETICAL.sub("", self.answer).strip()
+        inner = _PARENTHETICAL.search(self.answer)
+        # hints describe what's typed: skip "(Clown)", but use "phi" for "Φ (phi)"
+        self._hint_text = inner.group(1) if inner and not re.search(r"[A-Za-z0-9]", outside) else outside or self.answer
         letters = [i for i, ch in enumerate(self._hint_text) if ch.isalnum()]
         middle = letters[1:-1]
         rng.shuffle(middle)
@@ -206,6 +235,9 @@ class Trivia(Game):
 
     def _hint(self) -> Outcome | None:
         text = self._hint_text
+        number = _NUMBER_WITH_UNIT.match(text) or _DECADE.match(text)  # "7 years": the number is the answer
+        if number:
+            text = number.group(1)
         chars = [ch for ch in text if ch.isalnum()]
         short = len(chars) <= 2 or text.replace(",", "").isdigit()  # "starts with 8" would give these away
         if self.easy or self.hints_used >= (1 if short else len(self.POINTS[self.level]) - 1):

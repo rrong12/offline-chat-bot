@@ -4,7 +4,7 @@
 # A later script fetches each title's English Wikipedia monthly page views. Do not reorder
 # fields. Keep display names short (<=30 chars) and free of disambiguation text.
 
-# --- games (60) ---
+# --- games ---
 Minecraft|Minecraft|games
 Fortnite|Fortnite|games
 Roblox|Roblox|games
@@ -18,7 +18,7 @@ Counter-Strike|Counter-Strike 2|games
 Rainbow Six Siege|Tom Clancy's Rainbow Six Siege|games
 Super Mario Bros.|Super Mario Bros.|games
 The Legend of Zelda|The Legend of Zelda|games
-Pokemon|Pokémon|games
+Pokémon|Pokémon|games
 Animal Crossing|Animal Crossing|games
 Super Smash Bros.|Super Smash Bros.|games
 Mario Kart|Mario Kart|games
@@ -52,7 +52,7 @@ Pac-Man|Pac-Man|games
 Donkey Kong|Donkey Kong|games
 Street Fighter|Street Fighter|games
 Mortal Kombat|Mortal Kombat|games
-FIFA|FIFA (video game series)|games
+FIFA (video games)|FIFA (video game series)|games
 NBA 2K|NBA 2K|games
 Madden NFL|Madden NFL|games
 Splatoon|Splatoon|games
@@ -66,11 +66,10 @@ Clash Royale|Clash Royale|games
 Brawl Stars|Brawl Stars|games
 Angry Birds|Angry Birds|games
 
-# --- streamers (40) ---
+# --- streamers ---
 Kai Cenat|Kai Cenat|streamers
 xQc|xQc|streamers
 Pokimane|Pokimane|streamers
-Ninja|Ninja (Internet personality)|streamers
 Dream|Dream (YouTuber)|streamers
 Technoblade|Technoblade|streamers
 Shroud|Shroud (streamer)|streamers
@@ -89,7 +88,6 @@ Wilbur Soot|Wilbur Soot|streamers
 Quackity|Quackity|streamers
 TommyInnit|TommyInnit|streamers
 Summit1g|Summit1g|streamers
-LIRIK|LIRIK|streamers
 Forsen|Forsen|streamers
 Nadeshot|Nadeshot|streamers
 FaZe Rug|FaZe Rug|streamers
@@ -106,11 +104,11 @@ DrLupo|DrLupo|streamers
 Tfue|Tfue|streamers
 Jerma985|Jerma985|streamers
 
-# --- celebrities: musicians, actors, athletes, internet personalities (60) ---
+# --- celebrities: musicians, actors, athletes, internet personalities ---
 Taylor Swift|Taylor Swift|celebrities
 Drake|Drake (musician)|celebrities
 Ariana Grande|Ariana Grande|celebrities
-Beyonce|Beyoncé|celebrities
+Beyoncé|Beyoncé|celebrities
 Ed Sheeran|Ed Sheeran|celebrities
 Billie Eilish|Billie Eilish|celebrities
 The Weeknd|The Weeknd|celebrities
@@ -168,7 +166,7 @@ Addison Rae|Addison Rae|celebrities
 Zach King|Zach King|celebrities
 Liza Koshy|Liza Koshy|celebrities
 
-# --- food (50) ---
+# --- food ---
 Pizza|Pizza|food
 Sushi|Sushi|food
 Hamburger|Hamburger|food
@@ -220,7 +218,7 @@ Apple|Apple|food
 Pineapple|Pineapple|food
 Peanut Butter|Peanut butter|food
 
-# --- brands (50) ---
+# --- brands ---
 YouTube|YouTube|brands
 Google|Google|brands
 Amazon|Amazon (company)|brands
@@ -272,7 +270,7 @@ Taco Bell|Taco Bell|brands
 Wendy's|Wendy's|brands
 Dunkin'|Dunkin'|brands
 
-# --- animals (50) ---
+# --- animals ---
 Dog|Dog|animals
 Cat|Cat|animals
 Lion|Lion|animals
@@ -324,7 +322,7 @@ Crab|Crab|animals
 Turtle|Turtle|animals
 Snake|Snake|animals
 
-# --- countries (40) ---
+# --- countries ---
 United States|United States|countries
 Canada|Canada|countries
 Mexico|Mexico|countries
@@ -366,24 +364,24 @@ Indonesia|Indonesia|countries
 Jamaica|Jamaica|countries
 Cuba|Cuba|countries
 
-# --- movies (40) ---
-Titanic|Titanic (1997 film)|movies
+# --- movies ---
+Titanic (the movie)|Titanic (1997 film)|movies
 The Avengers|The Avengers (2012 film)|movies
 Avengers: Endgame|Avengers: Endgame|movies
 Spider-Man: No Way Home|Spider-Man: No Way Home|movies
-Star Wars|Star Wars (film)|movies
+Star Wars|Star Wars|movies
 The Lion King|The Lion King (1994 film)|movies
 Frozen|Frozen (2013 film)|movies
 Shrek|Shrek|movies
 The Dark Knight|The Dark Knight|movies
 Jurassic Park|Jurassic Park (film)|movies
-Harry Potter|Harry Potter and the Philosopher's Stone (film)|movies
+Harry Potter|Harry Potter|movies
 Toy Story|Toy Story|movies
 Finding Nemo|Finding Nemo|movies
 The Matrix|The Matrix|movies
 Inception|Inception|movies
-Deadpool|Deadpool (film)|movies
-Barbie|Barbie (film)|movies
+Deadpool (the movie)|Deadpool (film)|movies
+Barbie (the movie)|Barbie (film)|movies
 Oppenheimer|Oppenheimer (film)|movies
 Minions|Minions (film)|movies
 Despicable Me|Despicable Me|movies
@@ -393,22 +391,22 @@ Coco|Coco (2017 film)|movies
 Up (the movie)|Up (2009 film)|movies
 The Incredibles|The Incredibles|movies
 Cars|Cars (film)|movies
-Ratatouille|Ratatouille (film)|movies
+Ratatouille (the movie)|Ratatouille (film)|movies
 WALL-E|WALL-E|movies
 Inside Out|Inside Out (2015 film)|movies
 Guardians of the Galaxy|Guardians of the Galaxy (film)|movies
-Black Panther|Black Panther (film)|movies
-Iron Man|Iron Man (2008 film)|movies
-Joker|Joker (2019 film)|movies
+Black Panther (the movie)|Black Panther (film)|movies
+Iron Man (the movie)|Iron Man (2008 film)|movies
+Joker (the movie)|Joker (2019 film)|movies
 It (the movie)|It (2017 film)|movies
-Venom|Venom (2018 film)|movies
+Venom (the movie)|Venom (2018 film)|movies
 The Super Mario Bros. Movie|The Super Mario Bros. Movie|movies
 Jaws|Jaws (film)|movies
 E.T. the Extra-Terrestrial|E.T. the Extra-Terrestrial|movies
 Home Alone|Home Alone|movies
 Night at the Museum|Night at the Museum|movies
 
-# --- tv (30, incl. anime) ---
+# --- tv ---
 The Office|The Office (American TV series)|tv
 Friends|Friends|tv
 Breaking Bad|Breaking Bad|tv
@@ -432,7 +430,7 @@ How I Met Your Mother|How I Met Your Mother|tv
 Brooklyn Nine-Nine|Brooklyn Nine-Nine|tv
 Grey's Anatomy|Grey's Anatomy|tv
 The Mandalorian|The Mandalorian|tv
-Wednesday|Wednesday (TV series)|tv
+Wednesday (TV show)|Wednesday (TV series)|tv
 Squid Game|Squid Game|tv
 The Boys|The Boys (TV series)|tv
 Doctor Who|Doctor Who|tv
@@ -440,7 +438,7 @@ The Walking Dead|The Walking Dead (TV series)|tv
 Cobra Kai|Cobra Kai|tv
 Suits|Suits (American TV series)|tv
 
-# --- sports (20, sports/leagues/events, not people) ---
+# --- sports ---
 Basketball|Basketball|sports
 Soccer|Association football|sports
 American Football|American football|sports

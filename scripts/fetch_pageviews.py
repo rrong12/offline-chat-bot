@@ -27,7 +27,7 @@ USER_AGENT = "offline-chat-bot/0.1 (https://github.com/rrong12/offline-chat-bot)
 ACTION_API = "https://en.wikipedia.org/w/api.php"
 VIEWS_API = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user"
 REVIEW_BELOW = 3000  # monthly views this low usually mean the wrong article
-MIN_TERMS = 100
+MAX_FAILURES = 0.05  # if more terms than this fail, keep the old file rather than lose them
 
 
 def get(url: str) -> dict:
@@ -110,8 +110,8 @@ def main() -> None:
         time.sleep(1.0)  # stay well under Wikimedia's rate limit
     for problem in problems:
         print("  " + problem)
-    if len(terms) < MIN_TERMS:  # don't overwrite good data with a failed run
-        sys.exit(f"only {len(terms)} terms found; {OUT} left unchanged")
+    if len(terms) < (1 - MAX_FAILURES) * len(rows):  # don't overwrite good data with a failed run
+        sys.exit(f"only {len(terms)} of {len(rows)} terms found; {OUT} left unchanged")
     payload = {
         "source": "English Wikipedia page views (Wikimedia REST API), user agents only",
         "month": f"{start:%Y-%m}",

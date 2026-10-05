@@ -126,6 +126,28 @@ Family Feud was dropped (Robert, 2026-10-04), so Phase 2 needs no chat-wide game
 - **Flow tests through the console connector:** one full game of each.
 - **Live:** added to the Phase 1 live checklist the next time it's run.
 
-## 8. Out of scope
+## 8. Changes made while building (2026-10-05)
+
+Reviews of the built games led to these refinements; the plan's execution log has the details.
+
+- **No repeats:** remembered in memory since the bot started. When a small pool is used up, the
+  question seen longest ago comes back, never the one just played.
+- **Trivia question bank:** about 2,980 questions after removing mature topics (drugs, alcohol,
+  tobacco, sexual themes, self-harm), questions that need their options shown, typed answers that
+  can't be typed fairly (symbols like C++, decimals, dates, long numbers), duplicates, and questions
+  checked and found wrong or out of date. `?help trivia` names Open Trivia DB and the license.
+- **Trivia matching:** typo tolerance only inside a word of 5+ letters and never on the first letter;
+  numbers, one-letter words and Roman numerals must be exact. Natural variants count: "Cupertino" for
+  "Cupertino, California", "88" for "88 mph", "3" for "Three", "WW2" for "World War II", the surname
+  for "Who..." questions, a name without its title or middle initial.
+- **Riddle matching:** a guess wins if it names an accepted answer; filler words ("I think it's a")
+  and words from the riddle don't make it a list, but naming other answers, "either or", a negation
+  ("not a clock"), a different number, or another letter (for the letter riddles) doesn't win.
+- **Higher or Lower:** a streak of 5 or more counts as a win in `?gamestats`; display names say
+  what's meant when ambiguous ("Venom (the movie)").
+- **Starting games:** a game without options ignores extra words (`?hl lets go`); `?leaderboard hl`
+  works.
+
+## 9. Out of scope
 
 Chat-wide games, Family Feud, live API calls during play, and `?rng`, `?ascii`, `?chatsummary` (Phases 3 and 4).

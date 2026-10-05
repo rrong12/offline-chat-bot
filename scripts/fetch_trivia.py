@@ -50,8 +50,9 @@ DIFFICULTIES = ("easy", "medium", "hard")
 # Typed questions must make sense without seeing the options ("Which is not a country in Africa?").
 NEEDS_OPTIONS = re.compile(r"\b(?:these|following|below|above|not|except|none of)\b", re.IGNORECASE)
 # Typed answers nobody types the same way twice: dates with a month, long numbers, approximate figures.
-MONTH_DATE = re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b.*\d|\d.*\b(?:jan|feb|mar"
-                        r"|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.IGNORECASE)
+_MONTH = (r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?"
+          r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b")  # whole month names only: not "Mario Party 4"
+MONTH_DATE = re.compile(rf"{_MONTH}.*\d|\d.*{_MONTH}", re.IGNORECASE)
 LONG_NUMBER = re.compile(r"\d{5,}")
 APPROXIMATE = re.compile(r"\b(?:approximately|roughly|about how|around how|estimated)\b", re.IGNORECASE)
 # Topics that don't belong in a young, family-friendly chat, beyond the blocked-word list: drugs, alcohol,
@@ -59,14 +60,23 @@ APPROXIMATE = re.compile(r"\b(?:approximately|roughly|about how|around how|estim
 MATURE_TOPICS = re.compile(
     r"\b(?:cocaine|heroin|cannabis|marijuana|thc|weed|drugs?|cartel|overdose|beer|brewery|vodka|whisk(?:e)?y|rum"
     r"|cocktails?|alcohol(?:ic)?|liquor|drunk|tobacco|cigarettes?|smoking|sex(?:ual|y)?|breasts?|harem|hot coffee"
-    r"|stripper|suicide|kill (?:themselves|himself|herself|yourself)|schutzstaffel|to love-ru|highschool dxd"
-    r"|highschool of the dead)\b",
+    r"|stripper|suicide|kill (?:themselves|himself|herself|yourself)|schutzstaffel|to love-ru"
+    r"|high ?school (?:dxd|of the dead)|copulat\w*|courtesans?|testicles?|morenatsu)\b",
     re.IGNORECASE,
 )
 # Checked and wrong, garbled, or out of date (see docs/superpowers/plans, Phase 2 execution log).
 EXCLUDED_IDS = frozenset({
     "4be33db662", "5efa52ea29", "0d5228c649", "ac2967fc00", "0508b9f490", "358cd17e26", "01495b878f",
     "7732c495a3", "96ae8a7764", "5db409db5a",
+    # second review: mature, need their options, out of date, unwinnable or too loose as typed questions
+    "0a60a0d744", "9b1d123380", "8c394874bc", "4ed32265c4", "4edefa5a85", "975a5db97b", "c51570b283",
+    "1059611032", "5561256950", "edee009d10", "6e0ed953fc", "9ea627bce0", "6addd9f6e9", "87737bf23e",
+    "58c424f37e", "2a4bb44099",
+})
+# Checked by hand: typed questions the "needs its options" or date filter would wrongly drop.
+KEEP_IDS = frozenset({
+    "95c4855061", "cc8223f928", "9a3af53f71", "60cde368d5", "e3b9706abe", "c39015cf72", "1df1830466",
+    "af81c2f47c", "cbd1fcc6c2", "769ed5ba08",
 })
 MAX_TYPED_WORDS = 3
 MAX_TYPED_CHARS = 25
@@ -96,8 +106,9 @@ def clean(text: str) -> str:
     return " ".join(strip_invisible(text).split())
 
 
-def typeable(question: str, answer: str) -> bool:
+def typeable(question: str, answer: str, qid: str = "") -> bool:
     lowered = question.lower()
+    reviewed = qid in KEEP_IDS
     return (
         len(answer.split()) <= MAX_TYPED_WORDS
         and len(answer) <= MAX_TYPED_CHARS
@@ -106,7 +117,7 @@ def typeable(question: str, answer: str) -> bool:
         and not MONTH_DATE.search(answer)
         and not LONG_NUMBER.search(answer.replace(",", ""))
         and not (APPROXIMATE.search(lowered) and re.search(r"\d", answer))
-        and not NEEDS_OPTIONS.search(question)
+        and (reviewed or not NEEDS_OPTIONS.search(question))
     )
 
 
@@ -129,7 +140,7 @@ def keep(entry: dict, blocked: BlockedWords) -> bool:
     if entry["difficulty"] == "easy":
         options = [answer, *entry["wrong"]]
         return sum(len(t) + 4 for t in options) + len(question) <= MAX_EASY_TEXT and clear_options(options)
-    return typeable(question, answer)
+    return typeable(question, answer, entry["id"])
 
 
 def fetch_all(token: str, category_id: int, difficulty: str) -> list[dict]:

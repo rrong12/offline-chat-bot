@@ -505,3 +505,16 @@ async def test_rng_roll_counts_on_the_main_leaderboard(bot: Bot):
     await bot.wait(6)  # ?leaderboard has a 5 s chat-wide cooldown
     await bot.say("dave: ?leaderboard")
     assert bot.out[-1] == "🏆 Top 1 overall: 1. alice (5)"
+
+
+async def test_rng_subcommands_through_the_bot(bot: Bot):
+    await bot.say("alice: ?rng")
+    await bot.say("bob: ?rng alice")
+    assert bot.out[-1] == "🎲 alice: today 140,891 (5 pts) · best ever 140,891 (5 pts)"
+    await bot.say("carol: ?rng today")
+    assert bot.out[-1] == "🎲 Today's best rolls: 1. alice 140,891 (5)"
+    await bot.say("dave: ?rng top")
+    assert bot.out[-1] == "🎲 Best rolls ever: 1. alice 140,891 (5)"
+    await bot.wait(11)  # alice's per-user cooldown on ?rng
+    await bot.say("alice: ?rng me")
+    assert bot.out[-1] == "🎲 alice: today 140,891 (5 pts) · best ever 140,891 (5 pts)"

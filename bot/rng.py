@@ -1,8 +1,9 @@
 """?rng: one roll per person per UTC day, from 0 to 1,000,000, scored by badges.
 
 Badge tiers follow each badge's real rarity over all 1,000,001 numbers (see tests/test_rng.py):
-legendary about 1 in 100,000 or rarer, rare 1 in 1,000 or rarer, uncommon up to about 1 in 50,
-common the rest. A roll earns every badge it matches; its score is the sum.
+legendary about 1 in 100,000 or rarer, rare 1 in 1,000 or rarer, uncommon up to about 1 in 40,
+common the rest. Numbers are scored and shown as six digits with leading zeros ("001,337"), so the
+zeros that earn a badge are visible. A roll earns every badge it matches; its score is the sum.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from bot.text import clean_username, format_duration
 
 MAX_ROLL = 1_000_000
 TOP_LIMIT = 5
+SHARED_COOLDOWN = 5.0  # seconds: ?rng today/top give everyone the same reply, so they're limited chat-wide
 TIER_POINTS = {"legendary": 100, "rare": 40, "uncommon": 15, "common": 5}
 STRAIGHTS = {"012345", "123456", "234567", "345678", "456789", "987654", "876543", "765432", "654321", "543210"}
 
@@ -94,7 +96,7 @@ BADGES: tuple[Badge, ...] = (
     Badge("All even digits", "uncommon", lambda n, s: all(ch in "02468" for ch in s)),
     Badge("All odd digits", "uncommon", lambda n, s: all(ch in "13579" for ch in s)),
     Badge(  # five of the six digits read the same backwards
-        "Near palindrome", "uncommon",
+        "Five-digit palindrome", "uncommon",
         lambda n, s: n < MAX_ROLL and s != s[::-1] and (s[:5] == s[4::-1] or s[1:] == s[:0:-1]),
     ),
     Badge("Triple", "common", lambda n, s: _longest_run(s) == 3),
@@ -113,69 +115,87 @@ def badges_for(number: int, meme_badges: bool = True) -> list[Badge]:
     return sorted(earned, key=lambda b: -b.points)
 
 
+def show(number: int) -> str:
+    """The roll as players see it: six digits, so leading zeros that earn badges are visible."""
+    if number >= MAX_ROLL:
+        return f"{number:,}"
+    digits = f"{number:06d}"
+    return f"{digits[:3]},{digits[3:]}"
+
+
 def _describe(roll: RngRoll) -> str:
-    return f"{roll.number:,} ({roll.score} pts)"
+    return f"{show(roll.number)} ({roll.score} pts)"
 
 
 def register_rng(
     registry: CommandRegistry, *, stats: StatsStore, clock: Clock, rng: random.Random, meme_badges: bool
 ) -> None:
-    def today() -> str:
-        return clock.now().date().isoformat()
+    last_shared: dict[str, float] = {}  # "today"/"top" -> when that reply last went out (monotonic)
 
-    def until_reset() -> str:
-        now = clock.now()
+    def until_reset(now: datetime) -> str:
         midnight = datetime.combine(now.date() + timedelta(days=1), time(0), tzinfo=timezone.utc)
         return format_duration((midnight - now).total_seconds())
 
-    def roll(ctx: CommandContext) -> None:
+    def roll(ctx: CommandContext, now: datetime, day: str) -> None:
         uid = ctx.msg.user_id
-        existing = stats.rng_roll(uid, today())
+        existing = stats.rng_roll(uid, day)
         if existing is None:
             number = rng.randint(0, MAX_ROLL)
             earned = badges_for(number, meme_badges)
             score = sum(b.points for b in earned)
             player = PlayerResult(uid, ctx.msg.login, ctx.msg.display_name, score, False)
-            if stats.record_rng_roll(player, today(), number, [b.name for b in earned], clock.now()):
+            if stats.record_rng_roll(player, day, number, [b.name for b in earned], now):
                 parts = [f"🏅 {b.name} ({b.tier}, {b.points})" for b in earned]
                 tail = " · ".join([*parts, f"{score} pts"]) if earned else "no badges this time"
-                ctx.reply(f"🎲 {ctx.msg.display_name} rolled {number:,} · {tail}")
+                ctx.reply(f"🎲 {ctx.msg.display_name} rolled {show(number)} · {tail}")
                 return
-            existing = stats.rng_roll(uid, today())  # rolled at the same moment in another message
-        assert existing is not None
-        ctx.reply(f"🎲 You already rolled {_describe(existing)} today. Next roll in {until_reset()} (00:00 UTC).")
+            existing = stats.rng_roll(uid, day)  # rolled at the same moment in another message
+        if existing is not None:
+            wait = until_reset(now)
+            ctx.reply(f"🎲 You already rolled {_describe(existing)} today. Next roll in {wait} (00:00 UTC).")
 
-    def player_summary(user_id: str, name: str) -> str | None:
+    def player_summary(user_id: str, name: str, day: str) -> str | None:
         best = stats.best_rng_roll(user_id)
         if best is None:
             return None
-        current = stats.rng_roll(user_id, today())
+        current = stats.rng_roll(user_id, day)
         today_text = f"today {_describe(current)}" if current else "no roll today yet"
         return f"🎲 {name}: {today_text} · best ever {_describe(best)}"
 
-    def top(day: str | None, label: str) -> str:
+    def top(day: str | None, label: str) -> str | None:
+        key = "today" if day else "top"
+        if clock.mono() - last_shared.get(key, -SHARED_COOLDOWN) < SHARED_COOLDOWN:
+            return None
+        last_shared[key] = clock.mono()
         rows = stats.top_rng_rolls(day, TOP_LIMIT)
         if not rows:
             return f"No rolls {'today' if day else 'yet'}."
-        body = " ".join(f"{i}. {r.display_name} {r.number:,} ({r.score})" for i, r in enumerate(rows, start=1))
+        body = " ".join(f"{i}. {r.display_name} {show(r.number)} ({r.score})" for i, r in enumerate(rows, start=1))
         return f"🎲 {label}: {body}"
 
     async def rng_command(ctx: CommandContext) -> None:
+        now = clock.now()  # read once, so a roll at midnight can't be checked on one day and stored on the next
+        day = now.date().isoformat()
         arg = ctx.argv[0].lower() if ctx.argv else ""
+        reply: str | None
         if not arg:
-            roll(ctx)
-        elif arg == "today":
-            ctx.reply(top(today(), "Today's best rolls"))
-        elif arg == "top":
-            ctx.reply(top(None, "Best rolls ever"))
+            roll(ctx, now, day)
+            return
+        if arg in ("today", "top"):
+            reply = top(day if arg == "today" else None, "Today's best rolls" if arg == "today" else "Best rolls ever")
         elif arg == "me":
-            summary = player_summary(ctx.msg.user_id, ctx.msg.display_name)
-            ctx.reply(summary or f"You haven't rolled yet. Try {ctx.prefix}rng.")
+            reply = player_summary(ctx.msg.user_id, ctx.msg.display_name, day)
+            reply = reply or f"You haven't rolled yet. Try {ctx.prefix}rng."
+        elif arg == "help":
+            reply = f"Try {ctx.prefix}rng, {ctx.prefix}rng me, {ctx.prefix}rng today, {ctx.prefix}rng top or " \
+                    f"{ctx.prefix}rng <username>."
         else:
             login = clean_username(ctx.argv[0])
             user = stats.find_user(login) if login else None
-            summary = player_summary(user.user_id, user.display_name) if user else None
-            ctx.reply(summary or "No rolls for that user yet.")  # never repeat the name the user typed
+            reply = player_summary(user.user_id, user.display_name, day) if user else None
+            reply = reply or "No rolls for that user yet."  # never repeat the name the user typed
+        if reply:
+            ctx.reply(reply)
 
     registry.add(
         Command(

@@ -49,13 +49,18 @@ def test_wrong_answer_ends_the_game_with_the_streak_as_points(assets):
     g(game, right(game))
     out = g(game, wrong(game))
     assert out.finished and out.result == "lost" and out.awards == {"id-alice": 2} and out.winners == set()
-    assert out.messages[0].endswith("Game over, streak 2 (+2)")
+    assert out.messages[0].endswith("Game over, streak 2 (+2).")
 
 
 def test_wrong_first_answer_scores_nothing(assets):
     game = make(assets)
     out = g(game, wrong(game))
-    assert out.finished and out.awards == {}
+    assert out.finished and out.awards == {} and out.messages[0].endswith(". Game over.")
+
+
+def test_up_and_down_work_too(assets):
+    game = make(assets)
+    assert g(game, "up" if right(game) == "higher" else "down").restart_timer
 
 
 def test_using_up_every_term_wins(assets):

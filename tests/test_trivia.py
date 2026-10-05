@@ -163,6 +163,16 @@ def test_typed_matching_rules(tmp_path, answer, guess, right):
     ("Mt. Everest", "mount everest"),
     ("Paris (France)", "paris"),
     ("Φ (phi)", "phi"),
+    ("Laika, the dog", "laika"),
+    ("World War II", "ww2"),
+    ("Second World War", "world war 2"),
+    ("Sir Alex Ferguson", "alex ferguson"),
+    ("Pope Leo III", "leo iii"),
+    ("Fifty-Seven", "57"),
+    ("Third", "3rd"),
+    ("1000 km/h", "1000"),
+    ("Xi'an", "xian"),
+    ("Ole Gunnar Solskjær", "ole gunnar solskjaer"),
 ])
 def test_natural_variants_of_the_answer_count(tmp_path, answer, guess):
     assert g(one_question(tmp_path, answer), guess).result == "won"
@@ -228,3 +238,34 @@ def test_who_questions_accept_the_surname(tmp_path):
 
 def test_help_credits_open_trivia_db():
     assert "Open Trivia DB, CC BY-SA 4.0" in Trivia.description
+
+
+@pytest.mark.parametrize("answer, guess", [
+    ("1,776 ft", "1"),  # the comma rule is for "City, Region", not numbers
+    ("Oh, Inverted World", "oh"),
+    ("2, 3, 1", "2"),
+    ("low, all", "low"),
+    ("Class 3-E", "class e"),  # only middle letters can be dropped, not numbers
+])
+def test_partial_answers_dont_win(tmp_path, answer, guess):
+    assert g(one_question(tmp_path, answer), guess).result != "won"
+
+
+def test_surname_with_a_particle(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir()
+    q = {"id": "x", "category": "music", "difficulty": "medium", "question": "Who founded the band?",
+         "answer": "Eddie Van Halen"}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    assert g(Trivia("music", random.Random(1), Assets(root), level="medium"), "van halen").result == "won"
+
+
+@pytest.mark.parametrize("answer, hint", [("7 years", "💡 A 1-digit number"), ("50's", "💡 A 2-digit number"),
+                                          ("Φ (phi)", "💡 3 letters, starts with P")])
+def test_hints_describe_what_is_typed(tmp_path, answer, hint):
+    game = one_question(tmp_path, answer)
+    assert game.on_command("hint", "", make_msg("?hint"), None).messages == [hint]

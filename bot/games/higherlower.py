@@ -13,8 +13,8 @@ from bot.text import normalize, short_number
 
 MIN_RATIO = 1.15  # the two numbers in a pair differ by at least 15%, so a guess is never a coin flip
 WIN_STREAK = 5  # a streak this long counts as a win in ?gamestats
-HIGHER = {"higher", "h", "more"}
-LOWER = {"lower", "l", "less"}
+HIGHER = {"higher", "h", "more", "high", "up"}
+LOWER = {"lower", "l", "less", "low", "down"}
 
 
 class HigherLower(Game):
@@ -98,7 +98,8 @@ class HigherLower(Game):
         before, after = self.current["views"], self.next["views"]
         right = after >= before if guess in HIGHER else after <= before
         if not right:
-            return self._end(f"❌ {self._result()}. Game over, streak {self.streak} (+{self.streak})", "lost")
+            score = f", streak {self.streak} (+{self.streak})" if self.streak else ""
+            return self._end(f"❌ {self._result()}. Game over{score}.", "lost")
         self.streak += 1
         revealed = self._result()
         self.current = self.next

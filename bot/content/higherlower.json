@@ -81,7 +81,7 @@
 "views": 160695
 },
 {
-"name": "Pokemon",
+"name": "Pokémon",
 "article": "Pokémon",
 "category": "games",
 "views": 115662
@@ -285,7 +285,7 @@
 "views": 51101
 },
 {
-"name": "FIFA",
+"name": "FIFA (video games)",
 "article": "FIFA (video game series)",
 "category": "games",
 "views": 22714
@@ -597,7 +597,7 @@
 "views": 323859
 },
 {
-"name": "Beyonce",
+"name": "Beyoncé",
 "article": "Beyoncé",
 "category": "celebrities",
 "views": 235888
@@ -2079,7 +2079,7 @@
 "views": 121475
 },
 {
-"name": "Titanic",
+"name": "Titanic (the movie)",
 "article": "Titanic (1997 film)",
 "category": "movies",
 "views": 153276
@@ -2104,9 +2104,9 @@
 },
 {
 "name": "Star Wars",
-"article": "Star Wars (film)",
+"article": "Star Wars",
 "category": "movies",
-"views": 116914
+"views": 158645
 },
 {
 "name": "The Lion King",
@@ -2140,9 +2140,9 @@
 },
 {
 "name": "Harry Potter",
-"article": "Harry Potter and the Philosopher's Stone (film)",
+"article": "Harry Potter",
 "category": "movies",
-"views": 119142
+"views": 199146
 },
 {
 "name": "Toy Story",
@@ -2169,13 +2169,13 @@
 "views": 119364
 },
 {
-"name": "Deadpool",
+"name": "Deadpool (the movie)",
 "article": "Deadpool (film)",
 "category": "movies",
 "views": 66045
 },
 {
-"name": "Barbie",
+"name": "Barbie (the movie)",
 "article": "Barbie (film)",
 "category": "movies",
 "views": 83368
@@ -2235,7 +2235,7 @@
 "views": 129465
 },
 {
-"name": "Ratatouille",
+"name": "Ratatouille (the movie)",
 "article": "Ratatouille (film)",
 "category": "movies",
 "views": 71964
@@ -2259,19 +2259,19 @@
 "views": 99161
 },
 {
-"name": "Black Panther",
+"name": "Black Panther (the movie)",
 "article": "Black Panther (film)",
 "category": "movies",
 "views": 92231
 },
 {
-"name": "Iron Man",
+"name": "Iron Man (the movie)",
 "article": "Iron Man (2008 film)",
 "category": "movies",
 "views": 106282
 },
 {
-"name": "Joker",
+"name": "Joker (the movie)",
 "article": "Joker (2019 film)",
 "category": "movies",
 "views": 75222
@@ -2283,7 +2283,7 @@
 "views": 111472
 },
 {
-"name": "Venom",
+"name": "Venom (the movie)",
 "article": "Venom (2018 film)",
 "category": "movies",
 "views": 47774
@@ -2457,7 +2457,7 @@
 "views": 99794
 },
 {
-"name": "Wednesday",
+"name": "Wednesday (TV show)",
 "article": "Wednesday (TV series)",
 "category": "tv",
 "views": 108837

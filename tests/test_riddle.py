@@ -155,3 +155,21 @@ def test_multi_word_hint(tmp_path):
     game = riddle(tmp_path, "What do you call a deer with no eyes?", ["no idea"])
     game.on_command("hint", "", make_msg("?hint"), None)
     assert game.on_command("hint", "", make_msg("?hint"), None).messages == ["💡 2 words, 6 letters, starts with N"]
+
+
+@pytest.mark.parametrize("riddle_text, answers, guess, expected", [
+    ("Mary's father has five daughters: Nana, Nene, Nini, Nono. What's the fifth called?", ["mary"],
+     "nunu or mary", "list"),  # either-or counts the riddle's own words too
+    ("What has hands but can't clap?", ["clock"], "I know this one, it's a clock", "won"),  # "one" isn't a guess
+    ("Some months have 30 days and some have 31. How many have 28?", ["all", "12"], "all 12 have 28 days", "won"),
+    ("What has hands but can't clap?", ["clock"], "no, a clock", "won"),  # "no," is an interjection
+    ("What has hands but can't clap?", ["clock", "watch"], "not a clock, it's a watch", "won"),
+    ("What has hands but can't clap?", ["clock"], "a clock or something", "won"),
+    ("What appears once in a year and twice in a week?", ["e", "letter e"], "a or e", "list"),
+    ("What appears once in a year and twice in a week?", ["e", "letter e"], "a e", "list"),
+    ("What appears once in a year and twice in a week?", ["e", "letter e"], "e I think", "won"),
+    ("What comes once in a minute?", ["m", "letter m"], "I´m guessing time", "wrong"),  # ´ as an apostrophe
+    ("What comes once in a minute?", ["m", "letter m"], "I'm pretty sure it's m", "won"),
+])
+def test_review_cases(tmp_path, riddle_text, answers, guess, expected):
+    assert outcome(riddle(tmp_path, riddle_text, answers), guess) == expected
