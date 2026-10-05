@@ -1,4 +1,13 @@
-from bot.text import clean_username, format_duration, normalize, strip_invisible, truncate
+from bot.text import (
+    clean_username,
+    format_duration,
+    normalize,
+    short_number,
+    strip_article,
+    strip_invisible,
+    truncate,
+    within_one_edit,
+)
 
 
 def test_normalize_lowercases_and_collapses_spaces():
@@ -77,3 +86,27 @@ def test_format_duration():
     assert format_duration(12 * 60 + 5) == "12m"
     assert format_duration(3 * 3600 + 12 * 60) == "3h 12m"
     assert format_duration(-5) == "0s"
+
+
+def test_strip_article():
+    assert strip_article("the eiffel tower") == "eiffel tower"
+    assert strip_article("an apple") == "apple"
+    assert strip_article("theater") == "theater"  # only a whole leading word
+
+
+def test_within_one_edit():
+    assert within_one_edit("jupiter", "jupiter")
+    assert within_one_edit("jupiter", "jupitor")  # substitution
+    assert within_one_edit("jupiter", "jupiterr")  # insertion
+    assert within_one_edit("jupiter", "upiter")  # deletion
+    assert within_one_edit("jupiter", "jupietr")  # neighbours swapped
+    assert not within_one_edit("jupiter", "jpuietr")
+    assert not within_one_edit("abc", "cba")
+    assert not within_one_edit("a", "abc")
+
+
+def test_short_number():
+    cases = {0: "0", 950: "950", 1000: "1K", 1234: "1.2K", 55_123: "55K", 241_000: "241K",
+             999_499: "999K", 999_500: "1M", 1_234_567: "1.2M", 12_345_678: "12M", 1_500_000_000: "1.5B"}
+    for n, text in cases.items():
+        assert short_number(n) == text, n

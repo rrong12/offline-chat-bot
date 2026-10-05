@@ -11,3 +11,7 @@ def test_categories_are_sorted_file_stems(assets: Assets):
 
 def test_lines_reads_top_level_files(assets: Assets):
     assert assets.lines("8ball") == ["Yes.", "No."]
+
+
+def test_json_reads_top_level_json_files(assets: Assets):
+    assert assets.json("riddles")[0]["answers"] == ["clock", "watch"]

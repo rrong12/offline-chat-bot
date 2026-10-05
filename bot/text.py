@@ -1,4 +1,4 @@
-"""Text helpers: answer normalization, truncation, usernames, durations."""
+"""Text helpers: answer normalization and matching, truncation, usernames, durations, numbers."""
 
 from __future__ import annotations
 
@@ -61,3 +61,44 @@ def format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m"
     return f"{secs}s"
+
+
+_ARTICLES = ("a ", "an ", "the ")
+
+
+def strip_article(text: str) -> str:
+    """'the eiffel tower' -> 'eiffel tower'. Expects normalized text."""
+    for article in _ARTICLES:
+        if text.startswith(article):
+            return text[len(article):]
+    return text
+
+
+def within_one_edit(a: str, b: str) -> bool:
+    """True if a and b differ by at most one insertion, deletion, substitution, or swap of neighbours."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        if len(diff) == 1:
+            return True
+        return len(diff) == 2 and diff[1] == diff[0] + 1 and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]]
+    short, long = (a, b) if len(a) < len(b) else (b, a)
+    i = 0
+    while i < len(short) and short[i] == long[i]:
+        i += 1
+    return short[i:] == long[i + 1:]
+
+
+def short_number(n: int) -> str:
+    """950, 1.2K, 55K, 241K, 1.2M, 12M: at most three significant digits."""
+    if n < 1000:
+        return str(n)
+    for divisor, suffix in ((1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B")):
+        value = n / divisor
+        text = f"{value:.1f}" if value < 10 else f"{value:.0f}"
+        if float(text) < 1000 or suffix == "B":
+            return text.removesuffix(".0") + suffix
+    raise AssertionError("unreachable")
