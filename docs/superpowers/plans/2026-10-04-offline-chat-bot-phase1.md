@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (221 tests in total before the content task). Copy the code exactly. If a step's
+  this order (233 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -4272,7 +4272,15 @@ git commit -m "Add leaderboard, gamestats, and help commands"
 
 ### Task 13: Configuration
 
-`load_config` merges `config.toml` (settings) and the `.env` values (secrets) into a frozen `Config`. Game limits live under `[games]` (`max_running` 25, `cooldown_seconds` 10, `busy_queue` 10), and the outbox defaults to 2 messages/s with a queue of 30. Every invalid value raises `ConfigError` naming the key; the CLI turns that into exit code 2 (spec §12). Console mode passes `require_twitch=False`. `data_dir` is the `data/` folder next to the config file.
+`load_config` merges `config.toml` (settings) and the `.env` values (secrets) into a frozen `Config`. Game limits live under `[games]` (`max_running` 25, `cooldown_seconds` 10, `busy_queue` 10), and the outbox defaults to 2 messages/s with a queue of 30.
+
+Mistakes fail loudly rather than silently:
+
+- unknown or misspelled keys, and sections of the wrong type;
+- non-finite numbers, and a send rate above 3/s (Twitch's mod limit);
+- non-numeric OWNER_IDS on Twitch;
+- a prefix starting with `/` or `.`, which Twitch intercepts;
+- an empty game list. Every invalid value raises `ConfigError` naming the key; the CLI turns that into exit code 2 (spec §12). Console mode passes `require_twitch=False`. `data_dir` is the `data/` folder next to the config file.
 
 **Files:**
 - Create: `bot/config.py`, `config.toml`, `.env.example`
@@ -4321,6 +4329,16 @@ def test_defaults_and_env(tmp_path):
         ('channel = "ok_name"\n[games]\nenabled = ["chess"]', "chess"),
         ('channel = "ok_name"\n[outbox]\nburst = 1.5', "outbox.burst"),
         ("channel = ", "not valid TOML"),
+        ('channel = "ok_name"\n[games]\nmax_runing = 5', "unknown setting games.max_runing"),
+        ('channel = "ok_name"\ngames = "oops"', "games must be a \\[games\\] section"),
+        ('channel = "ok_name"\ncolour = "blue"', "unknown setting 'colour'"),
+        ('channel = "ok_name"\n[outbox]\nrate_per_second = 1000', "outbox.rate_per_second"),
+        ('channel = "ok_name"\n[outbox]\nrate_per_second = nan', "outbox.rate_per_second"),
+        ('channel = "ok_name"\n[outbox]\nrate_per_second = inf', "outbox.rate_per_second"),
+        ('channel = "ok_name"\nprefix = "/"', "can't start with"),
+        ('channel = "ok_name"\nprefix = ".b"', "can't start with"),
+        ('channel = "ok_name"\n[games]\nenabled = []', "at least one game"),
+        ("channel = 123", "channel must be a Twitch username"),
     ],
 )
 def test_invalid_values_name_the_key(tmp_path, toml, message):
@@ -4333,6 +4351,18 @@ def test_missing_secrets_fail_only_when_twitch_required(tmp_path):
     with pytest.raises(ConfigError, match="TWITCH_CLIENT_ID"):
         load_config(path, {})
     assert load_config(path, {}, require_twitch=False).bot_id == "console-bot"
+
+
+def test_owner_ids_must_be_numeric_for_twitch_but_not_console(tmp_path):
+    path = write(tmp_path, 'channel = "ok_name"\n')
+    with pytest.raises(ConfigError, match="OWNER_IDS"):
+        load_config(path, {**ENV, "OWNER_IDS": "123,robert"})
+    assert load_config(path, {"OWNER_IDS": "console-robert"}, require_twitch=False).owner_ids == {"console-robert"}
+
+
+def test_duplicate_games_are_dropped(tmp_path):
+    cfg = load_config(write(tmp_path, 'channel = "ok_name"\n[games]\nenabled = ["scramble", "scramble"]'), ENV)
+    assert cfg.enabled_games == ("scramble",)
 
 
 def test_bot_id_must_be_numeric(tmp_path):
@@ -4353,6 +4383,7 @@ Expected: FAIL. `ModuleNotFoundError: No module named 'bot.config'`
 
 from __future__ import annotations
 
+import math
 import re
 import tomllib
 from collections.abc import Mapping
@@ -4363,6 +4394,17 @@ from typing import Any
 from bot.games import ALL_GAMES
 
 _CHANNEL = re.compile(r"^[a-z0-9_]{3,25}$")
+MAX_SEND_RATE = 3.0  # messages/s; Twitch allows a mod account about 100 per 30 s
+
+# Every setting config.toml may contain. Anything else is almost certainly a typo.
+_SCHEMA: dict[str, set[str] | None] = {
+    "channel": None,
+    "prefix": None,
+    "cooldowns": {"user_seconds", "global_seconds"},
+    "games": {"enabled", "max_running", "cooldown_seconds", "busy_queue"},
+    "outbox": {"rate_per_second", "burst", "max_queue"},
+    "logs": {"retention_days"},
+}
 
 
 class ConfigError(Exception):
@@ -4399,12 +4441,35 @@ def _get(table: Mapping[str, Any], dotted: str, default: Any) -> Any:
     return node
 
 
-def _number(table: Mapping[str, Any], key: str, default: float, *, integer: bool = False, minimum: float = 0) -> Any:
+def _check_schema(table: Mapping[str, Any]) -> None:
+    for key, value in table.items():
+        if key not in _SCHEMA:
+            raise ConfigError(f"unknown setting {key!r} (known: {', '.join(_SCHEMA)})")
+        allowed = _SCHEMA[key]
+        if allowed is None:
+            continue
+        if not isinstance(value, Mapping):
+            raise ConfigError(f"{key} must be a [{key}] section, got {value!r}")
+        for sub_key in value:
+            if sub_key not in allowed:
+                raise ConfigError(f"unknown setting {key}.{sub_key} (known: {', '.join(sorted(allowed))})")
+
+
+def _number(
+    table: Mapping[str, Any],
+    key: str,
+    default: float,
+    *,
+    integer: bool = False,
+    minimum: float = 0,
+    maximum: float = math.inf,
+) -> Any:
     value = _get(table, key, default)
     ok_type = isinstance(value, int) if integer else isinstance(value, (int, float))
-    if isinstance(value, bool) or not ok_type or value < minimum:
+    if isinstance(value, bool) or not ok_type or not math.isfinite(value) or not minimum <= value <= maximum:
         kind = "an integer" if integer else "a number"
-        raise ConfigError(f"{key} must be {kind} >= {minimum}, got {value!r}")
+        limits = f">= {minimum}" if maximum == math.inf else f"between {minimum} and {maximum}"
+        raise ConfigError(f"{key} must be {kind} {limits}, got {value!r}")
     return value
 
 
@@ -4416,13 +4481,18 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path} is not valid TOML: {exc}") from None
 
-    channel = str(_get(table, "channel", "")).strip().lower()
+    _check_schema(table)
+
+    raw_channel = _get(table, "channel", "")
+    channel = raw_channel.strip().lower() if isinstance(raw_channel, str) else ""
     if not _CHANNEL.fullmatch(channel):
-        raise ConfigError(f"channel must be a Twitch username, got {channel!r}")
+        raise ConfigError(f"channel must be a Twitch username, got {raw_channel!r}")
 
     prefix = _get(table, "prefix", "?")
     if not isinstance(prefix, str) or not 1 <= len(prefix) <= 3 or any(c.isspace() for c in prefix):
         raise ConfigError(f"prefix must be 1-3 non-space characters, got {prefix!r}")
+    if prefix[0] in "/.":
+        raise ConfigError(f"prefix can't start with '/' or '.' (Twitch's own commands), got {prefix!r}")
 
     enabled = _get(table, "games.enabled", list(ALL_GAMES))
     if not isinstance(enabled, list) or not all(isinstance(g, str) for g in enabled):
@@ -4430,6 +4500,9 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     unknown = [g for g in enabled if g not in ALL_GAMES]
     if unknown:
         raise ConfigError(f"games.enabled has unknown games: {', '.join(unknown)} (known: {', '.join(ALL_GAMES)})")
+    if not enabled:
+        raise ConfigError(f"games.enabled must list at least one game (known: {', '.join(ALL_GAMES)})")
+    enabled = list(dict.fromkeys(enabled))  # drop duplicates, keep order
 
     client_id = env.get("TWITCH_CLIENT_ID", "").strip()
     client_secret = env.get("TWITCH_CLIENT_SECRET", "").strip()
@@ -4442,6 +4515,10 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         if not bot_id.isdigit():
             raise ConfigError(f"BOT_ID must be a numeric Twitch user ID, got {bot_id!r}")
     owner_ids = frozenset(part.strip() for part in env.get("OWNER_IDS", "").split(",") if part.strip())
+    if require_twitch:
+        bad = sorted(o for o in owner_ids if not o.isdigit())
+        if bad:
+            raise ConfigError(f"OWNER_IDS must be numeric Twitch user IDs, got {', '.join(bad)}")
 
     return Config(
         client_id=client_id,
@@ -4456,7 +4533,7 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         max_games=_number(table, "games.max_running", 25, integer=True, minimum=1),
         game_cooldown=_number(table, "games.cooldown_seconds", 10),
         busy_queue=_number(table, "games.busy_queue", 10, integer=True, minimum=1),
-        outbox_rate=_number(table, "outbox.rate_per_second", 2, minimum=0.1),
+        outbox_rate=_number(table, "outbox.rate_per_second", 2, minimum=0.1, maximum=MAX_SEND_RATE),
         outbox_burst=_number(table, "outbox.burst", 3, integer=True, minimum=1),
         outbox_max_queue=_number(table, "outbox.max_queue", 30, integer=True, minimum=1),
         log_retention_days=_number(table, "logs.retention_days", 30, integer=True, minimum=1),
@@ -4507,7 +4584,7 @@ OWNER_IDS=
 
 Run: `.venv/bin/pytest tests/test_config.py -q`
 
-Expected: PASS (11 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (23 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -5817,7 +5894,7 @@ ROOT = Path(__file__).parent.parent
 
 def write_config(tmp_path: Path) -> Path:
     path = tmp_path / "config.toml"
-    path.write_text('channel = "test_channel"\n[outbox]\nrate_per_second = 50\nburst = 50\n', encoding="utf-8")
+    path.write_text('channel = "test_channel"\n[outbox]\nrate_per_second = 3\nburst = 50\n', encoding="utf-8")
     return path
 
 
@@ -6292,7 +6369,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 236 tests pass.
+Expected: `15 passed`, then all 248 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -6468,7 +6545,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (236).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (248).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
