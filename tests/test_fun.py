@@ -100,6 +100,13 @@ async def test_fact_with_links_mentions_or_wrong_type_falls_back(assets, clock, 
     assert fun.replies == ["🐱 fallback catfacts line"]
 
 
+async def test_fact_text_keeps_decomposed_accents(assets, clock):
+    text = "e" + chr(0x0301) + "clairs are pastries."
+    fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
+    await fun.run("?catfact")
+    assert fun.replies == ["🐱 " + chr(0x00E9) + "clairs are pastries."]
+
+
 async def test_fact_text_is_stripped_of_invisible_and_control_characters(assets, clock):
     text = "Cats" + chr(0x202E) + " purr" + chr(0x07) + "."
     fun = Fun(assets, clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))

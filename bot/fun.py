@@ -6,6 +6,7 @@ import asyncio
 import json
 import random
 import re
+import unicodedata
 from collections.abc import Awaitable, Callable
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -38,7 +39,8 @@ def _safe_text(value: Any) -> str | None:
     """API text cleaned for chat, or None if it's missing, too long, or carries links/mentions."""
     if not isinstance(value, str):
         return None
-    text = " ".join(strip_invisible(value).split())  # all whitespace (incl. newlines) becomes one space
+    text = unicodedata.normalize("NFC", value)  # compose accents first so stripping marks keeps them
+    text = " ".join(strip_invisible(text).split())  # all whitespace (incl. newlines) becomes one space
     text = "".join(ch for ch in text if ch.isprintable())  # then drop control characters
     if not text or len(text) > MAX_FACT or _UNSAFE.search(text):
         return None

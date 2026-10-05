@@ -60,6 +60,42 @@ async def test_get_json_parses_json_sent_as_text_and_sends_headers():
         await server.close()
 
 
+async def test_get_json_reads_a_body_sent_in_pieces():
+    async def chunked(request):
+        resp = web.StreamResponse(headers={"Content-Type": "application/json"})
+        await resp.prepare(request)
+        await resp.write(b'{"fact": "cats ')
+        await asyncio.sleep(0.02)
+        await resp.write(b'purr"}')
+        await resp.write_eof()
+        return resp
+
+    server = await serve(chunked)
+    client = HttpClient(timeout=1)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) == {"fact": "cats purr"}
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_get_json_refuses_oversized_bodies(monkeypatch):
+    import bot.http
+
+    monkeypatch.setattr(bot.http, "MAX_BODY", 10)
+
+    async def big(request):
+        return web.json_response({"fact": "x" * 100})
+
+    server = await serve(big)
+    client = HttpClient(timeout=1)
+    try:
+        assert await client.get_json(str(server.make_url("/"))) is None
+    finally:
+        await client.close()
+        await server.close()
+
+
 async def test_get_json_returns_none_for_non_json_200():
     async def html(request):
         return web.Response(text="<html>challenge</html>", content_type="text/html")

@@ -31,7 +31,13 @@ class HttpClient:
                 if resp.status != 200:
                     logger.warning("GET %s -> HTTP %s", url, resp.status)
                     return None
-                return json.loads(await resp.content.read(MAX_BODY))
+                body = bytearray()
+                async for chunk in resp.content.iter_chunked(16_384):  # read() alone may return a partial body
+                    body += chunk
+                    if len(body) > MAX_BODY:
+                        logger.warning("GET %s: body over %d bytes", url, MAX_BODY)
+                        return None
+                return json.loads(body)
         except Exception as exc:  # timeouts, DNS, bad JSON: all fall back
             logger.warning("GET %s failed: %s", url, type(exc).__name__)
             return None
