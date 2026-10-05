@@ -95,6 +95,7 @@ def test_corrupt_database_exits_2(tmp_path):
 
 def test_sigterm_stops_cleanly(tmp_path):
     import json
+    import select
     import signal
     import time
 
@@ -105,6 +106,8 @@ def test_sigterm_stops_cleanly(tmp_path):
         env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
     )
     try:
+        ready, _, _ = select.select([proc.stdout], [], [], 10)  # don't hang if the bot never starts
+        assert ready, "the bot did not start within 10 s"
         assert proc.stdout.readline().startswith("Console mode.")  # banner: the bot is running
         time.sleep(0.2)
         proc.send_signal(signal.SIGTERM)

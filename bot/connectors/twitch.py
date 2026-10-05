@@ -305,7 +305,9 @@ async def authorize(config: Config) -> UserRef:
         try:
             await client.login(load_tokens=False, save_tokens=False)
         except twitchio.HTTPException as exc:
-            raise ConfigError(_CREDENTIALS_REJECTED.format(status=exc.status)) from exc
+            if exc.status in AUTH_FAILURE_STATUSES:
+                raise ConfigError(_CREDENTIALS_REJECTED.format(status=exc.status)) from exc
+            raise
         await client.adapter.run()
         print(f"Open this URL in a browser where you're logged in as the BOT account:\n\n  {AUTH_URL}\n")
         user = await done
