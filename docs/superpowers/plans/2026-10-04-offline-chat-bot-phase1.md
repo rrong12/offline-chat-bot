@@ -81,7 +81,7 @@ pytest-asyncio.
 | `bot/admin.py`, `bot/core.py` | `?bot`, `?stopgame`; `BotCore` + run loop | 15 |
 | `bot/connectors/twitch.py` | TwitchIO connector + `auth` flow | 16 |
 | `bot/__main__.py` | CLI: run / auth / console | 17 |
-| `bot/content/**` | 8-ball, fortunes, fallbacks, six word lists, `SOURCES.md` | 18 |
+| `bot/content/**` | 8-ball, fortunes, fallbacks, six word lists, `SOURCES.md`, blocked lists | 18 |
 | `README.md`, `deploy/offline-chat-bot.service` | Docs, systemd unit | 19 |
 | `tests/helpers.py` | `make_msg` (6), `FakeHttp` (11), `make_config` (15) | 6, 11, 15 |
 
@@ -809,6 +809,12 @@ def test_state_round_trip_survives_reopen(tmp_path: Path):
     reopened = StatsStore(path)
     assert reopened.get_state("paused") == "1"
     reopened.close()
+
+
+def test_file_database_uses_wal_with_normal_sync(tmp_path: Path):
+    s = StatsStore(tmp_path / "bot.db")
+    assert s._conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert s._conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -1088,7 +1094,7 @@ class StatsStore:
 
 Run: `.venv/bin/pytest tests/test_stats.py -q`
 
-Expected: PASS (15 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (16 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -3523,7 +3529,7 @@ git commit -m "Add the game registry and personal-game manager"
 
 ### Task 11: HTTP client and fun commands
 
-`HttpClient.get_json` never raises. On a timeout (3 s), an HTTP error, or bad JSON, it returns `None`, and the command uses a bundled fallback line (spec §5). API text must be a string. It's NFC-normalized and stripped of invisible and control characters. It falls back if it's over 400 characters, contains a link or @mention, doesn't start with a capital letter, digit, or quote (it looks cut off), or contains a blocked word: the bot as a mod skips Twitch's chat filters, so this is the only filter. `BlockedWords` reads `content/blocked_rot13.txt` (written in Task 18; until then nothing is blocked). Fragments of 3 letters must be a whole word or its plural, so "night" and "Japanese" pass; longer ones match at the start of a word, except a short list of innocent words (analysis, spices, Pakistan, cocktail, ...). Response bodies are capped at 64 KB. All four API URLs and response shapes were checked live on 2026-10-04.
+`HttpClient.get_json` never raises. On a timeout (3 s), an HTTP error, or bad JSON, it returns `None`, and the command uses a bundled fallback line (spec §5). API text must be a string. It's NFC-normalized and stripped of invisible and control characters. It falls back if it's over 400 characters, contains a link or @mention, starts with a lowercase letter (it looks cut off), or contains a blocked word: the bot as a mod skips Twitch's chat filters, so this is the only filter. `BlockedWords` reads `content/blocked_prose_rot13.txt` (written in Task 18; until then nothing is blocked). Each pattern says how it matches: `word` is the whole word or its plural, `word*` any word starting with it, and `*word*` any word containing it. A short list of innocent look-alikes (analysis, Dickinson, Scunthorpe, ...) is exempt, as are "Homo sapiens" and "Maine Coon". Response bodies are capped at 64 KB. All four API URLs and response shapes were checked live on 2026-10-04.
 
 `?cookie` rules:
 
@@ -3780,19 +3786,21 @@ async def test_fact_text_keeps_decomposed_accents(assets, clock):
 
 
 @pytest.mark.parametrize("text, safe", [
-    ("Some people are gatoring around.", False),  # long fragment "gator" at a word start
-    ("Navigators use the stars.", True),  # a fragment inside a word is fine
-    ("Gat is a short fragment.", False),  # short fragment "gat" as a whole word
+    ("Gat is a whole word.", False),  # "gat": the whole word...
     ("Gats too.", False),  # ... or its plural
-    ("Gather round.", True),  # short fragments never match as prefixes
-    (" was a famous idea.", False),  # cut off at the start
+    ("Gather round.", True),  # ... but not a word starting with it
+    ("Some people are gatoring around.", False),  # "gator*": any word starting with it
+    ("Navigators use the stars.", True),  # ... but not one merely containing it
+    ("A megablobfish swam by.", False),  # "*blob*": any word containing it
+    (" was a famous idea.", False),  # starts lowercase: cut off
     ("42 is the answer.", True),
     ('"Quoted" facts are fine.', True),
+    (chr(0x201C) + "Curly" + chr(0x201D) + " quotes and $5 are fine.", True),
 ])
 async def test_fact_filter_blocks_bad_words_and_truncated_text(content_dir, clock, text, safe):
     from bot.assets import Assets
 
-    (content_dir / "blocked_rot13.txt").write_text("tng\ntngbe\n", encoding="utf-8")  # gat, gator
+    (content_dir / "blocked_prose_rot13.txt").write_text("tng\ntngbe*\n*oybo*\n", encoding="utf-8")
     fun = Fun(Assets(content_dir), clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
     await fun.run("?catfact")
     assert (fun.replies[0] != "🐱 fallback catfacts line") is safe
@@ -3985,41 +3993,54 @@ def _get(data: Any, *path: str | int) -> Any:
     return data
 
 
-# Innocent words that start with a blocked fragment of 4+ letters (checked as prefixes).
-_INNOCENT_PREFIXES = (
-    "analy", "analog", "analges", "spice", "spicy", "cockt", "cockr", "cockp", "cockat", "cocker",
-    "dicken", "rapese", "tardi", "tardy", "retardant", "homog", "homon", "homoph", "pakist",
-    "negroni", "coonh", "pussyc", "pussyw", "booby", "nudib", "heilo",
+# Innocent words that look like blocked ones, checked as prefixes of each word.
+_INNOCENT = (
+    "analects", "analges", "analog", "analy", "booby", "boobies", "cockat", "cocker", "cockfight", "cockle",
+    "cockney", "cockp", "cockr", "cockscomb", "cockt", "cocky", "cummings", "dicken", "dickey", "dickinson", "milford",
+    "negroni", "penistone", "pissarro", "pussyc", "pussyf", "pussyw", "rapese", "retardant", "scunthorpe",
+    "shitzu", "titter", "tittle", "wankel",
 )
+_ES_PLURALS = ("ses", "xes", "zes", "ches", "shes")  # "-es" plurals ("spices" is not one)
+_HOMO_SPECIES = {"antecessor", "erectus", "ergaster", "floresiensis", "habilis", "heidelbergensis", "naledi",
+                 "neanderthalensis", "sapiens"}
 
 
 class BlockedWords:
-    """Finds blocked words in prose ("mentally retarded" yes; "night", "Japanese", "mustard" no).
+    """Finds blocked words in prose, by the patterns in content/blocked_prose_rot13.txt:
+    "word" is the whole word or its plural, "word*" a word start, "*word*" anywhere in a word."""
 
-    Fragments of 3 letters must be the whole word (or that word + "s"); longer fragments match at
-    the start of a word unless the word is a known innocent one (analysis, spices, Pakistan, ...).
-    """
-
-    def __init__(self, fragments: list[str]) -> None:
-        self.short = {f for f in fragments if len(f) < 4}
-        self.long = tuple(f for f in fragments if len(f) >= 4)
+    def __init__(self, patterns: list[str]) -> None:
+        self.whole = {p for p in patterns if "*" not in p}
+        self.prefix = tuple(p[:-1] for p in patterns if p.endswith("*") and not p.startswith("*"))
+        self.inside = tuple(p[1:-1] for p in patterns if p.startswith("*") and p.endswith("*"))
 
     @classmethod
     def load(cls, assets: Assets) -> BlockedWords:
         try:
-            return cls([codecs.decode(line, "rot13") for line in assets.lines("blocked_rot13")])
+            return cls([codecs.decode(line, "rot13") for line in assets.lines("blocked_prose_rot13")])
         except FileNotFoundError:
             return cls([])
 
     def found_in(self, text: str) -> bool:
-        for word in re.findall(r"[a-z]+", text.lower()):
-            if word in self.short or (word.endswith("s") and word[:-1] in self.short):
-                return True
-            if word == "homo" or word.startswith(_INNOCENT_PREFIXES):  # "Homo sapiens", "analysis"
+        words = re.findall(r"[a-z]+", text.lower())
+        for i, word in enumerate(words):
+            if word.startswith(_INNOCENT):
                 continue
-            if word.startswith(self.long):
+            stems = (word, word[:-1] if word.endswith("s") else "", word[:-2] if word.endswith(_ES_PLURALS) else "")
+            if any(stem in self.whole for stem in stems) and not _fine_in_context(words, i):
+                return True
+            if word.startswith(self.prefix) or any(part in word for part in self.inside):
                 return True
         return False
+
+
+def _fine_in_context(words: list[str], i: int) -> bool:
+    """A few blocked whole words are fine next to a specific word: "Homo sapiens", "Maine Coon"."""
+    if words[i] in ("homo", "homos"):
+        return i + 1 < len(words) and words[i + 1] in _HOMO_SPECIES
+    if words[i] in ("coon", "coons"):
+        return i > 0 and words[i - 1] in ("maine", "main")  # the breed, often misspelled
+    return False
 
 
 def _safe_text(value: Any, blocked: BlockedWords | None = None) -> str | None:
@@ -4032,7 +4053,7 @@ def _safe_text(value: Any, blocked: BlockedWords | None = None) -> str | None:
     text = "".join(ch for ch in text if ch.isprintable())  # then drop control characters
     if not text or len(text) > MAX_FACT or _UNSAFE.search(text):
         return None
-    if not (text[0].isupper() or text[0].isdigit() or text[0] in "\"'"):  # looks truncated
+    if text[0].islower():  # looks cut off mid-sentence
         return None
     if blocked is not None and blocked.found_in(text):
         return None
@@ -4167,7 +4188,7 @@ def register_fun(
 
 Run: `.venv/bin/pytest tests/test_http.py tests/test_fun.py -q`
 
-Expected: PASS (31 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (33 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 8: Commit**
 
@@ -4271,6 +4292,10 @@ async def test_gamestats_self_overall(c: Cmds):
 async def test_gamestats_game_and_other_user(c: Cmds):
     assert await c.run("?gamestats scramble @Bob") == "📊 Bob · scramble: 2 wins / 2 played · 17 pts · rank #1"
     assert await c.run("?gamestats bob") == "📊 Bob: 17 pts, 2 wins, 2 played | scramble 2W/2P 17pts"
+
+
+async def test_gamestats_one_win_is_singular(c: Cmds):
+    assert await c.run("?gamestats hangman carol") == "📊 Carol · hangman: 1 win / 1 played · 12 pts · rank #1"
 
 
 async def test_gamestats_played_without_points_has_no_rank(c: Cmds):
@@ -4446,7 +4471,7 @@ def register_help(registry: CommandRegistry) -> None:
 
 Run: `.venv/bin/pytest tests/test_stats_help_commands.py -q`
 
-Expected: PASS (10 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (11 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 6: Commit**
 
@@ -4466,7 +4491,7 @@ Mistakes fail loudly rather than silently:
 - non-numeric OWNER_IDS on Twitch;
 - a prefix starting with `/` or `.`, which Twitch intercepts;
 - an empty game list;
-- the placeholder `channel = "your_channel"` from the example config;
+- the placeholder `channel = "your_channel"` from the example config (Twitch mode only, so console mode and `auth` work before it's set);
 - a `busy_queue` larger than the outbox queue, where the brake could never engage. Every invalid value raises `ConfigError` naming the key; the CLI turns that into exit code 2 (spec §12). Console mode passes `require_twitch=False`. `data_dir` is the `data/` folder next to the config file.
 
 **Files:**
@@ -4495,6 +4520,7 @@ def test_repo_config_file_is_valid_once_a_channel_is_set(tmp_path):
     shipped = (Path(__file__).parent.parent / "config.toml").read_text(encoding="utf-8")
     with pytest.raises(ConfigError, match="set channel"):
         load_config(write(tmp_path, shipped), ENV)  # the placeholder must be replaced
+    load_config(write(tmp_path, shipped), {}, require_twitch=False)  # console mode works before it's set
     cfg = load_config(write(tmp_path, shipped.replace('"your_channel"', '"real_channel"')), ENV)
     assert cfg.prefix == "?" and cfg.enabled_games == ("scramble", "hangman")
 
@@ -4679,7 +4705,7 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     channel = raw_channel.strip().lower() if isinstance(raw_channel, str) else ""
     if not _CHANNEL.fullmatch(channel):
         raise ConfigError(f"channel must be a Twitch username, got {raw_channel!r}")
-    if channel == PLACEHOLDER_CHANNEL:
+    if require_twitch and channel == PLACEHOLDER_CHANNEL:  # console mode and auth work before it's set
         raise ConfigError("set channel in config.toml to the Twitch channel the bot should join")
 
     prefix = _get(table, "prefix", "?")
@@ -4750,7 +4776,7 @@ prefix = "?"
 
 [cooldowns]
 user_seconds = 10           # per person, per command
-global_seconds = 5          # per command, across the whole chat (not used for starting games)
+global_seconds = 5          # per command, across the whole chat (not for games, ?cookie, ?gamestats, ?help)
 
 [games]
 enabled = ["scramble", "hangman"]
@@ -5033,7 +5059,7 @@ The heart of the bot. `BotCore.on_message` applies spec §3's filter in order:
 4. While paused, accept only `?bot ...` from a controller.
 5. Route commands; anything else goes to the sender's own game, if they have one.
 
-`_dispatch` checks permission, then cooldowns (the chat-wide one only if the command uses it), then touches the user, logs `command`, and runs the handler. Handler exceptions are logged and never crash the bot. The busy brake is wired here: games are refused while the outbox holds `busy_queue` or more messages. When the connector reports the bot isn't a mod (at startup, or later if mod status is lost), sending slows to 0.6 messages/s with burst 1, under Twitch's non-mod limit of 20 per 30 s; `startup` is logged only once.
+`_dispatch` checks permission, then cooldowns (the chat-wide one only if the command uses it), then touches the user, logs `command`, and runs the handler. Handler exceptions are logged and never crash the bot. The busy brake is wired here: games are refused while the outbox holds `busy_queue` or more messages. While the brake is on, Stats, Fun, and Info commands (`?coinflip`, `?gamestats`, `?help`, ...) are ignored too, so game messages keep flowing; control and in-game commands still work. When the connector reports the bot isn't a mod (at startup, or later if mod status is lost), sending slows to 0.6 messages/s with burst 1, under Twitch's non-mod limit of 20 per 30 s; `startup` is logged only once.
 
 `run()` starts the connector, the outbox loop, and the 1 s tick loop. It returns an exit code:
 
@@ -5190,6 +5216,17 @@ async def test_busy_brake_when_messages_back_up(tmp_path, clock, assets):
     await bot.core.on_message(parse_console_line("alice: ?scramble", clock, bot.ids))
     assert bot.core.outbox.pending()[-1] == "Too many games running right now, try again in a moment."
     assert bot.core.games.sessions == {}
+
+
+async def test_busy_brake_skips_fun_stats_and_help_but_not_control(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets)
+    for i in range(10):
+        bot.core.outbox.enqueue(f"backlog {i}")
+    for line in ("alice: ?coinflip", "bob: ?gamestats", "carol: ?help", "dave: ?cookie"):
+        await bot.core.on_message(parse_console_line(line, clock, bot.ids))
+    assert len(bot.core.outbox) == 10
+    await bot.core.on_message(parse_console_line("@mod: ?bot status", clock, bot.ids))
+    assert len(bot.core.outbox) == 11
 
 
 async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
@@ -5636,6 +5673,8 @@ from bot.text import format_duration
 logger = logging.getLogger(__name__)
 
 EXIT_OK, EXIT_CRASH, EXIT_CONFIG, EXIT_AUTH = 0, 1, 2, 3
+# While the busy brake is on, these groups are ignored so game messages keep flowing.
+BUSY_SKIPPED_GROUPS = ("Stats", "Fun", "Info")
 NON_MOD_RATE = 0.6  # messages/s; Twitch's limit for a non-mod account is 20 per 30 s
 
 
@@ -5682,7 +5721,7 @@ class BotCore:
             prefix=config.prefix,
             cooldown_seconds=config.game_cooldown,
             max_games=config.max_games,
-            is_busy=lambda: len(self.outbox) >= config.busy_queue,
+            is_busy=self.is_busy,
         )
         self.games.register(self.registry)
         register_stats(self.registry, stats=stats, game_names=list(games))
@@ -5703,6 +5742,10 @@ class BotCore:
         self._stop = asyncio.Event()
 
     # state
+
+    def is_busy(self) -> bool:
+        """The busy brake: too many bot messages are waiting to be sent."""
+        return len(self.outbox) >= self.config.busy_queue
 
     def is_controller(self, msg: ChatMessage) -> bool:
         return is_controller(msg, self.config.owner_ids)
@@ -5757,6 +5800,8 @@ class BotCore:
         if cmd is None:
             return
         if cmd.controller_only and not self.is_controller(msg):
+            return
+        if cmd.group in BUSY_SKIPPED_GROUPS and self.is_busy():
             return
         global_seconds = self.config.global_cooldown if cmd.global_cooldown else 0
         if cmd.cooldown and not self.cooldowns.check_command(
@@ -5871,7 +5916,7 @@ class BotCore:
 
 Run: `.venv/bin/pytest tests/test_flows.py -q`
 
-Expected: PASS (33 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (34 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -7087,6 +7132,7 @@ entries are a real risk:
 - Test: `tests/test_content.py`
 - Create:
   - `bot/content/8ball.txt` and `bot/content/fortunes.txt`
+  - `bot/content/blocked_rot13.txt` and `bot/content/blocked_prose_rot13.txt`
   - `bot/content/fallback_catfacts.txt`, `fallback_dogfacts.txt`, `fallback_facts.txt`, and
     `fallback_dadjokes.txt`
   - `bot/content/words/{animals,countries,food,games,general,streamers}.txt`
@@ -7142,13 +7188,48 @@ def test_blocked_fragment_list_exists():
     assert all(f.isalpha() and f == f.lower() for f in fragments)
 
 
-def test_blocked_list_catches_bad_words_in_prose_but_not_common_words():
+def _prose_patterns():
+    import codecs
+
+    return [codecs.decode(line, "rot13") for line in REAL.lines("blocked_prose_rot13")]
+
+
+def test_prose_blocked_list_format():
+    patterns = _prose_patterns()
+    assert len(patterns) >= 50
+    for p in patterns:
+        assert re.fullmatch(r"\*?[a-z]+\*?", p) and (p.startswith("*") <= p.endswith("*")), p
+
+
+def test_prose_blocked_list_catches_every_pattern_in_its_forms():
+    # Built from the encoded list, so no blocked word is spelled out in this file.
     blocked = BlockedWords.load(REAL)
-    assert blocked.found_in("His parents thought he was mentally retarded.")
+    for p in _prose_patterns():
+        core = p.strip("*")
+        if p.startswith("*"):
+            forms = [core, "x" + core + "y", core.capitalize() + "ed"]
+        elif p.endswith("*"):
+            forms = [core, core + "ed", core.upper() + "S"]
+        else:
+            forms = [core, core + "s", core.capitalize()]
+        for form in forms:
+            assert blocked.found_in(f"They said {form} once."), p
+
+
+def test_prose_blocked_list_allows_common_words():
+    blocked = BlockedWords.load(REAL)
     for fine in (
         "The night sky over Japan is beautiful.", "Japanese analysts studied spices from Pakistan.",
-        "Mustard is a condiment.", "Charles Dickens wrote fast.", "Homo sapiens evolved in Africa.",
-        "The title of the book.", "Cumulative rainfall rose.", "A cocktail party.", "Tardigrades survive space.",
+        "Mustard is a condiment.", "Charles Dickens and Emily Dickinson wrote a lot.",
+        "Homo sapiens evolved in Africa.",
+        "Homo erectus used fire.", "Homologous structures share an origin.", "The title of the book.",
+        "Cumulative rainfall rose.", "A cocktail party in Cockney London.", "Tardigrades survive space.",
+        "Maine Coon cats are large.", "The Main Coon cat.", "Puss in Boots is a cat.",
+        "Males are bigger than the opposite sex.",
+        "Felis nigripes is the black-footed cat.", "The shitzu is a toy breed.", "The siege lasted a year.",
+        "Blue-footed boobies dance.", "Spica is a bright star.", "Milford Sound is in New Zealand.",
+        "The Wankel engine is a rotary engine.", "Cats reach sexual maturity early.", "A cocky rooster crowed.",
+        "Scunthorpe is a town.", "Grapes, drapes and scrapes.", "Cockatoos and cockroaches.",
     ):
         assert not blocked.found_in(fine), fine
 
@@ -7201,7 +7282,7 @@ Outlook not so good.
 Very doubtful.
 ```
 
-- [ ] **Step 4: Write `bot/content/blocked_rot13.txt`**: the fragments a Scramble puzzle must never show and fact text must never contain, ROT13-encoded (Tasks 8 and 11 decode them). Copy exactly:
+- [ ] **Step 4: Write `bot/content/blocked_rot13.txt`**: the fragments a Scramble puzzle must never show, ROT13-encoded (Task 8 decodes them). Copy exactly:
 
 ```text
 # Fragments a Scramble puzzle must never show, ROT13-encoded so this file doesn't display them.
@@ -7259,6 +7340,92 @@ intva
 jnax
 jrgonpx
 juber
+```
+
+Then write `bot/content/blocked_prose_rot13.txt`: the words fact and joke text must never contain, ROT13-encoded, with the match rules in its header (Task 11's `BlockedWords` reads it). Copy exactly:
+
+```text
+# Words the bot must never post in fact or joke text, ROT13-encoded so this file doesn't display them.
+# Decode one with: python3 -c "import codecs; print(codecs.decode('fybg', 'rot13'))"  (prints 'slot')
+# "word" matches the whole word or its plural (+s, +es), "word*" any word starting with it, and
+# "*word*" any word containing it. Innocent look-alikes (analysis, Scunthorpe, ...) are exempted in bot/fun.py.
+nahf
+pbba
+phz
+snt
+urvy
+ubzb
+wnc
+xxx
+xlf
+avt
+avtn
+cnxv
+chffvrf
+frkvre
+frkvrfg
+fvrt
+fcvp
+gneq
+gvg
+nany*
+onfgneq*
+ovgpu*
+obyybpx*
+obbo*
+puvax*
+pyvg*
+pbpx*
+phzz*
+phzfu*
+qvpx*
+qlxr*
+tbbx*
+uvgyre*
+vaprfg*
+xvxr*
+yvogneq*
+znfgheong*
+zvys*
+zbyrfg*
+anmv*
+arteb*
+ahqr*
+ahqvg*
+betnfz*
+cnrqbcuvy*
+crqbcuvy*
+cravf*
+cvff*
+chffl*
+encr*
+encvat*
+encvfg*
+ergneq*
+frzra*
+frkl*
+fxnax*
+fyhg*
+gvgg*
+genaa*
+gjng*
+intva*
+jnax*
+jrgonpx*
+*nefruby*
+*nffuby*
+*oybjwbo*
+*phag*
+*qvyqb*
+*sntt*
+*sntbg*
+*shpx*
+*unaqwbo*
+*wvmm*
+*avtt*
+*cbea*
+*fuvg*
+*juber*
 ```
 
 - [ ] **Step 5: Write the four general word lists**
@@ -7334,7 +7501,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 8: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `17 passed`, then all 296 tests pass.
+Expected: `19 passed`, then all 303 tests pass.
 
 - [ ] **Step 9: Play every game by hand in console mode**
 
@@ -7545,7 +7712,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (296).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (303).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
@@ -7768,3 +7935,9 @@ The code blocks above are the final, reviewed versions; the entries below say wh
   - Minors: refusal notices keyed per game; config rejects the placeholder channel and a `busy_queue` above the outbox queue; SQLite `synchronous=NORMAL`; "1 win"; help texts, comments, README, and spec (§3, §4 `Connector.run`, §5 cooldowns and threading, facts filter, Hangman board, §13) brought up to date; the Task 20 Wi-Fi check now expects recovery (on its own or via a watchdog exit and restart) instead of a guaranteed exit. Family Feud is marked dropped in the spec.
   - Kept as designed: 25 games at once (Robert's choice).
   - Tests: 281 → 296.
+- **Final re-review** (Opus): Hangman sorting, personal cooldowns, the non-mod rate, per-game notices, and the lost-mod path (no loop possible; probed with a double 403) all confirmed. Three problems found and fixed:
+  - **Critical, the fact filter's length rule missed variants:** a 3-letter fragment only matched as a whole word, so longer spellings of the same slur, and an irregular plural of another, got through. **Important:** swears inside compounds were missed because matching was prefix-only. Fix: fact text now uses its own list, `content/blocked_prose_rot13.txt`, where each pattern states how it matches (whole word or plural, word start, or anywhere inside a word), plus a short innocent list ("Milford", "Scunthorpe", "Homo sapiens", "Maine Coon"). `-es` plurals are recognized only after s, x, z, ch, or sh, so "spices" isn't a plural. Tests derive every pattern's forms from the encoded list, so no blocked word is spelled out in the test files. On ~1,360 real API texts, the only text blocked is a fact naming Hitler, as intended.
+  - **Important, the placeholder channel broke console mode and `auth`:** it's now rejected only when connecting to Twitch.
+  - **Minors taken:** the cut-off check rejects only a lowercase first letter (curly quotes and `$` now pass); while the busy brake is on, Stats, Fun, and Info commands are ignored so personal replies can't crowd out game messages; the `config.toml` cooldown comment and spec notice wording are updated; tests added for "1 win" in the per-game line and for `synchronous=NORMAL`.
+  - Kept: "Moby Dick" and "Van Dyke" still fall back (cheap); losing mod status is one-way until a restart.
+  - Tests: 296 → 303.

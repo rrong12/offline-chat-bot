@@ -177,9 +177,11 @@ Cooldowns, unless noted: each command has a **10 s per-user** cooldown and a **5
 cooldown. A command on cooldown is silently ignored.
 - Personal lookups (`?cookie`, `?gamestats`, `?help`) have only the per-user cooldown, so one
   person's use never blocks another's.
+- While the busy brake is on (section 6), Stats, Fun, and Info commands are ignored, so game
+  messages keep flowing. Control and in-game commands still work.
 - Game start commands (`?scramble`, `?hangman`) have no command cooldowns. The per-player game
   cooldown (10 s after your game ends) is the only limit on starting, and the game manager
-  rate-limits its "can't start" and category-list replies to one per 5 s per player.
+  rate-limits its "can't start" and category-list replies to one per 5 s per player and game.
 - Control commands (`?bot ...`, `?stopgame`), `?skip`, and in-game commands such as `?g` and
   `?hint` have no cooldowns; each game enforces its own limits on its in-game commands. Quick-command answers use Twitch's
 threaded reply (`reply_to`). Game messages are threaded under the player's latest message.
@@ -218,16 +220,21 @@ since the modded bot's messages skip Twitch's chat filters:
 - it must be a string; it is NFC-normalized, invisible and control characters are removed, and
   whitespace is collapsed;
 - it is rejected (fallback used) if it is empty or over 400 characters, contains a link (`://`
-  or `www.`) or an `@mention`, doesn't start with a capital letter, digit, or quote (it looks cut
-  off), or contains a blocked word from `content/blocked_rot13.txt`. Fragments of 3 letters
-  must be a whole word (or its plural); longer ones match at the start of a word, except known
-  innocent words (analysis, Pakistan, cocktail, ...). Text is never truncated.
+  or `www.`) or an `@mention`, starts with a lowercase letter (it looks cut off), or contains a
+  blocked word. Text is never truncated.
+- Blocked words come from `content/blocked_prose_rot13.txt` (ROT13-encoded), separate from
+  Scramble's fragment list. Each pattern says how it matches: `word` is the whole word or its
+  plural, `word*` any word starting with it, and `*word*` any word containing it (for swears
+  that appear inside compounds). A short list of innocent look-alikes (analysis, Dickinson,
+  Milford, Scunthorpe, ...) is exempt, as are "Homo sapiens" and "Maine Coon" (also when
+  misspelled "Main Coon"). Of about 1,360 real API texts checked on 2026-10-04, only one is
+  rejected for a blocked word: a fact naming Hitler, as intended.
 
 Starting a game when you already have one gets "You already have a \<game\> game running."
 During your cooldown it gets "Your next game in \<n\>s." At the limit (25 games) or while the
 busy brake is on, it gets "Too many games running right now, try again in a moment." These
 replies, the category list, and "Couldn't start that game." are limited to one per 5 s per
-player.
+player and game.
 
 ## 6. Game framework
 
@@ -495,8 +502,9 @@ retention_days = 30
 ```
 
 The config is validated at startup. An invalid value exits with code 2 and a message naming
-the bad key. This includes the placeholder `channel = "your_channel"` and a `busy_queue` larger
-than the outbox queue (the brake could never engage).
+the bad key. This includes a `busy_queue` larger than the outbox queue (the brake could never
+engage) and, when connecting to Twitch, the placeholder `channel = "your_channel"`. Console mode
+and `auth` accept the placeholder, so they work before the channel is set.
 
 ## 13. Error handling
 
