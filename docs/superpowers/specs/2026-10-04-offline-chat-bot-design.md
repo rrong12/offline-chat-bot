@@ -1,7 +1,7 @@
 # Offline Chat Bot: Design (Phase 1)
 
 Date: 2026-10-04
-Status: approved by Robert 2026-10-04
+Status: approved by Robert 2026-10-04; revised the same day for personal (single-player) games
 
 ## 1. Goal
 
@@ -16,7 +16,7 @@ them. Each later phase gets its own short spec.
 
 | Phase | Contents |
 |---|---|
-| **1 (this spec)** | Core (Twitch connection, admin controls, activity log, outbox, stats database, game manager), `?help` / `?commands`, `?leaderboard`, `?gamestats`, `?scramble`, `?hangman` (+ `?g`), `?skip`, `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke`, `?cookie` |
+| **1 (this spec)** | Core (Twitch connection, admin controls, activity log, outbox, stats database, game manager), `?help` / `?commands`, `?leaderboard`, `?gamestats`, `?scramble` (+ `?hint`), `?hangman` (+ `?g`), `?skip`, `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke`, `?cookie` |
 | 2 | `?trivia` (+ `?hint`), `?riddle`, `?familyfeud` / `?feud` / `?ffskip`, `?higherlower` |
 | 3 | `?rng` (own badge rules) |
 | 4 | `?ascii`, `?chatsummary` / `?cs continue` |
@@ -40,8 +40,12 @@ Not built: the `casino` option of `?leaderboard`. The bot has no gambling or cur
 | Logs | Bot activity only, JSONL, one file per UTC day, 30-day retention | No full chat archive. |
 | Where it runs | Robert's laptop for development and testing in his own channel. Later, an always-on Linux server under systemd | Moving to the server is a copy plus a service file. |
 | Shared chat | Only messages from the bot's own channel count | Partner channels' mods cannot control the bot, and games are not flooded. |
-| One game at a time | Yes, with a cooldown between games | Keeps a busy chat readable. |
+| Game mode | **Personal**: `?scramble` starts your own game, only your answers count, and replies are threaded to you. Phase 2's Family Feud and lobby-style games will be chat-wide. | People play whenever they want instead of waiting for one shared game. Chosen by Robert. |
+| Private replies | Not possible at scale; threaded replies instead | Twitch caps bot whispers at 40 unique recipients per day, many users block whispers from strangers, and whispers can be dropped silently. Using extra accounts to get around the cap violates Twitch's developer agreement. |
+| Game limits | One game per person; up to 25 running at once; a 10 s per-person cooldown after a game; new games are refused while 10+ bot messages are waiting to send (busy brake) | Keeps the bot from flooding a busy chat while letting many people play. All adjustable in `config.toml`. |
+| Send rate | 2 messages/s sustained, burst 3 | About 60% of Twitch's mod limit (100 per 30 s). |
 | Hangman guessing | Explicit `?g <letter>` or `?g <answer>`; plain chat is ignored | "W" and "L" are constant reactions in Jason's chat and would otherwise count as guesses. |
+| Scramble hints | On request with `?hint` (10, 7, or 4 points), never automatic | Keeps each personal game to a few messages. |
 | Word categories | `animals`, `countries`, `food`, `games`, `general`, `streamers` | Chosen by Robert from a pitch. Emotes, slang, Twitch terms, and memes were declined. |
 
 ## 3. Twitch integration
@@ -73,8 +77,8 @@ Not built: the `casino` option of `?leaderboard`. The bot has no gambling or cur
 
 ### Limits the bot must respect
 - Messages are capped at 500 characters, so the outbox truncates at a word boundary.
-- The send rate is 100 per 30 s as a mod (20 per 30 s and 1/s otherwise). The outbox stays
-  far below this (section 9).
+- The send rate is 100 per 30 s as a mod (20 per 30 s and 1/s otherwise). The outbox sends at
+  2/s (section 9).
 - Each WebSocket connection has a 10-subscription-cost budget. Phase 1 uses one subscription.
 - With the app token, messages during a shared chat go only to the source channel. That is
   the Twitch default since 2025-05-19 and is what we want.
@@ -116,7 +120,7 @@ offline-chat-bot/
 │   ├── assets.py            loads bundled files from content/ (word lists, fortunes, fallbacks)
 │   ├── games/
 │   │   ├── base.py          Game interface, Outcome
-│   │   ├── manager.py       GameManager: lifecycle, timers, cooldown, skip votes, scoring
+│   │   ├── manager.py       GameManager: personal sessions, limits, timers, cooldowns, scoring
 │   │   ├── scramble.py
 │   │   └── hangman.py
 │   └── content/             bundled data: word lists per category, fortunes, 8ball answers,
@@ -157,7 +161,8 @@ class Connector(Protocol):
 
 ### Message flow
 `Connector → BotCore.on_message → filter → command registry (if prefixed) or
-GameManager.on_message (if a game is active) → handlers produce text → Outbox → Connector.send`.
+GameManager.on_message (if the sender has a game running) → handlers produce text → Outbox →
+Connector.send`.
 
 A single 1-second tick loop calls `GameManager.tick(now)` and the log-retention check. Games
 never create their own timers, so tests can drive time directly.
@@ -165,29 +170,31 @@ never create their own timers, so tests can drive time directly.
 ## 5. Commands (Phase 1)
 
 Cooldowns, unless noted: each command has a **10 s per-user** cooldown and a **5 s global**
-cooldown. A command on cooldown is silently ignored. Control commands (`?bot ...`,
-`?stopgame`), `?skip`, and in-game commands such as `?g` skip these cooldowns. `?skip` is
-limited to one vote per user per round, and each game enforces its own limits on its
-in-game commands. Quick-command answers use Twitch's
+cooldown. A command on cooldown is silently ignored.
+- Game start commands (`?scramble`, `?hangman`) have only the per-user cooldown, so anyone can
+  start their own game.
+- Control commands (`?bot ...`, `?stopgame`), `?skip`, and in-game commands such as `?g` and
+  `?hint` have no cooldowns; each game enforces its own limits on its in-game commands. Quick-command answers use Twitch's
 threaded reply (`reply_to`). Game announcements are plain messages.
 
 | Command | Who | Behavior |
 |---|---|---|
-| `?bot off` | controller | Pause. Cancels the active game (outcome `stopped`, no points), persists `paused=1`, replies "Bot paused by \<name\>. `?bot on` to resume." |
+| `?bot off` | controller | Pause. Ends all running games (outcome `stopped`, no points), persists `paused=1`, replies "Bot paused by \<name\>. `?bot on` to resume." |
 | `?bot on` | controller | Resume and persist `paused=0`. |
-| `?bot status` | controller | "ON/PAUSED · up 3h12m · game: scramble (21s left) · v0.1.0". Works while paused. |
-| `?bot shutdown` | controller | Sends "Shutting down (requested by \<name\>)." at priority, stops the game, logs `admin`/`shutdown` with the user, flushes the outbox (max 3 s), closes the connector, exits with code 0. |
-| `?stopgame` | controller | Cancels the active game. Outcome `stopped`, no points, cooldown starts. |
-| `?skip` | anyone, in a game | Records one skip vote per user per round. When `skip_votes` (default 3) distinct users have voted, the answer is revealed and the round ends with outcome `skipped` and no points. Each vote is acknowledged in a coalesced message ("Skip 2/3"). |
+| `?bot status` | controller | "ON/PAUSED · up 3h12m · games: 4 running · v0.1.0". Works while paused. |
+| `?bot shutdown` | controller | Sends "Shutting down (requested by \<name\>)." at priority, ends all games, logs `admin`/`shutdown` with the user, flushes the outbox (max 3 s), closes the connector, exits with code 0. |
+| `?stopgame` | controller | Ends all running games. Outcome `stopped`, no points. Replies "🛑 Stopped N games. No points awarded." |
+| `?skip` | anyone with a game running | Ends your own game: "⏭️ Skipped. It was ALLIGATOR." Outcome `skipped`, no points. |
 | `?help` / `?commands` | anyone | One message listing the public commands, grouped (Games, Stats, Fun), ending with "?help <command> for details". Built from the registry, so it never drifts. Control commands are left out to keep it short. |
 | `?help <command>` | anyone | The usage line and description for one command, with or without the `?`. Works for control commands too (`?help bot`). Unknown command: "No command named \<x\>. Try ?help." |
 | `?leaderboard [game] [limit]` | anyone | Top N (default 5, clamped 1 to 10) by points for one game, or across all games when no game is named. "Top 5 scramble: 1. a (120) 2. b (98) …". Ties go to more wins, then login. A numeric argument is the limit. |
 | `?gamestats [game] [username]` | anyone | With no game: totals plus a per-game breakdown (wins, played, points), truncated to fit. With a game: wins, played, points, and rank in that game. If the first argument matches a game name it is the game; otherwise it is a username. A leading `@` is stripped. Unknown user: "No stats for \<name\> yet." Defaults to the caller. |
-| `?scramble [category]` | anyone | Start Scramble (section 7). With no category, one is picked at random and named in the opening message. |
+| `?scramble [category]` | anyone | Start your own Scramble (section 7). With no category, one is picked at random and named in the opening message. |
+| `?hint` | anyone with a Scramble running | Next hint for your word (at most two; each lowers the points). |
 | `?scramble categories` | anyone | "Scramble categories: animals, countries, …". Starts nothing and works while a game is running. |
-| `?hangman [category]` | anyone | Start Hangman (section 7). Same random pick as Scramble when no category is given. |
+| `?hangman [category]` | anyone | Start your own Hangman (section 7). Same random pick as Scramble when no category is given. |
 | `?hangman categories` | anyone | Same as `?scramble categories`, for Hangman. |
-| `?g <letter>` / `?g <answer>` | anyone, during Hangman | Guess a letter or the whole answer (section 7). Ignored when no Hangman game is running. |
+| `?g <letter>` / `?g <answer>` | anyone with a Hangman running | Guess a letter or the whole answer in your game (section 7). Ignored otherwise. |
 | `?8ball [question]` | anyone | One of 20 classic answers from `content/8ball.txt`. The question is not echoed. |
 | `?coinflip` | anyone | "Heads" or "Tails". |
 | `?catfact` | anyone | `GET https://catfact.ninja/fact` → `fact`. |
@@ -201,8 +208,10 @@ threaded reply (`reply_to`). Game announcements are plain messages.
 3-second timeout. On failure, or if the result is over 400 characters, the bot uses a random
 line from the matching `content/fallback_*.txt` list (about 50 entries each).
 
-Starting a game while one is running gets "A \<game\> game is already running." During the
-cooldown it gets "Next game in \<n\>s." These replies are subject to the per-user cooldown.
+Starting a game when you already have one gets "You already have a \<game\> game running."
+During your cooldown it gets "Your next game in \<n\>s." At the limit (25 games) or while the
+busy brake is on, it gets "Too many games running right now, try again in a moment." These
+replies are subject to the per-user cooldown.
 
 ## 6. Game framework
 
@@ -236,43 +245,42 @@ class Game(ABC):
 Games are pure. They take messages and time as input, return outcomes, and do no I/O.
 Randomness comes from an injected `random.Random`, so tests can seed it.
 
-### GameManager rules
-- **Start:** `?<name> [category]` starts a game when none is active and the cooldown is over.
+### GameManager rules (personal games)
+- **Sessions:** each player has at most one running game, keyed by user ID. Many players can
+  play at once.
+- **Start:** `?<name> [category]` starts the sender's game unless they already have one, their
+  cooldown (`games.cooldown_seconds`, default 10 s) is running, `games.max_running` (default 25)
+  games are running, or the busy brake is on (`games.busy_queue`, default 10 queued bot messages).
   - With no category, one is chosen at random, and the opening message names it.
   - An unknown category gets the category list and starts nothing.
 - **Category list:** `?<name> categories` replies with the game's categories and starts
-  nothing. It is handled before the start rules, so it works during a game or the cooldown,
-  and it uses the normal command cooldowns. `categories` is reserved and cannot be a category
-  name.
-- **In-game commands:** while a game is active, a prefixed message whose command is in the
-  game's `commands` goes to `on_command` instead of the global registry. When no game
-  declares it, the command is ignored.
-- **Participation:** the game decides what counts as an attempt. `on_message` and
-  `on_command` return `None` for ordinary chatter or rejected input, and an `Outcome`,
-  possibly empty, for an attempt. Only attempts mark
-  the sender as a player of the round, so people just chatting during a game do not inflate
-  "played" in `?gamestats`.
-- **Timers:** `tick(now)` calls `on_tick(elapsed)`. At `time_limit` it calls `on_timeout()`.
-- **Finishing:** when an `Outcome` has `finished=True`, the manager:
-  1. writes the round and its players (awards and winners) in one transaction,
-  2. logs `game_end`,
-  3. sends the messages,
-  4. starts the cooldown (`game_cooldown`, default 30 s).
-- **Skip and stop:** handled in the manager. They call `reveal()` and record outcome
-  `skipped` or `stopped`, with no points.
-- **Errors:** an exception from game code is logged with a traceback. The round is recorded
-  as `stopped` with no points, and chat gets "Game ended due to an error." The bot keeps
-  running.
+  nothing. It works any time and uses the normal per-user command cooldown. `categories` is
+  reserved and cannot be a category name.
+- **Routing:** a player's plain chat goes to their own game only; everyone else's chat is
+  ignored by it. In-game commands (`?g`, `?hint`) go to the sender's game if it declares them,
+  and are ignored otherwise.
+- **Replies:** every game message is a threaded reply to the player's latest message (the start
+  command, or the answer or command that produced it). Board updates coalesce per player.
+- **Timers:** the 1 s tick checks every running game; at `time_limit` it calls `on_timeout()`.
+- **Finishing:** when an `Outcome` has `finished=True`, the manager records the round with the
+  player's points, logs `game_end`, replies with the messages, and starts that player's cooldown.
+- **Skip and stop:** `?skip` ends the sender's game (`skipped`, no points, the answer is
+  revealed). `?stopgame`, `?bot off`, and shutdown end every game (`stopped`, no points).
+- **Errors:** an exception from game code is logged with a traceback. That player's game is
+  recorded as `stopped` with no points, and they get "Game ended due to an error." Other games
+  and the bot keep running.
 - **Help text:** each game supplies a `usage` and `description`, including its in-game commands,
   which `?help <game>` shows.
 - **Registration:** games are listed in `config.toml` under `[games] enabled = [...]`. Adding
   a game takes one module plus one config entry.
+- **Phase 2:** chat-wide games (Family Feud, lobby games) will add a chat-wide mode next to
+  personal sessions.
 
 ### Answer normalization (`text.normalize`)
 1. Unicode NFKC.
 2. Lowercase.
-3. Remove invisible characters, including the U+E0000 tag that Chatterino and 7TV clients
-   append to repeated messages, and zero-width characters.
+3. Remove format characters (category Cf), combining marks (Mn, Me), and the tag block
+   U+E0000-E007F (Chatterino and 7TV append U+E0000 to repeated messages).
 4. Replace punctuation with spaces.
 5. Collapse whitespace and trim.
 
@@ -285,13 +293,13 @@ Substrings do not count, which avoids false positives in a busy chat.
 - **Answer:** a random word from `content/words/<category>.txt`, 4 to 10 letters, letters
   only. The displayed scramble must differ from the word; reshuffle until it does.
 - **Messages:**
-  - start: "🔤 Unscramble (animals): LGRATIOAL, 45s".
-  - Hint 1 at 15 s shows the first and last letters (`A _ _ _ _ _ _ _ R`).
-  - Hint 2 at 30 s reveals about half of the letters, chosen at random but stable.
-- **Attempt:** a message that normalizes to a single word with the same number of letters as
-  the answer. Other chatter is ignored.
-- **Win:** the first message whose normalized text equals the word. Points are 10 before any
-  hint, 7 after hint 1, and 4 after hint 2. "✅ \<name\> got it: ALLIGATOR (+7)".
+  - start: "🔤 Unscramble (animals): LGRATIOAL · 45s · ?hint for a hint".
+  - `?hint` (first use) shows the first and last letters (`A _ _ _ _ _ _ _ R`).
+  - `?hint` (second use) reveals about half of the letters, chosen at random but stable.
+    Further `?hint`s are ignored.
+- **Answering:** the player types the word. Wrong answers cost nothing.
+- **Win:** the player's message equals the word after normalization. Points are 10 with no
+  hints, 7 after one, and 4 after two. "✅ \<name\> got it: ALLIGATOR (+7)".
 - **Timeout:** at 45 s, "⏰ Time's up! It was ALLIGATOR." No points.
 
 ### Hangman
@@ -300,22 +308,21 @@ Substrings do not count, which avoids false positives in a busy chat.
 - **Start:** "🪢 Hangman (animals): _ _ _ _ _ _ _ _ _ · guess with ?g <letter> or ?g <answer> · 6 lives, 120s".
 - **Board:** `_ A _ _ M A N | wrong: E T R (3/6)`. Sent with `coalesce_key="hangman-board"`, so
   bursts of guesses produce one up-to-date board instead of a backlog.
-- **Guessing:** only through `?g`. Plain chat messages are ignored, so "W" and "L"
-  reactions never count.
+- **Guessing:** only through the player's own `?g`. Plain chat messages are ignored, so "W"
+  and "L" reactions never count.
   - `?g <letter>`, one letter A to Z, is a letter guess.
   - `?g <answer>`, anything longer, is a solve attempt.
-  - Each user may use `?g` at most once every 5 s.
+  - At most one `?g` every 2 s.
   - Repeated letters are ignored.
   - A correct new letter earns its guesser 1 point, held until the round ends.
   - A wrong letter costs one of 6 lives.
 - **Attempt:** any accepted `?g`.
 - **Solve:** `?g <answer>` that equals the full answer, normalized, solves it. Wrong solve
   attempts cost nothing, so griefers cannot burn lives with junk words.
-- **Win:** the round is won by a full solve, or when the last hidden letter is revealed. The
-  winner (the solver, or whoever revealed the last letter) gets 10 points. Held letter points
-  are awarded too.
-- **Loss:** after 6 wrong letters or 120 s, "💀 The word was …". Nobody gets points, held
-  letter points included.
+- **Win:** a full solve, or revealing the last hidden letter. The player gets 10 points plus
+  their held letter points.
+- **Loss:** after 6 wrong letters or 120 s, "💀 The word was …". No points, held letter points
+  included.
 
 ### Categories at launch
 | Category | Contents |
@@ -390,9 +397,10 @@ CREATE TABLE schema_version (version INTEGER NOT NULL);
 
 ## 9. Outbox
 
-- **Rate:** a token bucket with a sustained rate of 1 message/s and a burst of 3. As a mod the
-  bot could send about 3/s; the margin is intentional.
-- **Queue:** at most 20 messages. When it is full, new normal-priority messages are dropped
+- **Rate:** a token bucket with a sustained rate of 2 messages/s and a burst of 3. As a mod the
+  bot could send about 3.3/s; the margin is intentional.
+- **Send timeout:** each send gives up after 10 s, is logged, and is not retried.
+- **Queue:** at most 30 messages. When it is full, new normal-priority messages are dropped
   and logged (`send_dropped`). Priority messages (admin replies, shutdown notice) go to the
   front.
 - **Coalescing:** a message with a `coalesce_key` replaces any unsent queued message with the
@@ -401,7 +409,8 @@ CREATE TABLE schema_version (version INTEGER NOT NULL);
   `…` appended.
 - **Send results:** if Twitch returns `is_sent=false`, the `drop_reason` code and message are
   logged. No retries.
-- **Shutdown:** the queue is flushed for up to 3 s.
+- **Shutdown:** the send loop finishes its current message, then the queue is flushed for at
+  most 3 s in total. Anything left is logged as dropped.
 
 ## 10. Permissions
 
@@ -424,8 +433,8 @@ CREATE TABLE schema_version (version INTEGER NOT NULL);
 | `connected` / `disconnected` / `reconnected` | — |
 | `command` | user_id, login, command, args (truncated to 100 chars) |
 | `admin` | user_id, login, action (`off`/`on`/`shutdown`/`stopgame`) |
-| `game_start` | round, game, category, started_by |
-| `game_end` | round, game, outcome, winners, awards |
+| `game_start` | round, game, category, player |
+| `game_end` | round, game, outcome, player, points |
 | `send_dropped` | reason (queue full, or Twitch drop code) |
 | `error` | where, exception type, message, traceback |
 | `shutdown` | by (user or `signal`), exit code |
@@ -452,16 +461,17 @@ prefix = "?"
 [cooldowns]
 user_seconds = 10
 global_seconds = 5
-game_cooldown_seconds = 30
-skip_votes = 3
 
 [games]
 enabled = ["scramble", "hangman"]
+max_running = 25
+cooldown_seconds = 10
+busy_queue = 10
 
 [outbox]
-rate_per_second = 1
+rate_per_second = 2
 burst = 3
-max_queue = 20
+max_queue = 30
 
 [logs]
 retention_days = 30
@@ -501,11 +511,15 @@ needed.
    - stats queries on a temporary database;
    - the daily-use UTC boundary;
    - Scramble and Hangman with a seeded RNG and explicit `now` and `elapsed` values;
-   - GameManager start, cooldown, skip votes, stop, and error-in-game.
+   - GameManager: separate concurrent games, one per player, per-player cooldown, the running
+     limit, the busy brake, hints, skip, stop-all, timeouts, and error-in-game.
 2. **Full-flow tests** drive `BotCore` through a scripted `ConsoleConnector`. Scenarios:
-   - Start scramble, a wrong answer, a right answer, points awarded, `?leaderboard` shows them.
+   - Start scramble; another user's answer is ignored; a wrong answer, a right answer, points
+     awarded, `?leaderboard` shows them.
+   - Two players playing at once; `?hint` lowers the points.
    - Hangman win and loss through `?g`. Plain one-letter messages ("W") are ignored.
-   - Three `?skip` votes.
+   - `?skip` ends your game; a timeout ends it; the busy brake refuses new games.
+   - `?stopgame` ends everyone's games.
    - A non-mod's `?bot shutdown` is ignored. A mod's `?bot off` blocks games; `?bot on`
      restores them.
    - Paused state survives a restart.
@@ -515,7 +529,8 @@ needed.
 3. **Live checklist in Robert's channel**, with the bot modded there, Robert's account, and a
    second non-mod account:
    - The startup log shows `is_mod=true`, and bot messages carry the Chat Bot badge.
-   - Play both games to win, timeout, and skip, and check `?gamestats` and `?leaderboard`.
+   - Play both games to win, timeout, and skip, with two accounts playing at once, and check
+     `?gamestats` and `?leaderboard`.
    - Try every quick command.
    - The non-mod's `?bot off` does nothing.
    - The mod's `?bot off`, `?bot status`, and `?bot on` work.
@@ -568,16 +583,17 @@ cp .env.example .env            # fill in client id and secret
 
 These are not designed here. They are listed so Phase 1 does not block them.
 
-- **`?trivia [category] [difficulty]`, `?hint`, `?skip` (3 votes):** Open Trivia DB supplies
-  categories and difficulties. `?hint` uses the in-game command support built in
-  Phase 1.
-- **`?riddle`:** a bundled riddle list with forgiving answer matching. Only the keyword, or
+- **`?trivia [category] [difficulty]`, `?hint`, `?skip`:** personal. Open Trivia DB supplies
+  categories and difficulties. Easy questions are multiple choice and medium/hard are typed
+  answers (Robert, 2026-10-04). `?hint` uses the in-game command support built in Phase 1.
+- **`?riddle`:** personal. A bundled riddle list with forgiving answer matching. Only the keyword, or
   typo tolerance.
-- **`?familyfeud` / `?feud`, `?ffskip` (3 votes):** needs a survey dataset of answers with
+- **`?familyfeud` / `?feud`, `?ffskip` (3 votes):** chat-wide; adds a chat-wide game mode next to
+  personal sessions. Needs a survey dataset of answers with
   counts. Several answers per round, with points scaled by popularity. Sourcing the data is
   the main work.
-- **`?higherlower`:** needs search-popularity numbers for pairs of terms, as a bundled
-  dataset. Chat votes higher or lower.
+- **`?higherlower`:** personal streak game. Needs search-popularity numbers for pairs of terms,
+  as a bundled dataset.
 - **`?rng`, `?rng today|top|me|<user>`:** one roll from 0 to 1,000,000 per user per UTC day,
   using `daily_uses`. RNGdle's 203 badge rules are not public, so we write our own badge rules
   (palindromes, repeated digits, primes, meme numbers, and so on).

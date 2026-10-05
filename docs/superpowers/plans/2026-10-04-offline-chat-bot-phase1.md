@@ -4,8 +4,8 @@
 
 **Goal:** Build Phase 1 of the Twitch chat bot for jasontheween's offline chat. It covers the
 core (Twitch connection, mod controls, activity log, rate-limited outbox, stats database, game
-manager), `?help`, `?leaderboard`, `?gamestats`, Scramble, Hangman (`?g`), `?skip`, and the
-quick fun commands including `?cookie`. It is playable in a terminal (console mode) and live on
+manager), `?help`, `?leaderboard`, `?gamestats`, personal Scramble (`?hint`) and Hangman (`?g`),
+`?skip`, and the quick fun commands including `?cookie`. It is playable in a terminal (console mode) and live on
 Twitch.
 
 **Architecture:**
@@ -13,8 +13,9 @@ Twitch.
   It talks to the chat platform only through a small `Connector` interface. There are two
   connectors: Twitch (TwitchIO: EventSub WebSocket in, Helix with the app token out) and the
   console.
-- Games are pure classes: messages and time in, `Outcome` out. A `GameManager` owns timers,
-  cooldowns, skip votes, and scoring.
+- Games are pure classes: messages and time in, `Outcome` out. Games are **personal**: a
+  `GameManager` runs one game per player, many players at once, with limits (25 running, a
+  per-player cooldown, and a busy brake), timers, and scoring. Replies are threaded to the player.
 - Everything the bot says goes through a rate-limited `Outbox`. State lives in one SQLite file;
   activity goes to daily JSONL logs.
 
@@ -31,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (147 tests in total before the content task). Copy the code exactly. If a step's
+  this order (185 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -49,6 +50,10 @@ pytest-asyncio.
   6. The console mode uses its own `data/console/` database, so local play never touches real
      stats.
   7. `deploy/offline-chat-bot.service` is the spec's systemd unit as a file.
+- **Revision 2026-10-04 (during execution):** Tasks 1-6 were built and code-reviewed first.
+  Reviews hardened text normalization, the activity log, the stats store, and the outbox, and
+  Robert switched every Phase 1 game to personal (single-player) play. The code blocks below are
+  the reviewed, current versions; Tasks 1-6 are already committed on branch `phase1`.
 - **Not built in Phase 1:** trivia, riddles, Family Feud, Higher or Lower, `?rng`, `?ascii`,
   `?chatsummary`, and the commands web page. These are spec §17.
 
@@ -68,7 +73,7 @@ pytest-asyncio.
 | `bot/commands.py` | `parse_command`, `Command`, `CommandRegistry`, help text | 7 |
 | `bot/games/base.py`, `bot/games/scramble.py` | `Game` + `Outcome`; Scramble | 8 |
 | `bot/games/hangman.py` | Hangman with `?g` | 9 |
-| `bot/games/__init__.py`, `bot/games/manager.py` | `ALL_GAMES`; `GameManager` | 10 |
+| `bot/games/__init__.py`, `bot/games/manager.py` | `ALL_GAMES`; `GameManager` (personal sessions) | 10 |
 | `bot/http.py`, `bot/fun.py` | HTTP client; quick commands + `?cookie` | 11 |
 | `bot/stats_commands.py`, `bot/help.py` | `?leaderboard`, `?gamestats`; `?help` | 12 |
 | `bot/config.py`, `config.toml`, `.env.example` | Settings + validation | 13 |
@@ -166,7 +171,7 @@ git commit -m "Scaffold the package and test setup"
 
 ### Task 2: Clock and text helpers
 
-`Clock` gives wall time (UTC, for dates and logs) and monotonic time (for timers and rate limits). `FakeClock` lets tests move time by hand. `text.py` holds the answer normalization from spec §6 (NFKC, lowercase, strip invisible characters such as Chatterino's U+E0000 duplicate tag, punctuation to spaces), 500-character truncation, Twitch username validation, and `3h 12m` formatting.
+`Clock` gives wall time (UTC, for dates and logs) and monotonic time (for timers and rate limits). `FakeClock` lets tests move time by hand. `text.py` holds the answer normalization from spec §6: NFKC, then lowercase, then drop format characters (Cf), combining marks (Mn, Me), and the tag block U+E0000-E007F (Chatterino's U+E0000 duplicate tag is unassigned, so it needs the explicit range), then punctuation to spaces. It also has 500-character truncation, Twitch username validation, and `3h 12m` formatting. Test strings build special characters with `chr()`, so the source has no raw invisible characters.
 
 **Files:**
 - Create: `bot/clock.py`, `bot/text.py`
@@ -191,7 +196,21 @@ def test_normalize_drops_chatterino_duplicate_tag():
 
 
 def test_normalize_drops_zero_width_characters():
-    assert normalize("alli​gator") == "alligator"
+    assert normalize("alli" + chr(0x200B) + "gator") == "alligator"
+
+
+def test_normalize_removes_combining_marks_instead_of_splitting_words():
+    stroke = chr(0x0336)  # combining long stroke overlay: strikethrough "fancy text"
+    assert normalize(f"h{stroke}e{stroke}l{stroke}l{stroke}o{stroke}") == "hello"
+
+
+def test_normalize_removes_format_characters_mid_word():
+    for invisible in (chr(0x00AD), chr(0x2066), chr(0xFE0F)):  # soft hyphen, directional isolate, variation selector
+        assert normalize(f"alli{invisible}gator") == "alligator"
+
+
+def test_normalize_keeps_accented_letters():
+    assert normalize("Cafe" + chr(0x0301)) == "caf" + chr(0x00E9)  # NFKC composes the accent before marks are dropped
 
 
 def test_normalize_applies_nfkc():
@@ -221,6 +240,11 @@ def test_truncate_hard_cuts_one_long_word():
 
 def test_clean_username_accepts_valid_names():
     assert clean_username("@Some_User") == "some_user"
+
+
+def test_clean_username_accepts_boundary_lengths():
+    assert clean_username("abc") == "abc"
+    assert clean_username("x" * 25) == "x" * 25
 
 
 def test_clean_username_rejects_bad_names():
@@ -292,14 +316,21 @@ import unicodedata
 
 MAX_MESSAGE = 500
 
-# Zero-width characters, word joiners, BOM, combining grapheme joiner, Mongolian vowel
-# separator, and the Unicode tag block (Chatterino/7TV append U+E0000 to repeated messages).
-_INVISIBLE = re.compile("[͏᠎​-‏⁠-⁤﻿\U000e0000-\U000e007f]")
+# Removed outright rather than turned into spaces, so a word stays one word:
+# - format characters (category Cf): zero-width spaces and joiners, BOM, soft hyphen,
+#   directional marks;
+# - combining marks (Mn, Me): strikethrough and "fancy text" overlays, variation selectors;
+# - the Unicode tag block U+E0000-E007F. Chatterino and 7TV append U+E0000 to repeated
+#   messages, and it is unassigned (category Cn), so the category check alone misses it.
+_DROP_CATEGORIES = frozenset({"Cf", "Mn", "Me"})
+_TAG_BLOCK = range(0xE0000, 0xE0080)
 _USERNAME = re.compile(r"^[A-Za-z0-9_]{3,25}$")
 
 
 def strip_invisible(text: str) -> str:
-    return _INVISIBLE.sub("", text)
+    return "".join(
+        ch for ch in text if unicodedata.category(ch) not in _DROP_CATEGORIES and ord(ch) not in _TAG_BLOCK
+    )
 
 
 def normalize(text: str) -> str:
@@ -345,7 +376,7 @@ def format_duration(seconds: float) -> str:
 
 Run: `.venv/bin/pytest tests/test_text.py -q`
 
-Expected: PASS (12 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (16 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 6: Commit**
 
@@ -356,7 +387,7 @@ git commit -m "Add clock and text helpers"
 
 ### Task 3: Assets, shared test fixtures, activity log
 
-`Assets` reads the bundled text files (one item per line, `#` comments allowed). `conftest.py` gives every test a `FakeClock` and a tiny temporary content folder, so game tests never depend on the real word lists. `ActivityLog` appends one JSON object per line to `activity-YYYY-MM-DD.jsonl` (UTC) and prunes files older than the retention window, once per day (spec §11).
+`Assets` reads the bundled text files (one item per line, `#` comments allowed). `conftest.py` gives every test a `FakeClock` and a tiny temporary content folder, so game tests never depend on the real word lists. `ActivityLog` appends one JSON object per line to `activity-YYYY-MM-DD.jsonl` (UTC) and prunes files older than the retention window, once per day (spec §11). `write()` never raises: a logging failure must not crash the bot, and a caller can't overwrite `ts`.
 
 **Files:**
 - Create: `bot/assets.py`, `bot/activity_log.py`, `tests/conftest.py`
@@ -439,6 +470,19 @@ def test_write_appends_json_line_to_todays_file(tmp_path, clock: FakeClock):
     }
 
 
+def test_caller_cannot_overwrite_timestamp(tmp_path, clock: FakeClock):
+    log = ActivityLog(tmp_path, clock)
+    log.write("command", ts="bogus")
+    record = json.loads(log.path_for(date(2026, 10, 4)).read_text())
+    assert record["ts"] == "2026-10-04T12:00:00Z"
+
+
+def test_write_failure_is_swallowed(tmp_path, clock: FakeClock):
+    log = ActivityLog(tmp_path / "logs", clock)
+    (tmp_path / "logs").rmdir()  # the log folder disappears while the bot runs
+    log.write("error", where="test")  # must not raise
+
+
 def test_new_utc_day_starts_new_file(tmp_path, clock: FakeClock):
     log = ActivityLog(tmp_path, clock)
     log.write("a")
@@ -453,10 +497,11 @@ def test_prune_deletes_files_older_than_retention(tmp_path, clock: FakeClock):
     old = tmp_path / "activity-2026-09-03.jsonl"
     kept = tmp_path / "activity-2026-09-04.jsonl"
     other = tmp_path / "notes.txt"
-    for p in (old, kept, other):
+    malformed = tmp_path / "activity-not-a-date.jsonl"
+    for p in (old, kept, other, malformed):
         p.write_text("x")
     assert log.prune() == 1
-    assert not old.exists() and kept.exists() and other.exists()
+    assert not old.exists() and kept.exists() and other.exists() and malformed.exists()
 
 
 def test_maybe_rollover_prunes_once_per_day(tmp_path, clock: FakeClock):
@@ -505,7 +550,7 @@ class Assets:
         return sorted(p.stem for p in (self.root / "words").glob("*.txt"))
 
 
-@cache
+@cache  # content is bundled and read-only, so each file is read once per process
 def _read(path: Path) -> tuple[str, ...]:
     text = path.read_text(encoding="utf-8")
     return tuple(
@@ -544,12 +589,18 @@ class ActivityLog:
         return self.directory / f"{_PREFIX}{day.isoformat()}.jsonl"
 
     def write(self, event: str, **fields: Any) -> None:
+        """Append one event. Never raises: a logging failure must not crash the bot."""
         now = self.clock.now()
-        record = {"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "event": event, **fields}
+        stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        record = {"ts": stamp, "event": event, **fields}
+        record["ts"] = stamp  # a caller-supplied "ts" field must not replace the real timestamp
         line = json.dumps(record, ensure_ascii=False, default=str)
-        with self.path_for(now.date()).open("a", encoding="utf-8") as fp:
-            fp.write(line + "\n")
         logger.info("%s %s", event, json.dumps(fields, ensure_ascii=False, default=str))
+        try:
+            with self.path_for(now.date()).open("a", encoding="utf-8") as fp:
+                fp.write(line + "\n")
+        except OSError:
+            logger.exception("could not write the activity log")
 
     def prune(self) -> int:
         """Delete files older than the retention window. Returns how many were deleted."""
@@ -562,7 +613,11 @@ class ActivityLog:
             except ValueError:
                 continue
             if day < cutoff:
-                path.unlink()
+                try:
+                    path.unlink()
+                except OSError:
+                    logger.exception("could not delete old log %s", path)
+                    continue
                 deleted += 1
         self._last_prune_day = today
         return deleted
@@ -577,7 +632,7 @@ class ActivityLog:
 
 Run: `.venv/bin/pytest tests/test_assets.py tests/test_activity_log.py -q`
 
-Expected: PASS (7 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 8: Commit**
 
@@ -588,7 +643,7 @@ git commit -m "Add asset loading and the activity log"
 
 ### Task 4: Stats store (SQLite)
 
-The schema from spec §8, applied through numbered migrations keyed off `schema_version`. Rounds and their players are written in one transaction when a round ends; `record_round` also upserts each player's user row. Leaderboards and ranks are computed from `round_players` (no stored totals), ordered by points, then wins, then login, and only list people with points. `claim_daily` relies on the primary key, so a second claim on the same UTC day fails atomically.
+The schema from spec §8, applied through numbered migrations keyed off `schema_version`. Each migration runs as one `BEGIN; ...; COMMIT;` script, because sqlite3 doesn't wrap CREATE statements in a transaction, and a database newer than the code is refused. Migration 1 also creates indexes for the ranking queries. Rounds and their players are written in one transaction when a round ends; `record_round` also upserts each player's user row. Leaderboards and ranks are computed from `round_players` (no stored totals), ordered by points, then wins, then login, and only list people with points; they aggregate first and join users after. `claim_daily` uses `ON CONFLICT DO NOTHING` on the primary key, so a second claim on the same UTC day fails atomically.
 
 **Files:**
 - Create: `bot/stats.py`
@@ -597,21 +652,28 @@ The schema from spec §8, applied through numbered migrations keyed off `schema_
 - [ ] **Step 1: Write the failing test `tests/test_stats.py`**
 
 ```python
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from bot import stats as stats_module
 from bot.stats import GameStats, PlayerResult, RoundRecord, StatsStore
 
 T0 = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def store() -> StatsStore:
+def store():
     s = StatsStore(":memory:")
     s.touch_user("u1", "alice", "Alice", T0)
-    return s
+    yield s
+    s.close()
+
+
+def count(store: StatsStore, table: str) -> int:
+    return store._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
 
 def player(uid: str, points: int = 0, won: bool = False) -> PlayerResult:
@@ -629,6 +691,31 @@ def test_migrations_create_schema_and_are_idempotent(tmp_path: Path):
     StatsStore(path).close()
     again = StatsStore(path)
     assert again.schema_version() == 1
+    again.close()
+
+
+def test_failed_migration_rolls_back_completely(tmp_path: Path, monkeypatch):
+    broken = "CREATE TABLE first_table (x INTEGER); CREATE TABLE broken ("
+    monkeypatch.setattr(stats_module, "MIGRATIONS", [stats_module.MIGRATIONS[0], broken])
+    path = tmp_path / "bot.db"
+    with pytest.raises(sqlite3.Error):
+        StatsStore(path)
+    monkeypatch.setattr(stats_module, "MIGRATIONS", stats_module.MIGRATIONS[:1])
+    s = StatsStore(path)  # migration 1 committed, migration 2 left nothing behind
+    assert s.schema_version() == 1
+    tables = {r[0] for r in s._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "first_table" not in tables
+    s.close()
+
+
+def test_database_newer_than_code_is_refused(tmp_path: Path):
+    path = tmp_path / "bot.db"
+    s = StatsStore(path)
+    with s._conn:
+        s._conn.execute("UPDATE schema_version SET version = 99")
+    s.close()
+    with pytest.raises(RuntimeError, match="newer than this code"):
+        StatsStore(path)
 
 
 def test_touch_and_find_user_case_insensitive(store: StatsStore):
@@ -641,10 +728,30 @@ def test_touch_user_updates_renamed_login(store: StatsStore):
     assert store.find_user("alice_new").display_name == "Alice_New"
 
 
+def test_find_user_prefers_most_recent_owner_of_a_login(store: StatsStore):
+    store.touch_user("old", "bob", "Bob", T0)  # renamed away later, but never seen again
+    store.touch_user("new", "bob", "Bob", T0 + timedelta(days=30))  # took the name "bob"
+    assert store.find_user("bob").user_id == "new"
+
+
 def test_record_round_upserts_players_and_returns_id(store: StatsStore):
     rid = record(store, "scramble", [player("u2", 10, True), player("u3")])
     assert rid == 1
     assert store.find_user("user_u2").user_id == "u2"
+
+
+def test_record_round_with_unknown_starter_writes_nothing(store: StatsStore):
+    rec = RoundRecord("scramble", None, "nobody", T0, T0, "won", [player("u2", 10, True)])
+    with pytest.raises(sqlite3.IntegrityError):
+        store.record_round(rec)
+    assert count(store, "rounds") == 0 and count(store, "round_players") == 0
+    assert store.find_user("user_u2") is None  # the player upsert was rolled back too
+
+
+def test_record_round_with_bad_outcome_writes_nothing(store: StatsStore):
+    with pytest.raises(sqlite3.IntegrityError):
+        record(store, "scramble", [player("u2", 10, True)], outcome="exploded")
+    assert count(store, "rounds") == 0 and count(store, "round_players") == 0
 
 
 def test_leaderboard_orders_by_points_then_wins_then_login(store: StatsStore):
@@ -657,6 +764,14 @@ def test_leaderboard_orders_by_points_then_wins_then_login(store: StatsStore):
     assert len(store.leaderboard(None, 2)) == 2
 
 
+def test_leaderboard_ties_on_points_go_to_more_wins(store: StatsStore):
+    record(store, "scramble", [player("aaa", 5, False)])
+    record(store, "scramble", [player("aaa", 5, False)])
+    record(store, "scramble", [player("zzz", 10, True)])
+    assert [r.user_id for r in store.leaderboard(None, 10)] == ["zzz", "aaa"]  # same points, zzz has a win
+    assert store.rank("aaa", None) == 2
+
+
 def test_user_stats_per_game_and_rank(store: StatsStore):
     record(store, "scramble", [player("a", 10, True), player("b")])
     record(store, "scramble", [player("b", 7, True)])
@@ -665,6 +780,16 @@ def test_user_stats_per_game_and_rank(store: StatsStore):
     assert store.rank("a", "scramble") == 1
     assert store.rank("b", "scramble") == 2
     assert store.rank("zzz", "scramble") is None
+    assert store.rank("a", None) == 1  # 13 points overall
+    record(store, "hangman", [player("z", 0)], outcome="lost")
+    assert store.rank("z", "hangman") is None  # played, but no points
+
+
+def test_iso_timestamps_are_stored_in_utc(store: StatsStore):
+    eastern = timezone(timedelta(hours=-5))
+    store.touch_user("u9", "late", "Late", datetime(2026, 10, 4, 22, 0, tzinfo=eastern))
+    row = store._conn.execute("SELECT last_seen FROM users WHERE user_id = 'u9'").fetchone()
+    assert row[0] == "2026-10-05T03:00:00Z"
 
 
 def test_claim_daily_only_once_per_day(store: StatsStore):
@@ -680,7 +805,9 @@ def test_state_round_trip_survives_reopen(tmp_path: Path):
     assert s.get_state("paused", "0") == "0"
     s.set_state("paused", "1")
     s.close()
-    assert StatsStore(path).get_state("paused") == "1"
+    reopened = StatsStore(path)
+    assert reopened.get_state("paused") == "1"
+    reopened.close()
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -698,7 +825,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 MIGRATIONS: list[str] = [
@@ -738,6 +865,10 @@ MIGRATIONS: list[str] = [
     );
 
     CREATE TABLE bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+    -- Covering index for per-user totals (leaderboards, ranks, ?gamestats); game filter.
+    CREATE INDEX round_players_user ON round_players(user_id, points, won);
+    CREATE INDEX rounds_game ON rounds(game);
     """,
 ]
 
@@ -787,7 +918,7 @@ class GameStats:
 
 
 def _iso(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class StatsStore:
@@ -804,16 +935,18 @@ class StatsStore:
     def _migrate(self) -> None:
         with self._conn:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
-            row = self._conn.execute("SELECT version FROM schema_version").fetchone()
-            version = row["version"] if row else 0
-            if row is None:
+            if self._conn.execute("SELECT version FROM schema_version").fetchone() is None:
                 self._conn.execute("INSERT INTO schema_version (version) VALUES (0)")
+        version = self.schema_version()
+        if version > len(MIGRATIONS):
+            raise RuntimeError(
+                f"database schema is version {version}, newer than this code (version {len(MIGRATIONS)})"
+            )
         for number, sql in enumerate(MIGRATIONS[version:], start=version + 1):
+            # sqlite3 doesn't wrap CREATE statements in a transaction by itself, so BEGIN/COMMIT
+            # make each migration all-or-nothing; on an error, the `with` block rolls it back.
             with self._conn:
-                for statement in sql.split(";"):
-                    if statement.strip():
-                        self._conn.execute(statement)
-                self._conn.execute("UPDATE schema_version SET version = ?", (number,))
+                self._conn.executescript(f"BEGIN;\n{sql}\nUPDATE schema_version SET version = {number};\nCOMMIT;")
 
     def schema_version(self) -> int:
         return self._conn.execute("SELECT version FROM schema_version").fetchone()["version"]
@@ -845,7 +978,11 @@ class StatsStore:
     # rounds
 
     def record_round(self, rec: RoundRecord) -> int:
-        """Write a finished round and its players in one transaction. Returns the round id."""
+        """Write a finished round and its players in one transaction. Returns the round id.
+
+        Players' user rows are upserted here; the starter (`started_by`) must already have a
+        user row (the game manager touches the starter when the game starts).
+        """
         with self._conn:
             for p in rec.players:
                 self._upsert_user(p.user_id, p.login, p.display_name, rec.ended_at)
@@ -861,29 +998,39 @@ class StatsStore:
             )
         return round_id
 
-    def _ranked(self, game: str | None) -> list[LeaderRow]:
+    @staticmethod
+    def _totals_sql(game: str | None) -> str:
+        """Per-user totals with points > 0, for all games or one (`:game`)."""
+        if game is None:
+            return """SELECT user_id, SUM(points) AS points, SUM(won) AS wins
+                      FROM round_players GROUP BY user_id HAVING SUM(points) > 0"""
+        return """SELECT rp.user_id, SUM(rp.points) AS points, SUM(rp.won) AS wins
+                  FROM round_players rp JOIN rounds r ON r.round_id = rp.round_id
+                  WHERE r.game = :game GROUP BY rp.user_id HAVING SUM(rp.points) > 0"""
+
+    def leaderboard(self, game: str | None, limit: int) -> list[LeaderRow]:
         rows = self._conn.execute(
-            """SELECT rp.user_id, u.login, u.display_name,
-                      SUM(rp.points) AS points, SUM(rp.won) AS wins
-               FROM round_players rp
-               JOIN rounds r ON r.round_id = rp.round_id
-               JOIN users u ON u.user_id = rp.user_id
-               WHERE (:game IS NULL OR r.game = :game)
-               GROUP BY rp.user_id
-               HAVING SUM(rp.points) > 0
-               ORDER BY points DESC, wins DESC, u.login ASC""",
-            {"game": game},
+            f"""WITH t AS ({self._totals_sql(game)})
+                SELECT t.user_id, u.login, u.display_name, t.points, t.wins
+                FROM t JOIN users u ON u.user_id = t.user_id
+                ORDER BY t.points DESC, t.wins DESC, u.login ASC
+                LIMIT :limit""",
+            {"game": game, "limit": max(0, limit)},
         ).fetchall()
         return [LeaderRow(r["user_id"], r["login"], r["display_name"], r["points"], r["wins"]) for r in rows]
 
-    def leaderboard(self, game: str | None, limit: int) -> list[LeaderRow]:
-        return self._ranked(game)[:limit]
-
     def rank(self, user_id: str, game: str | None) -> int | None:
-        for position, row in enumerate(self._ranked(game), start=1):
-            if row.user_id == user_id:
-                return position
-        return None
+        """1-based position on the leaderboard, or None if the user has no points there."""
+        row = self._conn.execute(
+            f"""WITH t AS ({self._totals_sql(game)}),
+                ranked AS (
+                  SELECT t.user_id,
+                         ROW_NUMBER() OVER (ORDER BY t.points DESC, t.wins DESC, u.login ASC) AS position
+                  FROM t JOIN users u ON u.user_id = t.user_id)
+                SELECT position FROM ranked WHERE user_id = :user_id""",
+            {"game": game, "user_id": user_id},
+        ).fetchone()
+        return row["position"] if row else None
 
     def user_stats(self, user_id: str) -> list[GameStats]:
         rows = self._conn.execute(
@@ -900,15 +1047,13 @@ class StatsStore:
 
     def claim_daily(self, user_id: str, feature: str, utc_date: str, result: str) -> bool:
         """Record today's use. Returns False if this user already used the feature today."""
-        try:
-            with self._conn:
-                self._conn.execute(
-                    "INSERT INTO daily_uses (user_id, feature, utc_date, result) VALUES (?, ?, ?, ?)",
-                    (user_id, feature, utc_date, result),
-                )
-        except sqlite3.IntegrityError:
-            return False
-        return True
+        with self._conn:
+            cur = self._conn.execute(
+                """INSERT INTO daily_uses (user_id, feature, utc_date, result) VALUES (?, ?, ?, ?)
+                   ON CONFLICT (user_id, feature, utc_date) DO NOTHING""",
+                (user_id, feature, utc_date, result),
+            )
+        return cur.rowcount == 1
 
     def get_daily(self, user_id: str, feature: str, utc_date: str) -> str | None:
         row = self._conn.execute(
@@ -936,7 +1081,7 @@ class StatsStore:
 
 Run: `.venv/bin/pytest tests/test_stats.py -q`
 
-Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (15 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -953,9 +1098,10 @@ git commit -m "Add the SQLite stats store"
 - coalesces messages that share a `coalesce_key` (for example the Hangman board) by replacing the unsent one in place;
 - puts priority messages at the front, and evicts the newest normal message if the queue is full;
 - drops and logs new normal messages when the queue is full;
-- sends through a token bucket: 1 per second sustained, burst of 3.
+- sends through a token bucket (the class defaults to 1/s and a burst of 3; the bot configures 2/s);
+- gives up on any send after 10 s (TwitchIO's HTTP client otherwise waits up to 300 s).
 
-`flush_ready()` sends what the bucket allows right now, which makes it testable with `FakeClock`. `run()` is the background loop. `drain()` flushes for up to 3 real seconds at shutdown.
+`flush_ready()` sends what the bucket allows right now, which makes it testable with `FakeClock`. `run()` is the background loop: it paces by tokens, wakes on new messages, stops promptly, and logs and survives unexpected errors. `drain()` flushes for at most 3 real seconds at shutdown and logs what it had to drop. A lock keeps `run()` and `drain()` from sending at the same time.
 
 **Files:**
 - Create: `bot/connectors/__init__.py` (empty), `bot/connectors/base.py`, `bot/outbox.py`
@@ -965,6 +1111,7 @@ git commit -m "Add the SQLite stats store"
 
 ```python
 import asyncio
+from itertools import pairwise
 
 import pytest
 
@@ -1112,6 +1259,140 @@ async def test_run_loop_sends_and_stops(tmp_path):
     stop.set()
     await asyncio.wait_for(task, timeout=2)
     assert rec.sent == [("hello", None)]
+
+
+async def test_coalescing_into_priority_keeps_priority_order(clock, log):
+    box = make(clock, log, Recorder())
+    box.enqueue("P1", priority=True)
+    box.enqueue("K1", coalesce_key="k")
+    box.enqueue("b")
+    box.enqueue("K2", coalesce_key="k", priority=True)  # changes lane: must move up front
+    box.enqueue("P2", priority=True)
+    assert box.pending() == ["P1", "K2", "P2", "b"]
+
+
+async def test_coalescing_into_normal_moves_back(clock, log):
+    box = make(clock, log, Recorder())
+    box.enqueue("K1", coalesce_key="k", priority=True)
+    box.enqueue("P1", priority=True)
+    box.enqueue("a")
+    box.enqueue("K2", coalesce_key="k")
+    box.enqueue("P2", priority=True)
+    assert box.pending() == ["P1", "P2", "a", "K2"]
+
+
+async def test_coalescing_when_full_replaces_instead_of_dropping(clock, log):
+    box = make(clock, log, Recorder(), max_queue=2)
+    box.enqueue("board 1", coalesce_key="board")
+    box.enqueue("x")
+    assert box.enqueue("board 2", coalesce_key="board")
+    assert box.pending() == ["board 2", "x"]
+
+
+async def test_coalescing_after_original_was_sent_appends(clock, log):
+    rec = Recorder()
+    box = make(clock, log, rec)
+    box.enqueue("board 1", coalesce_key="board")
+    await box.flush_ready()
+    box.enqueue("board 2", coalesce_key="board")
+    assert box.pending() == ["board 2"]
+
+
+async def test_partial_refill_accumulates(clock: FakeClock, log):
+    box = make(clock, log, Recorder(), rate=1, burst=1)
+    for t in ("a", "b"):
+        box.enqueue(t)
+    assert await box.flush_ready() == 1
+    clock.advance(0.5)
+    assert await box.flush_ready() == 0
+    clock.advance(0.5)
+    assert await box.flush_ready() == 1
+
+
+async def test_bad_send_result_is_logged_and_loop_continues(clock, log, tmp_path):
+    async def returns_none(text, reply_to):
+        return None
+
+    box = Outbox(returns_none, clock, log)
+    box.enqueue("one")
+    box.enqueue("two")
+    assert await box.flush_ready() == 2
+    assert "outbox.send" in (tmp_path / "logs" / "activity-2026-10-04.jsonl").read_text()
+
+
+async def test_hung_send_times_out(tmp_path):
+    clock = Clock()
+    log = ActivityLog(tmp_path, clock)
+    sent = []
+
+    async def hangs_then_works(text, reply_to):
+        if text == "hang":
+            await asyncio.sleep(10)
+        sent.append(text)
+        return SendResult(True)
+
+    box = Outbox(hangs_then_works, clock, log, send_timeout=0.1)
+    box.enqueue("hang")
+    box.enqueue("ok")
+    await asyncio.wait_for(box.flush_ready(), timeout=2)
+    assert sent == ["ok"]
+
+
+async def test_drain_gives_up_at_timeout_even_mid_send(tmp_path):
+    clock = Clock()
+    log = ActivityLog(tmp_path, clock)
+
+    async def slow(text, reply_to):
+        await asyncio.sleep(5)
+        return SendResult(True)
+
+    box = Outbox(slow, clock, log)
+    for t in ("a", "b", "c"):
+        box.enqueue(t)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await box.drain(timeout=0.2)
+    assert loop.time() - start < 1
+    assert len(box) == 0
+    assert '"reason": "shutdown"' in log.path_for(clock.now().date()).read_text()
+
+
+async def test_run_wakes_promptly_for_new_messages_and_stops_promptly(tmp_path):
+    clock = Clock()
+    rec = Recorder()
+    box = Outbox(rec, clock, ActivityLog(tmp_path, clock))
+    stop = asyncio.Event()
+    task = asyncio.create_task(box.run(stop))
+    await asyncio.sleep(0.05)  # loop is now idle, waiting
+    box.enqueue("late")
+    await asyncio.sleep(0.05)
+    assert rec.sent == [("late", None)]
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    stop.set()
+    await asyncio.wait_for(task, timeout=2)
+    assert loop.time() - start < 0.2
+
+
+async def test_run_paces_to_the_configured_rate(tmp_path):
+    clock = Clock()
+    times = []
+
+    async def timed(text, reply_to):
+        times.append(asyncio.get_running_loop().time())
+        return SendResult(True)
+
+    box = Outbox(timed, clock, ActivityLog(tmp_path, clock), rate=10, burst=1)
+    stop = asyncio.Event()
+    for i in range(4):
+        box.enqueue(f"m{i}")
+    task = asyncio.create_task(box.run(stop))
+    await asyncio.sleep(0.5)
+    stop.set()
+    await asyncio.wait_for(task, timeout=2)
+    gaps = [b - a for a, b in pairwise(times)]
+    assert len(times) == 4
+    assert all(0.07 < g < 0.15 for g in gaps), gaps
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -1234,6 +1515,7 @@ class Outbox:
         rate: float = 1.0,
         burst: int = 3,
         max_queue: int = 20,
+        send_timeout: float = 10.0,
     ) -> None:
         self._send = send
         self._clock = clock
@@ -1241,10 +1523,12 @@ class Outbox:
         self.rate = rate
         self.burst = burst
         self.max_queue = max_queue
+        self.send_timeout = send_timeout
         self._queue: list[OutMessage] = []
         self._tokens = float(burst)
         self._last_refill = clock.mono()
         self._wake = asyncio.Event()
+        self._flush_lock = asyncio.Lock()  # run() and drain() must never send concurrently
 
     def __len__(self) -> int:
         return len(self._queue)
@@ -1265,8 +1549,11 @@ class Outbox:
         if coalesce_key is not None:
             for i, queued in enumerate(self._queue):
                 if queued.coalesce_key == coalesce_key:
-                    self._queue[i] = msg
-                    return True
+                    if queued.priority == priority:
+                        self._queue[i] = msg  # same lane: replace in place
+                        return True
+                    del self._queue[i]  # changing lanes: re-insert below to keep priority order
+                    break
         if len(self._queue) >= self.max_queue:
             normal = [i for i, m in enumerate(self._queue) if not m.priority]
             if not priority or not normal:
@@ -1289,50 +1576,79 @@ class Outbox:
 
     async def flush_ready(self) -> int:
         """Send as many queued messages as the rate limit allows right now."""
-        self._refill()
-        sent = 0
-        while self._queue and self._tokens >= 1:
-            msg = self._queue.pop(0)
-            self._tokens -= 1
-            sent += 1
-            try:
-                result = await self._send(msg.text, msg.reply_to)
-            except Exception as exc:  # network errors must not kill the send loop
-                logger.exception("send failed")
-                self._log.write("error", where="outbox.send", type=type(exc).__name__, message=str(exc))
-                continue
+        async with self._flush_lock:
+            self._refill()
+            sent = 0
+            while self._queue and self._tokens >= 1:
+                msg = self._queue.pop(0)
+                self._tokens -= 1
+                sent += 1
+                await self._send_one(msg)
+            return sent
+
+    async def _send_one(self, msg: OutMessage) -> None:
+        """Send one message. Logs failures and drops; never raises (except cancellation)."""
+        try:
+            result = await asyncio.wait_for(self._send(msg.text, msg.reply_to), self.send_timeout)
             if not result.sent:
                 self._log.write(
-                    "send_dropped", reason=result.drop_code or "unknown", message=result.drop_message
+                    "send_dropped",
+                    reason=result.drop_code or "unknown",
+                    message=result.drop_message,
+                    text=msg.text[:100],
                 )
-        return sent
+        except Exception as exc:  # timeouts and network errors must not kill the send loop
+            logger.exception("send failed")
+            self._log.write(
+                "error", where="outbox.send", type=type(exc).__name__, message=str(exc), text=msg.text[:100]
+            )
+
+    def _next_delay(self) -> float:
+        """How long the loop should wait: until the next token if messages are queued, else idle."""
+        if not self._queue:
+            return 1.0
+        self._refill()
+        return max(0.0, (1 - self._tokens) / self.rate)
 
     async def run(self, stop: asyncio.Event) -> None:
         """Background loop: send whenever there is something queued and a token available."""
         while not stop.is_set():
-            await self.flush_ready()
-            self._wake.clear()
-            delay = 0.25 if self._queue else 1.0
             try:
-                await asyncio.wait_for(self._wake.wait(), timeout=delay)
-            except asyncio.TimeoutError:
-                pass
+                await self.flush_ready()
+                self._wake.clear()
+                waiters = [asyncio.ensure_future(stop.wait()), asyncio.ensure_future(self._wake.wait())]
+                try:
+                    await asyncio.wait(waiters, timeout=self._next_delay(), return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for waiter in waiters:
+                        waiter.cancel()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # never let the loop die silently
+                logger.exception("outbox loop error")
+                self._log.write("error", where="outbox.run", type=type(exc).__name__, message=str(exc))
+                await asyncio.sleep(1)
 
     async def drain(self, timeout: float = 3.0) -> None:
         """Send what's left (still rate limited), giving up after `timeout` real seconds."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while self._queue and loop.time() < deadline:
-            await self.flush_ready()
-            if self._queue:
-                await asyncio.sleep(0.05)
+        try:
+            async with asyncio.timeout(timeout):
+                while self._queue:
+                    await self.flush_ready()
+                    if self._queue:
+                        await asyncio.sleep(self._next_delay() or 0.01)
+        except TimeoutError:
+            pass
+        if self._queue:
+            self._log.write("send_dropped", reason="shutdown", count=len(self._queue))
+            self._queue.clear()
 ```
 
 - [ ] **Step 6: Run the tests and confirm they pass**
 
 Run: `.venv/bin/pytest tests/test_outbox.py -q`
 
-Expected: PASS (12 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (22 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -1343,7 +1659,7 @@ git commit -m "Add connector types and the rate-limited outbox"
 
 ### Task 6: Cooldowns, permissions, test helpers
 
-`check_command` starts both the per-user and the global cooldown only when neither is running, so a blocked attempt doesn't extend the wait. `is_controller` is spec §10. `tests/helpers.py` starts here with `make_msg`; Tasks 11 and 15 append to it.
+`check_command` starts both the per-user and the global cooldown only when neither is running, so a blocked attempt doesn't extend the wait. Expired entries are pruned at 10,000; if most are still live, the next prune waits until the dict doubles. `is_controller` is spec §10. `tests/helpers.py` starts here with `make_msg`; Tasks 11 and 15 append to it.
 
 **Files:**
 - Create: `bot/cooldowns.py`, `bot/permissions.py`, `tests/helpers.py`
@@ -1418,6 +1734,37 @@ def test_blocked_attempt_does_not_restart_cooldown(clock: FakeClock):
     assert cd.check_command("fact", "u1", 10, 0)
 
 
+def test_ready(clock: FakeClock):
+    cd = Cooldowns(clock)
+    assert cd.ready("k")
+    cd.trigger("k", 5)
+    assert not cd.ready("k")
+    clock.advance(5)
+    assert cd.ready("k")
+
+
+def test_prune_drops_expired_entries(clock: FakeClock, monkeypatch):
+    monkeypatch.setattr("bot.cooldowns._PRUNE_AT", 10)
+    cd = Cooldowns(clock)
+    for i in range(10):
+        cd.trigger(("old", i), 1)
+    clock.advance(2)  # all ten have expired
+    cd.trigger("new", 5)  # reaching the threshold prunes first
+    assert len(cd._until) == 1
+
+
+def test_prune_backs_off_when_entries_are_still_active(clock: FakeClock, monkeypatch):
+    monkeypatch.setattr("bot.cooldowns._PRUNE_AT", 10)
+    cd = Cooldowns(clock)
+    for i in range(10):
+        cd.trigger(("live", i), 60)
+    cd.trigger("one more", 60)  # prune finds nothing expired
+    assert cd._prune_at == 20  # next scan waits until the dict doubles
+    for i in range(8):
+        cd.trigger(("more", i), 60)
+    assert len(cd._until) == 19  # no rescans in between, nothing lost
+
+
 def test_remaining(clock: FakeClock):
     cd = Cooldowns(clock)
     cd.trigger("game", 30)
@@ -1457,17 +1804,23 @@ class Cooldowns:
     def __init__(self, clock: Clock) -> None:
         self._clock = clock
         self._until: dict[Hashable, float] = {}
+        self._prune_at = _PRUNE_AT
 
     def remaining(self, key: Hashable) -> float:
+        """Seconds until `key` is ready again (0 if ready)."""
         return max(0.0, self._until.get(key, 0.0) - self._clock.mono())
 
     def ready(self, key: Hashable) -> bool:
         return self.remaining(key) == 0.0
 
     def trigger(self, key: Hashable, seconds: float) -> None:
-        if len(self._until) >= _PRUNE_AT:
+        """Start (or restart) the cooldown for `key`."""
+        if len(self._until) >= self._prune_at:
             now = self._clock.mono()
             self._until = {k: v for k, v in self._until.items() if v > now}
+            # If most entries are still active, wait until the dict doubles before scanning again,
+            # so a large live set costs amortized O(1) per call instead of a rescan every time.
+            self._prune_at = max(_PRUNE_AT, 2 * len(self._until))
         self._until[key] = self._clock.mono() + seconds
 
     def check_command(self, command: str, user_id: str, user_seconds: float, global_seconds: float) -> bool:
@@ -1500,7 +1853,7 @@ def is_controller(msg: ChatMessage, owner_ids: Collection[str]) -> bool:
 
 Run: `.venv/bin/pytest tests/test_cooldowns_permissions.py -q`
 
-Expected: PASS (5 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -1511,7 +1864,7 @@ git commit -m "Add cooldowns, permissions, and test helpers"
 
 ### Task 7: Command parsing, registry, and help text
 
-`parse_command` strips invisible characters first, so a Chatterino duplicate like `?scramble\U000E0000` still parses. `usage` and `description` use `{p}` for the prefix, so changing the prefix in `config.toml` updates all help text. `help_overview()` lists the `listed` commands grouped Games, Stats, Fun; control commands and `?help` itself are unlisted.
+`parse_command` strips invisible characters first, so a Chatterino duplicate like `?scramble\U000E0000` still parses. `usage` and `description` use `{p}` for the prefix, so changing the prefix in `config.toml` updates all help text. `cooldown` turns the per-user cooldown on; `global_cooldown` adds the chat-wide one, which game start commands turn off so anyone can start their own game. `help_overview()` lists the `listed` commands grouped Games, Stats, Fun; control commands and `?help` itself are unlisted.
 
 **Files:**
 - Create: `bot/commands.py`
@@ -1559,6 +1912,11 @@ def test_registry_get_by_name_or_alias():
     assert reg.get("commands").name == "help"
     assert reg.get("HELP").name == "help"
     assert reg.get("nope") is None
+
+
+def test_command_cooldown_flags_default_on():
+    c = cmd("fact")
+    assert c.cooldown and c.global_cooldown
 
 
 def test_registry_rejects_duplicates():
@@ -1649,7 +2007,8 @@ class Command:
     group: str  # "Games", "Stats", "Fun", "Control", or "Info"
     aliases: tuple[str, ...] = ()
     controller_only: bool = False
-    cooldown: bool = True
+    cooldown: bool = True  # per-user cooldown applies
+    global_cooldown: bool = True  # chat-wide cooldown also applies (off for personal game starts)
     listed: bool = True  # shown in the ?help overview
 
 
@@ -1700,7 +2059,7 @@ class CommandRegistry:
 
 Run: `.venv/bin/pytest tests/test_commands.py -q`
 
-Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
@@ -1713,13 +2072,12 @@ git commit -m "Add command parsing, registry, and help text"
 
 `Game` and `Outcome` are spec §6. Games are pure and return `None` for chatter that isn't an attempt, so people just chatting don't count as players.
 
-Scramble (spec §7):
+Scramble (spec §7) is a personal game:
 
 - **Words:** single words of 4 to 10 ASCII letters only.
 - **Scramble:** reshuffled until it differs from the word.
-- **Hint 1** at 15 s shows the first and last letters.
-- **Hint 2** at 30 s shows about half the letters (first, last, and `max(1, ceil(n/2) - 2)` random middle letters).
-- **Points:** 10, 7, or 4 by hints shown.
+- **Hints only on request:** the first `?hint` shows the first and last letters. The second shows about half the letters (first, last, and `max(1, ceil(n/2) - 2)` random middle letters). Further `?hint`s are ignored.
+- **Points:** 10, 7, or 4 by hints taken.
 - **Attempt:** a single word with the same letter count as the answer.
 
 `bot/games/__init__.py` starts as a docstring stub; Task 10 fills it in.
@@ -1752,7 +2110,7 @@ def test_start_message_shows_scramble_that_differs(assets):
     game = make(assets)
     assert game.scrambled != game.word
     assert sorted(game.scrambled) == sorted(game.word)
-    assert game.start() == f"🔤 Unscramble (animals): {game.scrambled}, 45s"
+    assert game.start() == f"🔤 Unscramble (animals): {game.scrambled} · 45s · {{p}}hint for a hint"
 
 
 def test_unrelated_chatter_is_not_an_attempt(assets):
@@ -1775,17 +2133,26 @@ def test_correct_answer_wins_ten_points_case_insensitive(assets):
     assert out.messages == ["✅ bob got it: ALLIGATOR (+10)"]
 
 
-def test_hints_at_15_and_30_seconds_reduce_points(assets):
+def hint(game: Scramble):
+    return game.on_command("hint", "", make_msg("?hint"), None)
+
+
+def test_hints_on_request_reduce_points(assets):
     game = make(assets)
-    assert game.on_tick(14) is None
-    hint1 = game.on_tick(15)
-    assert hint1.messages == ["💡 Hint: A _ _ _ _ _ _ _ R"]
-    assert game.on_tick(20) is None
-    hint2 = game.on_tick(30).messages[0]
+    assert game.on_tick(30) is None  # no automatic hints
+    assert hint(game).messages == ["💡 Hint: A _ _ _ _ _ _ _ R"]
+    hint2 = hint(game).messages[0]
     revealed = [c for c in hint2.removeprefix("💡 Hint: ").split(" ") if c != "_"]
     assert len(revealed) == 5  # first, last, and 3 middle letters (about half of 9)
+    assert hint(game) is None  # only two hints
     out = game.on_message(make_msg("alligator"), None)
     assert out.awards == {"id-alice": 4}
+
+
+def test_one_hint_gives_seven_points(assets):
+    game = make(assets)
+    hint(game)
+    assert game.on_message(make_msg("alligator"), None).awards == {"id-alice": 7}
 
 
 def test_timeout_reveals_word(assets):
@@ -1901,12 +2268,12 @@ class Scramble(Game):
     title = "Scramble"
     usage = "{p}scramble [category]"
     description = (
-        "Unscramble the word; first correct answer wins (10, 7, or 4 points depending on hints). "
-        "{p}scramble categories lists topics. {p}skip (3 votes) skips the word."
+        "Your own word to unscramble: 10 points, or 7 or 4 if you take hints with {p}hint. "
+        "{p}scramble categories lists topics. {p}skip ends your game."
     )
     time_limit = 45
-    HINT_TIMES = (15, 30)
     POINTS = (10, 7, 4)
+    commands = {"hint": ("{p}hint", "Get a hint in your Scramble game (fewer points).")}
 
     @classmethod
     def category_names(cls, assets: Assets) -> list[str]:
@@ -1931,7 +2298,7 @@ class Scramble(Game):
         return "".join(letters)
 
     def start(self) -> str:
-        return f"🔤 Unscramble ({self.category}): {self.scrambled}, {self.time_limit}s"
+        return f"🔤 Unscramble ({self.category}): {self.scrambled} · {self.time_limit}s · {{p}}hint for a hint"
 
     def _hint(self) -> str:
         shown = {0, len(self.word) - 1}
@@ -1955,11 +2322,11 @@ class Scramble(Game):
             result="won",
         )
 
-    def on_tick(self, elapsed: float) -> Outcome | None:
-        if self.hints_shown < len(self.HINT_TIMES) and elapsed >= self.HINT_TIMES[self.hints_shown]:
-            self.hints_shown += 1
-            return Outcome(messages=[f"💡 Hint: {self._hint()}"])
-        return None
+    def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
+        if name != "hint" or self.hints_shown >= len(self.POINTS) - 1:
+            return None
+        self.hints_shown += 1
+        return Outcome(messages=[f"💡 Hint: {self._hint()}"])
 
     def on_timeout(self) -> Outcome:
         return Outcome(messages=[f"⏰ Time's up! It was {self.word}."], finished=True, result="timeout")
@@ -1972,7 +2339,7 @@ class Scramble(Game):
 
 Run: `.venv/bin/pytest tests/test_scramble.py -q`
 
-Expected: PASS (7 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (8 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -1983,13 +2350,13 @@ git commit -m "Add the game interface and Scramble"
 
 ### Task 9: Hangman
 
-Spec §7, with `?g` guessing (Robert's choice; plain chat is ignored so "W" and "L" never count).
+Spec §7: a personal game with `?g` guessing (Robert's choice; plain chat is ignored so "W" and "L" never count).
 
 - **Entries:** ASCII letters, spaces, hyphens, and apostrophes, 3+ letters, at most 30 characters. Word gaps show as `/` on the board.
-- **Guessing:** one `?g` per user per 5 s. Repeated or non-letter single characters are rejected (`None`), and the cooldown isn't consumed.
+- **Guessing:** at most one `?g` every 2 s. Repeated or non-letter single characters are rejected (`None`), and the cooldown isn't consumed.
 - **Letter points:** each correct letter holds 1 point for its guesser.
 - **Solving:** a wrong solve is a free attempt. The solve check ignores spaces and punctuation.
-- **Win:** the solver, or whoever reveals the last letter, gets 10 plus their held points, and everyone else keeps their held points.
+- **Win:** solving it, or revealing the last letter, gives 10 plus the held letter points.
 - **Loss:** after 6 wrong letters or a timeout, nobody gets points.
 
 The start message contains a literal `{p}`; the manager substitutes the prefix.
@@ -2062,12 +2429,11 @@ def test_non_letter_single_character_is_ignored(assets):
     assert g(make(assets), "7") is None
 
 
-def test_per_user_guess_cooldown(assets):
+def test_guess_cooldown(assets):
     game = make(assets)
     assert g(game, "a", at=0) is not None
-    assert g(game, "e", at=4) is None
-    assert g(game, "e", at=5) is not None
-    assert g(game, "s", "bob", at=5) is not None
+    assert g(game, "e", at=1) is None
+    assert g(game, "e", at=2) is not None
 
 
 def test_wrong_solve_attempt_is_free_attempt(assets):
@@ -2160,15 +2526,15 @@ class Hangman(Game):
     title = "Hangman"
     usage = "{p}hangman [category]"
     description = (
-        "Guess the hidden word with {p}g <letter> or {p}g <answer>. 6 wrong letters and chat loses. "
-        "1 point per correct letter, 10 for the winner. {p}hangman categories lists topics. "
-        "{p}skip (3 votes) skips the word."
+        "Your own hidden word: guess with {p}g <letter> or {p}g <answer>. 6 wrong letters and you lose. "
+        "1 point per correct letter, plus 10 for solving it. {p}hangman categories lists topics. "
+        "{p}skip ends your game."
     )
     time_limit = 120
     LIVES = 6
-    GUESS_COOLDOWN = 5.0
+    GUESS_COOLDOWN = 2.0
     WIN_POINTS = 10
-    commands = {"g": ("{p}g <letter|answer>", "Guess a letter or the whole answer during Hangman.")}
+    commands = {"g": ("{p}g <letter|answer>", "Guess a letter or the whole answer in your Hangman game.")}
 
     @classmethod
     def category_names(cls, assets: Assets) -> list[str]:
@@ -2270,17 +2636,17 @@ git add bot/games/hangman.py tests/test_hangman.py
 git commit -m "Add Hangman with ?g guessing"
 ```
 
-### Task 10: Game registry and GameManager
+### Task 10: Game registry and GameManager (personal games)
 
-`ALL_GAMES` maps names to classes; `config.toml` picks which run. `GameManager` (spec §6) handles:
+`ALL_GAMES` maps names to classes; `config.toml` picks which run. `GameManager` runs **personal** games (spec §6, revised): each player has at most one game, keyed by user ID, and many players can play at once.
 
-- **Registration:** one start command per game, `?skip`, and each game's in-game commands as hidden, cooldown-free commands that do nothing unless that game is running.
-- **Starting:** `?<game> categories`, the one-game-at-a-time rule, the 30 s cooldown, unknown categories, and the random category pick.
-- **Rounds:** marking attempters as players, ticks and timeouts, and three distinct `?skip` votes.
-- **Stopping:** `stop()` ends the game with no points.
-- **Errors:** an exception in game code ends the round as `stopped` with "Game ended due to an error.", and the bot keeps going.
-- **Finishing:** records the round, logs `game_end`, sends the messages, and starts the cooldown.
-- **Prefix:** game text has `{p}` replaced with the prefix.
+- **Registration:** one start command per game (per-user cooldown only, no chat-wide cooldown), `?skip`, and each game's in-game commands (`?hint`, `?g`) as hidden, cooldown-free commands that reach only the sender's own game.
+- **Starting:** `?<game> categories`, one game per player, the per-player cooldown (10 s after a game ends), the running limit (25), the busy brake (an `is_busy()` callback the core wires to the outbox backlog), unknown categories, and the random category pick.
+- **Routing:** a player's plain chat goes only to their own game.
+- **Replies:** threaded under the player's latest message, with coalesce keys namespaced per player (`hangman-board:<user_id>`).
+- **Ending:** the tick ends timed-out games. `?skip` ends the sender's game. `stop_all()` ends every game (for `?stopgame`, `?bot off`, and shutdown).
+- **Errors:** an exception in game code ends only that player's game, as `stopped` with "Game ended due to an error."
+- **Finishing:** records a one-player round, logs `game_end`, replies, and starts that player's cooldown.
 
 **Files:**
 - Modify: `bot/games/__init__.py` (replace the stub)
@@ -2299,6 +2665,7 @@ from bot.activity_log import ActivityLog
 from bot.clock import FakeClock
 from bot.commands import CommandContext, CommandRegistry
 from bot.games.base import Game, Outcome
+from bot.games.hangman import Hangman
 from bot.games.manager import GameManager
 from bot.games.scramble import Scramble
 from bot.stats import StatsStore
@@ -2328,14 +2695,15 @@ class Boom(Game):
 
 
 class Harness:
-    def __init__(self, tmp_path, clock: FakeClock, assets):
+    def __init__(self, tmp_path, clock: FakeClock, assets, max_games: int = 25):
         self.clock = clock
-        self.said: list[tuple[str, dict]] = []
-        self.replies: list[str] = []
+        self.said: list[tuple[str, dict]] = []  # everything the manager sent: (text, kwargs)
+        self.replies: list[str] = []  # direct command replies (ctx.reply)
+        self.busy = False
         self.stats = StatsStore(":memory:")
         self.log = ActivityLog(tmp_path / "logs", clock)
         self.manager = GameManager(
-            games={"scramble": Scramble, "boom": Boom},
+            games={"scramble": Scramble, "hangman": Hangman, "boom": Boom},
             stats=self.stats,
             log=self.log,
             clock=clock,
@@ -2343,13 +2711,14 @@ class Harness:
             rng=random.Random(1),
             say=lambda text, **kw: self.said.append((text, kw)),
             prefix="?",
-            cooldown_seconds=30,
-            skip_votes=3,
+            cooldown_seconds=10,
+            max_games=max_games,
+            is_busy=lambda: self.busy,
         )
         self.registry = CommandRegistry("?")
         self.manager.register(self.registry)
 
-    async def command(self, text: str, login: str = "alice") -> None:
+    async def command(self, text: str, login: str = "alice"):
         name, _, args = text.removeprefix("?").partition(" ")
         msg = make_msg(text, login)
         ctx = CommandContext(
@@ -2357,9 +2726,12 @@ class Harness:
             lambda t, **kw: self.replies.append(t), lambda t, **kw: self.said.append((t, kw)),
         )
         await self.registry.get(name).handler(ctx)
+        return msg
 
-    def chat(self, text: str, login: str = "alice") -> None:
-        self.manager.on_message(make_msg(text, login))
+    def chat(self, text: str, login: str = "alice"):
+        msg = make_msg(text, login)
+        self.manager.on_message(msg)
+        return msg
 
     def texts(self) -> list[str]:
         return [t for t, _ in self.said]
@@ -2374,89 +2746,130 @@ def h(tmp_path, clock, assets) -> Harness:
     return Harness(tmp_path, clock, assets)
 
 
-def test_register_adds_start_skip_and_hidden_game_commands(tmp_path, clock, assets):
-    from bot.games import ALL_GAMES
-
-    reg = CommandRegistry("?")
-    GameManager(
-        games=ALL_GAMES, stats=StatsStore(":memory:"), log=ActivityLog(tmp_path, clock), clock=clock,
-        assets=assets, rng=random.Random(1), say=lambda *a, **k: None, prefix="?", cooldown_seconds=30, skip_votes=3,
-    ).register(reg)
-    assert {c.name for c in reg.all()} == {"scramble", "hangman", "skip", "g"}
-    assert not reg.get("g").listed and not reg.get("g").cooldown
+def test_register_adds_start_skip_and_hidden_game_commands(h: Harness):
+    names = {c.name for c in h.registry.all()}
+    assert names == {"scramble", "hangman", "boom", "skip", "hint", "g"}
+    start = h.registry.get("scramble")
+    assert start.cooldown and not start.global_cooldown  # anyone can start their own game
+    assert not h.registry.get("g").listed and not h.registry.get("g").cooldown
+    assert not h.registry.get("skip").cooldown
 
 
-async def test_start_with_random_category_announces_it(h: Harness):
-    await h.command("?scramble")
-    assert h.manager.active is not None
-    assert h.texts()[0].startswith("🔤 Unscramble (")
-    assert h.events()[0]["event"] == "game_start"
+async def test_start_replies_to_the_player_with_the_category(h: Harness):
+    msg = await h.command("?scramble")
+    text, kw = h.said[0]
+    assert text.startswith("🔤 Unscramble (") and "?hint" in text
+    assert kw["reply_to"] == msg.id
+    assert h.events()[0]["event"] == "game_start" and h.events()[0]["player"] == "alice"
 
 
 async def test_categories_lists_and_starts_nothing(h: Harness):
     await h.command("?scramble categories")
     assert h.replies == ["Scramble categories: animals, food"]
-    assert h.manager.active is None
+    assert h.manager.sessions == {}
 
 
 async def test_unknown_category_lists_categories(h: Harness):
     await h.command("?scramble planets")
     assert h.replies == ["Unknown category. Scramble categories: animals, food"]
-    assert h.manager.active is None
+    assert h.manager.sessions == {}
 
 
-async def test_only_one_game_at_a_time_and_cooldown_after(h: Harness):
-    await h.command("?scramble animals")
-    await h.command("?scramble animals", "bob")
-    assert h.replies[-1] == "A scramble game is already running."
-    h.chat("alligator", "bob")
-    await h.command("?scramble animals")
-    assert h.replies[-1] == "Next game in 30s."
-    h.clock.advance(30)
-    await h.command("?scramble animals")
-    assert h.manager.active is not None
+async def test_players_have_separate_games_at_the_same_time(h: Harness):
+    await h.command("?scramble animals", "alice")
+    await h.command("?hangman animals", "bob")
+    assert set(h.manager.sessions) == {"id-alice", "id-bob"}
+    h.chat("alligator", "bob")  # bob's chat doesn't answer alice's game
+    assert "id-alice" in h.manager.sessions
+    answer = h.chat("alligator", "alice")
+    text, kw = h.said[-1]
+    assert text == "✅ alice got it: ALLIGATOR (+10)"
+    assert kw["reply_to"] == answer.id  # threaded under the winning answer
+    assert set(h.manager.sessions) == {"id-bob"}
 
 
-async def test_win_records_round_with_all_attempters(h: Harness):
+async def test_one_game_per_player_and_per_player_cooldown(h: Harness):
     await h.command("?scramble animals")
-    h.chat("hello there")  # not an attempt
-    h.chat("crocodile", "carol")  # attempt
-    h.chat("alligator", "bob")
-    assert h.texts()[-1] == "✅ bob got it: ALLIGATOR (+10)"
-    assert [r.login for r in h.stats.leaderboard("scramble", 5)] == ["bob"]
-    assert {g.played for g in h.stats.user_stats("id-carol")} == {1}
-    assert h.stats.user_stats("id-alice") == []  # started it, never attempted
+    await h.command("?hangman animals")
+    assert h.replies[-1] == "You already have a scramble game running."
+    h.chat("alligator")
+    await h.command("?scramble animals")
+    assert h.replies[-1] == "Your next game in 10s."
+    await h.command("?scramble animals", "bob")  # other players aren't blocked
+    assert "id-bob" in h.manager.sessions
+    h.clock.advance(10)
+    await h.command("?scramble animals")
+    assert "id-alice" in h.manager.sessions
+
+
+async def test_max_running_games(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, max_games=2)
+    await h.command("?scramble", "p1")
+    await h.command("?scramble", "p2")
+    await h.command("?scramble", "p3")
+    assert h.replies[-1] == "Too many games running right now, try again in a moment."
+    assert len(h.manager.sessions) == 2
+
+
+async def test_busy_brake_refuses_new_games(h: Harness):
+    h.busy = True
+    await h.command("?scramble")
+    assert h.replies[-1] == "Too many games running right now, try again in a moment."
+    assert h.manager.sessions == {}
+
+
+async def test_win_records_one_player_round(h: Harness):
+    await h.command("?scramble animals")
+    h.chat("crocodile")  # wrong guesses cost nothing
+    h.chat("alligator")
+    assert [r.login for r in h.stats.leaderboard("scramble", 5)] == ["alice"]
     end = h.events()[-1]
-    assert end["event"] == "game_end" and end["winners"] == ["bob"] and end["awards"] == {"bob": 10}
+    assert end["event"] == "game_end" and end["outcome"] == "won" and end["points"] == 10
 
 
-async def test_tick_sends_hints_then_times_out(h: Harness):
+async def test_hint_command_reaches_only_your_game(h: Harness):
+    await h.command("?scramble animals", "alice")
+    await h.command("?hint", "bob")  # bob has no game: ignored
+    assert len(h.said) == 1
+    msg = await h.command("?hint", "alice")
+    text, kw = h.said[-1]
+    assert text == "💡 Hint: A _ _ _ _ _ _ _ R" and kw["reply_to"] == msg.id
+    h.chat("alligator")
+    assert h.texts()[-1] == "✅ alice got it: ALLIGATOR (+7)"
+
+
+async def test_hangman_board_updates_coalesce_per_player(h: Harness):
+    await h.command("?hangman animals", "alice")
+    await h.command("?g z", "alice")
+    text, kw = h.said[-1]
+    assert "wrong: Z (1/6)" in text
+    assert kw["coalesce_key"] == "hangman-board:id-alice"
+
+
+async def test_timeout_ends_the_game(h: Harness):
     await h.command("?scramble animals")
-    h.clock.advance(15)
+    h.clock.advance(44)
     h.manager.tick()
-    assert h.texts()[-1].startswith("💡 Hint:")
-    h.clock.advance(30)
+    assert "id-alice" in h.manager.sessions
+    h.clock.advance(1)
     h.manager.tick()
     assert h.texts()[-1] == "⏰ Time's up! It was ALLIGATOR."
-    assert h.manager.active is None
+    assert h.manager.sessions == {}
 
 
-async def test_status_shows_time_left(h: Harness):
-    assert h.manager.status() is None
-    await h.command("?scramble animals")
-    h.clock.advance(24)
-    assert h.manager.status() == "scramble (21s left)"
+async def test_status_counts_running_games(h: Harness):
+    assert h.manager.status() == "0 running"
+    await h.command("?scramble", "p1")
+    await h.command("?hangman", "p2")
+    assert h.manager.status() == "2 running"
 
 
-async def test_three_distinct_skip_votes_skip_the_word(h: Harness):
-    await h.command("?scramble animals")
-    await h.command("?skip", "a")
-    await h.command("?skip", "a")  # same user twice counts once
-    await h.command("?skip", "b")
-    assert h.said[-1] == ("Skip 2/3", {"coalesce_key": "skip"})
-    await h.command("?skip", "c")
-    assert h.texts()[-1] == "⏭️ Skipped! It was ALLIGATOR."
-    assert h.manager.active is None
+async def test_skip_ends_your_own_game(h: Harness):
+    await h.command("?scramble animals", "alice")
+    await h.command("?scramble animals", "bob")
+    await h.command("?skip", "alice")
+    assert h.texts()[-1] == "⏭️ Skipped. It was ALLIGATOR."
+    assert set(h.manager.sessions) == {"id-bob"}
     assert h.events()[-1]["outcome"] == "skipped"
 
 
@@ -2465,27 +2878,28 @@ async def test_skip_without_game_does_nothing(h: Harness):
     assert h.said == [] and h.replies == []
 
 
-async def test_stop_ends_game_without_points(h: Harness):
-    await h.command("?scramble animals")
-    h.chat("crocodile", "carol")
-    assert h.manager.stop()
-    assert h.texts()[-1] == "🛑 Game stopped. It was ALLIGATOR."
+async def test_stop_all_ends_every_game_without_points(h: Harness):
+    await h.command("?scramble animals", "alice")
+    await h.command("?hangman animals", "bob")
+    assert h.manager.stop_all() == 2
+    assert h.manager.sessions == {}
     assert h.stats.leaderboard(None, 5) == []
-    assert not h.manager.stop()
+    assert [e["outcome"] for e in h.events() if e["event"] == "game_end"] == ["stopped", "stopped"]
+    assert h.manager.stop_all() == 0
 
 
-async def test_game_error_ends_round_and_bot_continues(h: Harness):
-    await h.command("?boom")
-    h.chat("anything")
+async def test_game_error_ends_only_that_players_game(h: Harness):
+    await h.command("?boom", "alice")
+    await h.command("?scramble animals", "bob")
+    h.chat("anything", "alice")
     assert h.texts()[-1] == "Game ended due to an error."
-    assert h.manager.active is None
+    assert set(h.manager.sessions) == {"id-bob"}
     assert any(e["event"] == "error" and e["where"] == "game:boom.on_message" for e in h.events())
-    assert h.events()[-1]["outcome"] == "stopped"
 
 
 async def test_game_messages_get_prefix_substituted(h: Harness):
-    h.manager.say("use {p}g")
-    assert h.texts() == ["use ?g"]
+    await h.command("?hangman animals")
+    assert "guess with ?g <letter>" in h.texts()[0]
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -2509,7 +2923,7 @@ ALL_GAMES: dict[str, type[Game]] = {cls.name: cls for cls in (Scramble, Hangman)
 - [ ] **Step 4: Write `bot/games/manager.py`**
 
 ```python
-"""Runs one game at a time: start, timers, in-game commands, skip votes, scoring, cooldown."""
+"""Runs personal games: each player has at most one game, many players can play at once."""
 
 from __future__ import annotations
 
@@ -2519,7 +2933,7 @@ import random
 import traceback
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from bot.activity_log import ActivityLog
@@ -2532,19 +2946,20 @@ from bot.stats import PlayerResult, RoundRecord, StatsStore
 
 logger = logging.getLogger(__name__)
 
-Say = Callable[..., None]  # say(text, *, coalesce_key=None, priority=False)
+Say = Callable[..., None]  # say(text, *, reply_to=None, coalesce_key=None, priority=False)
 
 
 @dataclass
-class ActiveRound:
+class Session:
     key: str  # short id that ties game_start and game_end log lines together
     game: Game
     category: str | None
-    started_by: str
+    user_id: str
+    login: str
+    display_name: str
     started_at: datetime
     start_mono: float
-    players: dict[str, tuple[str, str]] = field(default_factory=dict)  # user_id -> (login, display)
-    skip_votes: set[str] = field(default_factory=set)
+    reply_to: str  # the player's latest message; bot replies are threaded under it
 
 
 class GameManager:
@@ -2560,7 +2975,8 @@ class GameManager:
         say: Say,
         prefix: str,
         cooldown_seconds: float,
-        skip_votes: int,
+        max_games: int,
+        is_busy: Callable[[], bool],
     ) -> None:
         self.games = games
         self.stats = stats
@@ -2571,25 +2987,19 @@ class GameManager:
         self._say = say
         self.prefix = prefix
         self.cooldown_seconds = cooldown_seconds
-        self.skip_votes_needed = skip_votes
-        self.active: ActiveRound | None = None
-        self._cooldown_until = 0.0
+        self.max_games = max_games
+        self._is_busy = is_busy
+        self.sessions: dict[str, Session] = {}  # user_id -> that player's running game
+        self._cooldown_until: dict[str, float] = {}  # user_id -> when they may start again
 
     # registration
 
     def register(self, registry: CommandRegistry) -> None:
         for cls in self.games.values():
-            registry.add(Command(cls.name, self._start_command, cls.usage, cls.description, "Games"))
-        registry.add(
-            Command(
-                "skip",
-                self._skip_command,
-                "{p}skip",
-                f"Vote to skip the current game's word ({self.skip_votes_needed} votes needed).",
-                "Games",
-                cooldown=False,
+            registry.add(
+                Command(cls.name, self._start_command, cls.usage, cls.description, "Games", global_cooldown=False)
             )
-        )
+        registry.add(Command("skip", self._skip_command, "{p}skip", "End your current game.", "Games", cooldown=False))
         seen: set[str] = set()
         for cls in self.games.values():
             for name, (usage, description) in cls.commands.items():
@@ -2601,22 +3011,20 @@ class GameManager:
 
     # helpers
 
-    def say(self, text: str, **kw) -> None:
-        self._say(text.replace("{p}", self.prefix), **kw)
+    def _reply(self, session: Session, text: str, coalesce_key: str | None = None) -> None:
+        key = f"{coalesce_key}:{session.user_id}" if coalesce_key else None
+        self._say(text.replace("{p}", self.prefix), reply_to=session.reply_to, coalesce_key=key)
 
-    def cooldown_remaining(self) -> float:
-        return max(0.0, self._cooldown_until - self.clock.mono())
+    def cooldown_remaining(self, user_id: str) -> float:
+        return max(0.0, self._cooldown_until.get(user_id, 0.0) - self.clock.mono())
 
-    def status(self) -> str | None:
-        if self.active is None:
-            return None
-        left = self.active.game.time_limit - (self.clock.mono() - self.active.start_mono)
-        return f"{self.active.game.name} ({max(0, math.ceil(left))}s left)"
+    def status(self) -> str:
+        return f"{len(self.sessions)} running"
 
-    def _guard(self, where: str, fn: Callable[[], Outcome | str | None]) -> tuple[bool, Outcome | str | None]:
-        """Run game code. On an exception: log it, end the round with no points, return (False, None)."""
+    def _guard(self, session: Session, where: str, fn: Callable[[], Outcome | str | None]) -> Outcome | str | None:
+        """Run game code. On an exception: log it and end that player's game with no points."""
         try:
-            return True, fn()
+            return fn()
         except Exception as exc:
             logger.exception("game error in %s", where)
             self.log.write(
@@ -2626,9 +3034,9 @@ class GameManager:
                 message=str(exc),
                 traceback=traceback.format_exc(),
             )
-            if self.active is not None:
-                self._end_without_points("stopped", "Game ended due to an error.")
-            return False, None
+            if self.sessions.get(session.user_id) is session:
+                self._finish(session, "stopped", ["Game ended due to an error."], {}, set())
+            return None
 
     # commands
 
@@ -2636,15 +3044,19 @@ class GameManager:
         cls = self.games[ctx.name]
         arg = ctx.args.strip().lower()
         categories = cls.category_names(self.assets)
+        uid = ctx.msg.user_id
         if arg == "categories":
             ctx.reply(f"{cls.title} categories: {', '.join(categories)}")
             return
-        if self.active is not None:
-            ctx.reply(f"A {self.active.game.name} game is already running.")
+        if uid in self.sessions:
+            ctx.reply(f"You already have a {self.sessions[uid].game.name} game running.")
             return
-        remaining = self.cooldown_remaining()
+        remaining = self.cooldown_remaining(uid)
         if remaining > 0:
-            ctx.reply(f"Next game in {math.ceil(remaining)}s.")
+            ctx.reply(f"Your next game in {math.ceil(remaining)}s.")
+            return
+        if len(self.sessions) >= self.max_games or self._is_busy():
+            ctx.reply("Too many games running right now, try again in a moment.")
             return
         if categories and arg and arg not in categories:
             ctx.reply(f"Unknown category. {cls.title} categories: {', '.join(categories)}")
@@ -2658,138 +3070,131 @@ class GameManager:
             self.log.write("error", where=f"game:{cls.name}.start", type=type(exc).__name__, message=str(exc))
             ctx.reply("Couldn't start that game.")
             return
-        self.stats.touch_user(ctx.msg.user_id, ctx.msg.login, ctx.msg.display_name, self.clock.now())
-        self.active = ActiveRound(
+        self.stats.touch_user(uid, ctx.msg.login, ctx.msg.display_name, self.clock.now())
+        session = Session(
             key=uuid.uuid4().hex[:8],
             game=game,
             category=category,
-            started_by=ctx.msg.user_id,
+            user_id=uid,
+            login=ctx.msg.login,
+            display_name=ctx.msg.display_name,
             started_at=self.clock.now(),
             start_mono=self.clock.mono(),
+            reply_to=ctx.msg.id,
         )
-        self.log.write(
-            "game_start", round=self.active.key, game=cls.name, category=category, started_by=ctx.msg.login
-        )
-        self.say(opening)
+        self.sessions[uid] = session
+        self.log.write("game_start", round=session.key, game=cls.name, category=category, player=ctx.msg.login)
+        self._reply(session, opening)
 
     async def _skip_command(self, ctx: CommandContext) -> None:
-        active = self.active
-        if active is None or ctx.msg.user_id in active.skip_votes:
+        session = self.sessions.get(ctx.msg.user_id)
+        if session is None:
             return
-        active.skip_votes.add(ctx.msg.user_id)
-        votes = len(active.skip_votes)
-        if votes >= self.skip_votes_needed:
-            ok, answer = self._guard("reveal", active.game.reveal)
-            if ok:
-                self._end_without_points("skipped", f"⏭️ Skipped! It was {answer}.")
-        else:
-            self.say(f"Skip {votes}/{self.skip_votes_needed}", coalesce_key="skip")
+        session.reply_to = ctx.msg.id
+        answer = self._guard(session, f"{session.game.name}.reveal", session.game.reveal)
+        if answer is not None:
+            self._finish(session, "skipped", [f"⏭️ Skipped. It was {answer}."], {}, set())
 
     async def _game_command(self, ctx: CommandContext) -> None:
-        active = self.active
-        if active is None or ctx.name not in active.game.commands:
+        session = self.sessions.get(ctx.msg.user_id)
+        if session is None or ctx.name not in session.game.commands:
             return
+        session.reply_to = ctx.msg.id
         now = self.clock.now()
-        _, outcome = self._guard(
-            f"{active.game.name}.on_command", lambda: active.game.on_command(ctx.name, ctx.args, ctx.msg, now)
+        outcome = self._guard(
+            session,
+            f"{session.game.name}.on_command",
+            lambda: session.game.on_command(ctx.name, ctx.args, ctx.msg, now),
         )
-        self._handle(ctx.msg, outcome)
+        self._handle(session, outcome)
 
     # chat and time
 
     def on_message(self, msg: ChatMessage) -> None:
-        active = self.active
-        if active is None:
+        session = self.sessions.get(msg.user_id)
+        if session is None:
             return
         now = self.clock.now()
-        _, outcome = self._guard(f"{active.game.name}.on_message", lambda: active.game.on_message(msg, now))
-        self._handle(msg, outcome)
+        outcome = self._guard(session, f"{session.game.name}.on_message", lambda: session.game.on_message(msg, now))
+        if outcome is not None:
+            session.reply_to = msg.id  # thread the reply under the answer that produced it
+        self._handle(session, outcome)
 
     def tick(self) -> None:
-        active = self.active
-        if active is None:
-            return
-        elapsed = self.clock.mono() - active.start_mono
-        if elapsed >= active.game.time_limit:
-            _, outcome = self._guard(f"{active.game.name}.on_timeout", active.game.on_timeout)
-        else:
-            _, outcome = self._guard(f"{active.game.name}.on_tick", lambda: active.game.on_tick(elapsed))
-        self._handle(None, outcome)
+        for session in list(self.sessions.values()):
+            if self.sessions.get(session.user_id) is not session:
+                continue
+            elapsed = self.clock.mono() - session.start_mono
+            game = session.game
+            if elapsed >= game.time_limit:
+                outcome = self._guard(session, f"{game.name}.on_timeout", game.on_timeout)
+            else:
+                outcome = self._guard(session, f"{game.name}.on_tick", lambda g=game, e=elapsed: g.on_tick(e))
+            self._handle(session, outcome)
 
-    def stop(self) -> bool:
-        """End the current game with no points (?stopgame, ?bot off, shutdown)."""
-        active = self.active
-        if active is None:
-            return False
-        ok, answer = self._guard("reveal", active.game.reveal)
-        if ok:
-            self._end_without_points("stopped", f"🛑 Game stopped. It was {answer}.")
-        return True
+    def stop_all(self) -> int:
+        """End every running game with no points (?stopgame, ?bot off, shutdown). Returns how many."""
+        stopped = list(self.sessions.values())
+        for session in stopped:
+            self._finish(session, "stopped", [], {}, set())
+        return len(stopped)
 
     # outcomes
 
-    def _handle(self, msg: ChatMessage | None, outcome: Outcome | str | None) -> None:
-        if not isinstance(outcome, Outcome) or self.active is None:
+    def _handle(self, session: Session, outcome: Outcome | str | None) -> None:
+        if not isinstance(outcome, Outcome) or self.sessions.get(session.user_id) is not session:
             return
-        if msg is not None:
-            self.active.players[msg.user_id] = (msg.login, msg.display_name)
         if outcome.finished:
-            self._finish(outcome.result or "won", outcome.messages, outcome.awards, outcome.winners)
+            self._finish(session, outcome.result or "won", outcome.messages, outcome.awards, outcome.winners)
         else:
             for text in outcome.messages:
-                self.say(text, coalesce_key=outcome.coalesce_key)
+                self._reply(session, text, outcome.coalesce_key)
 
-    def _end_without_points(self, result: str, message: str) -> None:
-        self._finish(result, [message], {}, set())
-
-    def _finish(self, result: str, messages: list[str], awards: dict[str, int], winners: set[str]) -> None:
-        active = self.active
-        assert active is not None
-        self.active = None
-        self._cooldown_until = self.clock.mono() + self.cooldown_seconds
-        players = [
-            PlayerResult(uid, login, display, awards.get(uid, 0), uid in winners)
-            for uid, (login, display) in active.players.items()
-        ]
+    def _finish(
+        self, session: Session, result: str, messages: list[str], awards: dict[str, int], winners: set[str]
+    ) -> None:
+        self.sessions.pop(session.user_id, None)
+        self._cooldown_until[session.user_id] = self.clock.mono() + self.cooldown_seconds
+        uid = session.user_id
+        player = PlayerResult(uid, session.login, session.display_name, awards.get(uid, 0), uid in winners)
         try:
             self.stats.record_round(
                 RoundRecord(
-                    game=active.game.name,
-                    category=active.category,
-                    started_by=active.started_by,
-                    started_at=active.started_at,
+                    game=session.game.name,
+                    category=session.category,
+                    started_by=uid,
+                    started_at=session.started_at,
                     ended_at=self.clock.now(),
                     outcome=result,
-                    players=players,
+                    players=[player],
                 )
             )
         except Exception as exc:
             logger.exception("could not record round")
             self.log.write("error", where="stats.record_round", type=type(exc).__name__, message=str(exc))
-        names = {uid: login for uid, (login, _) in active.players.items()}
         self.log.write(
             "game_end",
-            round=active.key,
-            game=active.game.name,
+            round=session.key,
+            game=session.game.name,
             outcome=result,
-            winners=sorted(names.get(uid, uid) for uid in winners),
-            awards={names.get(uid, uid): pts for uid, pts in awards.items()},
+            player=session.login,
+            points=player.points,
         )
         for text in messages:
-            self.say(text)
+            self._reply(session, text)
 ```
 
 - [ ] **Step 5: Run the tests and confirm they pass**
 
 Run: `.venv/bin/pytest tests/test_manager.py -q`
 
-Expected: PASS (13 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (18 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add bot/games/__init__.py bot/games/manager.py tests/test_manager.py
-git commit -m "Add the game registry and GameManager"
+git commit -m "Add the game registry and personal-game manager"
 ```
 
 ### Task 11: HTTP client and fun commands
@@ -3476,7 +3881,7 @@ git commit -m "Add leaderboard, gamestats, and help commands"
 
 ### Task 13: Configuration
 
-`load_config` merges `config.toml` (settings) and the `.env` values (secrets) into a frozen `Config`. Every invalid value raises `ConfigError` naming the key; the CLI turns that into exit code 2 (spec §12). Console mode passes `require_twitch=False`. `data_dir` is the `data/` folder next to the config file.
+`load_config` merges `config.toml` (settings) and the `.env` values (secrets) into a frozen `Config`. Game limits live under `[games]` (`max_running` 25, `cooldown_seconds` 10, `busy_queue` 10), and the outbox defaults to 2 messages/s with a queue of 30. Every invalid value raises `ConfigError` naming the key; the CLI turns that into exit code 2 (spec §12). Console mode passes `require_twitch=False`. `data_dir` is the `data/` folder next to the config file.
 
 **Files:**
 - Create: `bot/config.py`, `config.toml`, `.env.example`
@@ -3509,7 +3914,9 @@ def test_defaults_and_env(tmp_path):
     cfg = load_config(write(tmp_path, 'channel = "Robert_Channel"\n'), ENV)
     assert cfg.channel == "robert_channel"
     assert cfg.owner_ids == frozenset({"1", "2"})
-    assert (cfg.user_cooldown, cfg.global_cooldown, cfg.game_cooldown, cfg.skip_votes) == (10, 5, 30, 3)
+    assert (cfg.user_cooldown, cfg.global_cooldown) == (10, 5)
+    assert (cfg.max_games, cfg.game_cooldown, cfg.busy_queue) == (25, 10, 10)
+    assert (cfg.outbox_rate, cfg.outbox_burst, cfg.outbox_max_queue) == (2, 3, 30)
     assert cfg.data_dir == tmp_path / "data"
 
 
@@ -3519,7 +3926,7 @@ def test_defaults_and_env(tmp_path):
         ('channel = "no spaces allowed"', "channel"),
         ('channel = "ok_name"\nprefix = ""', "prefix"),
         ('channel = "ok_name"\n[cooldowns]\nuser_seconds = -1', "cooldowns.user_seconds"),
-        ('channel = "ok_name"\n[cooldowns]\nskip_votes = 0', "cooldowns.skip_votes"),
+        ('channel = "ok_name"\n[games]\nmax_running = 0', "games.max_running"),
         ('channel = "ok_name"\n[games]\nenabled = ["chess"]', "chess"),
         ('channel = "ok_name"\n[outbox]\nburst = 1.5', "outbox.burst"),
         ("channel = ", "not valid TOML"),
@@ -3581,9 +3988,10 @@ class Config:
     prefix: str
     user_cooldown: float
     global_cooldown: float
-    game_cooldown: float
-    skip_votes: int
     enabled_games: tuple[str, ...]
+    max_games: int
+    game_cooldown: float
+    busy_queue: int
     outbox_rate: float
     outbox_burst: int
     outbox_max_queue: int
@@ -3653,12 +4061,13 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
         prefix=prefix,
         user_cooldown=_number(table, "cooldowns.user_seconds", 10),
         global_cooldown=_number(table, "cooldowns.global_seconds", 5),
-        game_cooldown=_number(table, "cooldowns.game_cooldown_seconds", 30),
-        skip_votes=_number(table, "cooldowns.skip_votes", 3, integer=True, minimum=1),
         enabled_games=tuple(enabled),
-        outbox_rate=_number(table, "outbox.rate_per_second", 1, minimum=0.1),
+        max_games=_number(table, "games.max_running", 25, integer=True, minimum=1),
+        game_cooldown=_number(table, "games.cooldown_seconds", 10),
+        busy_queue=_number(table, "games.busy_queue", 10, integer=True, minimum=1),
+        outbox_rate=_number(table, "outbox.rate_per_second", 2, minimum=0.1),
         outbox_burst=_number(table, "outbox.burst", 3, integer=True, minimum=1),
-        outbox_max_queue=_number(table, "outbox.max_queue", 20, integer=True, minimum=1),
+        outbox_max_queue=_number(table, "outbox.max_queue", 30, integer=True, minimum=1),
         log_retention_days=_number(table, "logs.retention_days", 30, integer=True, minimum=1),
         data_dir=path.parent / "data",
     )
@@ -3674,17 +4083,18 @@ prefix = "?"
 
 [cooldowns]
 user_seconds = 10           # per person, per command
-global_seconds = 5          # per command, across the whole chat
-game_cooldown_seconds = 30  # wait after a game ends before the next can start
-skip_votes = 3              # distinct ?skip votes needed to skip a word
+global_seconds = 5          # per command, across the whole chat (not used for starting games)
 
 [games]
 enabled = ["scramble", "hangman"]
+max_running = 25            # personal games running at once, across the whole chat
+cooldown_seconds = 10       # per person, after their game ends
+busy_queue = 10             # refuse new games while this many bot messages are waiting to send
 
 [outbox]
-rate_per_second = 1         # sustained sending rate
+rate_per_second = 2         # sustained sending rate (a mod account may send about 3/s)
 burst = 3                   # messages that can go out back to back
-max_queue = 20              # extra messages beyond this are dropped and logged
+max_queue = 30              # extra messages beyond this are dropped and logged
 
 [logs]
 retention_days = 30
@@ -3911,9 +4321,9 @@ The heart of the bot. `BotCore.on_message` applies spec §3's filter in order:
 2. Ignore the bot's own messages.
 3. Ignore shared-chat messages from other channels.
 4. While paused, accept only `?bot ...` from a controller.
-5. Route commands; anything else goes to the active game.
+5. Route commands; anything else goes to the sender's own game, if they have one.
 
-`_dispatch` checks permission, then cooldowns, then touches the user, logs `command`, and runs the handler. Handler exceptions are logged and never crash the bot.
+`_dispatch` checks permission, then cooldowns (the chat-wide one only if the command uses it), then touches the user, logs `command`, and runs the handler. Handler exceptions are logged and never crash the bot. The busy brake is wired here: games are refused while the outbox holds `busy_queue` or more messages.
 
 `run()` starts the connector, the outbox loop, and the 1 s tick loop. It returns an exit code:
 
@@ -3922,7 +4332,7 @@ The heart of the bot. `BotCore.on_message` applies spec §3's filter in order:
 - 3 for `AuthRequired`;
 - 1 for any other connector failure.
 
-Before returning, it drains the outbox, closes the connector, and logs `shutdown`.
+Before returning, it lets the send loop finish its current message (no cancel mid-send), drains the outbox, closes the connector, and logs `shutdown`.
 
 The paused flag is read from the database at startup, so it survives restarts. The full-flow tests are spec §14.2.
 
@@ -3995,49 +4405,74 @@ def bot(tmp_path, clock, assets) -> Bot:
 async def test_scramble_round_to_leaderboard(bot: Bot):
     await bot.say("alice: ?scramble animals")
     assert bot.out[-1].startswith("🔤 Unscramble (animals): ")
-    await bot.say("bob: crocodile")
-    await bot.say("bob: alligator")
-    assert bot.out[-1] == "✅ bob got it: ALLIGATOR (+10)"
+    await bot.say("bob: alligator")  # not bob's game
+    await bot.say("alice: crocodile")
+    await bot.say("alice: alligator")
+    assert bot.out[-1] == "✅ alice got it: ALLIGATOR (+10)"
     await bot.say("carol: ?leaderboard")
-    assert bot.out[-1] == "🏆 Top 1 overall: 1. bob (10)"
-    await bot.say("bob: ?gamestats")
-    assert bot.out[-1] == "📊 bob: 10 pts, 1 wins, 1 played | scramble 1W/1P 10pts"
+    assert bot.out[-1] == "🏆 Top 1 overall: 1. alice (10)"
+    await bot.say("alice: ?gamestats")
+    assert bot.out[-1] == "📊 alice: 10 pts, 1 wins, 1 played | scramble 1W/1P 10pts"
+
+
+async def test_two_players_play_at_once(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    await bot.say("bob: ?scramble animals")  # no chat-wide cooldown on starting games
+    assert len(bot.core.games.sessions) == 2
+    await bot.say("bob: alligator")
+    await bot.say("alice: alligator")
+    assert bot.out[-2:] == ["✅ bob got it: ALLIGATOR (+10)", "✅ alice got it: ALLIGATOR (+10)"]
+
+
+async def test_scramble_hint_lowers_points(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    await bot.say("alice: ?hint")
+    assert bot.out[-1] == "💡 Hint: A _ _ _ _ _ _ _ R"
+    await bot.say("alice: alligator")
+    assert bot.out[-1] == "✅ alice got it: ALLIGATOR (+7)"
 
 
 async def test_hangman_win_through_g_and_plain_letters_ignored(bot: Bot):
     await bot.say("alice: ?hangman animals")
-    answer = bot.core.games.active.game.answer
+    answer = bot.core.games.sessions["console-alice"].game.answer
     assert "guess with ?g <letter> or ?g <answer>" in bot.out[-1]
     sent_before = len(bot.out)
-    await bot.say("bob: W")
-    assert len(bot.out) == sent_before and bot.core.games.active.game.wrong == []
-    await bot.say(f"bob: ?g {answer.lower()}")
-    assert bot.out[-1] == f"🎉 bob solved it: {answer} (+10)"
+    await bot.say("alice: W")
+    assert len(bot.out) == sent_before and bot.core.games.sessions["console-alice"].game.wrong == []
+    await bot.say(f"alice: ?g {answer.lower()}")
+    assert bot.out[-1] == f"🎉 alice solved it: {answer} (+10)"
 
 
 async def test_hangman_loss(bot: Bot):
     await bot.say("alice: ?hangman animals")
-    game = bot.core.games.active.game
+    game = bot.core.games.sessions["console-alice"].game
     misses = [c for c in "ZQXJKVWYUBDF" if c not in game.answer][:6]
-    for i, letter in enumerate(misses):
-        await bot.say(f"user{i}: ?g {letter}")
+    for letter in misses:
+        await bot.say(f"alice: ?g {letter}")
+        bot.clock.advance(2)  # Hangman allows one guess every 2 s
     assert bot.out[-1] == f"💀 Out of lives! The word was {game.answer}."
-    assert bot.core.games.active is None
+    assert bot.core.games.sessions == {}
 
 
-async def test_three_skip_votes(bot: Bot):
+async def test_skip_ends_your_game(bot: Bot):
     await bot.say("alice: ?scramble animals")
-    for name in ("voter1", "voter2", "voter3"):
-        await bot.say(f"{name}: ?skip")
-    assert bot.out[-1] == "⏭️ Skipped! It was ALLIGATOR."
+    await bot.say("alice: ?skip")
+    assert bot.out[-1] == "⏭️ Skipped. It was ALLIGATOR."
 
 
-async def test_game_times_out_with_hints(bot: Bot):
+async def test_game_times_out(bot: Bot):
     await bot.say("alice: ?scramble animals")
-    await bot.wait(15)
-    assert bot.out[-1].startswith("💡 Hint: ")
-    await bot.wait(30)
+    await bot.wait(45)
     assert bot.out[-1] == "⏰ Time's up! It was ALLIGATOR."
+
+
+async def test_busy_brake_when_messages_back_up(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets)
+    for i in range(10):
+        bot.core.outbox.enqueue(f"backlog {i}")
+    await bot.core.on_message(parse_console_line("alice: ?scramble", clock, bot.ids))
+    assert bot.core.outbox.pending()[-1] == "Too many games running right now, try again in a moment."
+    assert bot.core.games.sessions == {}
 
 
 async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
@@ -4047,7 +4482,7 @@ async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
     await bot.say("alice: ?scramble animals")
     await bot.say("@mod: ?bot off")
     assert bot.core.paused
-    assert "🛑 Game stopped. It was ALLIGATOR." in bot.out
+    assert bot.core.games.sessions == {}
     assert "Bot paused by mod. ?bot on to resume." in bot.out
     before = len(bot.out)
     bot.clock.advance(60)
@@ -4055,7 +4490,7 @@ async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
     await bot.say("alice: ?8ball hi")
     assert len(bot.out) == before
     await bot.say("@mod: ?bot status")
-    assert bot.out[-1].startswith("PAUSED · up 1m · game: none · v")
+    assert bot.out[-1].startswith("PAUSED · up 1m · games: 0 running · v")
     await bot.say("@mod: ?bot on")
     assert bot.out[-1] == "Bot resumed by mod."
     await bot.say("alice: ?coinflip")
@@ -4065,6 +4500,18 @@ async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
 async def test_owner_can_control_without_mod_badge(bot: Bot):
     await bot.say("robert: ?bot off")
     assert bot.core.paused
+
+
+async def test_stopgame_stops_everyones_games(bot: Bot):
+    await bot.say("@mod: ?stopgame")
+    assert bot.out[-1] == "No games are running."
+    await bot.say("alice: ?scramble animals")
+    await bot.say("bob: ?hangman animals")
+    await bot.say("random: ?stopgame")  # not a mod: ignored
+    assert len(bot.core.games.sessions) == 2
+    await bot.say("@mod: ?stopgame")
+    assert bot.out[-1] == "🛑 Stopped 2 games. No points awarded."
+    assert bot.core.games.sessions == {}
 
 
 async def test_paused_state_survives_restart(tmp_path, clock, assets):
@@ -4149,8 +4596,9 @@ async def test_run_shutdown_from_chat_exits_zero(tmp_path, clock, assets):
     bot = Bot(tmp_path, clock, assets, lines=lines)
     code = await asyncio.wait_for(bot.core.run(), timeout=5)
     assert code == 0
-    assert bot.out[1:] == ["Shutting down (requested by mod).", "🛑 Game stopped. It was ALLIGATOR."]
+    assert bot.out[1:] == ["Shutting down (requested by mod)."]
     assert not any(t in bot.out for t in ("🪙 Heads", "🪙 Tails"))  # ignored after shutdown
+    assert bot.core.games.sessions == {}
     events = bot.events()
     assert events[0]["event"] == "startup" and events[0]["is_mod"] is True
     assert events[-1] == {**events[-1], "event": "shutdown", "by": "mod", "exit_code": 0}
@@ -4216,9 +4664,10 @@ def make_config(tmp_path, **overrides):
         prefix="?",
         user_cooldown=10,
         global_cooldown=5,
-        game_cooldown=30,
-        skip_votes=3,
         enabled_games=("scramble", "hangman"),
+        max_games=25,
+        game_cooldown=10,
+        busy_queue=10,
         outbox_rate=100,
         outbox_burst=100,
         outbox_max_queue=100,
@@ -4252,7 +4701,7 @@ def register_admin(registry: CommandRegistry, core: BotCore) -> None:
                 ctx.reply("Already paused.", priority=True)
                 return
             core.log.write("admin", user_id=ctx.msg.user_id, login=ctx.msg.login, action="off")
-            core.games.stop()
+            core.games.stop_all()
             core.set_paused(True)
             ctx.reply(f"Bot paused by {who}. {ctx.prefix}bot on to resume.", priority=True)
         elif sub == "on":
@@ -4272,11 +4721,12 @@ def register_admin(registry: CommandRegistry, core: BotCore) -> None:
             ctx.reply(f"Usage: {ctx.prefix}bot off|on|status|shutdown", priority=True)
 
     async def stopgame(ctx: CommandContext) -> None:
-        if core.games.active is None:
-            ctx.reply("No game is running.")
+        if not core.games.sessions:
+            ctx.reply("No games are running.")
             return
         core.log.write("admin", user_id=ctx.msg.user_id, login=ctx.msg.login, action="stopgame")
-        core.games.stop()
+        stopped = core.games.stop_all()
+        ctx.reply(f"🛑 Stopped {stopped} game{'s' if stopped != 1 else ''}. No points awarded.")
 
     registry.add(
         Command(
@@ -4295,7 +4745,7 @@ def register_admin(registry: CommandRegistry, core: BotCore) -> None:
             "stopgame",
             stopgame,
             "{p}stopgame",
-            "End the current game with no points.",
+            "End all running games with no points.",
             "Control",
             controller_only=True,
             cooldown=False,
@@ -4382,7 +4832,8 @@ class BotCore:
             say=self.outbox.enqueue,
             prefix=config.prefix,
             cooldown_seconds=config.game_cooldown,
-            skip_votes=config.skip_votes,
+            max_games=config.max_games,
+            is_busy=lambda: len(self.outbox) >= config.busy_queue,
         )
         self.games.register(self.registry)
         register_stats(self.registry, stats=stats, game_names=list(games))
@@ -4414,14 +4865,13 @@ class BotCore:
     def status_line(self) -> str:
         state = "PAUSED" if self.paused else "ON"
         uptime = format_duration(self.clock.mono() - self.started_mono).replace(" ", "")
-        game = self.games.status() or "none"
-        return f"{state} · up {uptime} · game: {game} · v{__version__}"
+        return f"{state} · up {uptime} · games: {self.games.status()} · v{__version__}"
 
     def request_shutdown(self, by: str, exit_code: int = EXIT_OK) -> None:
         if self.shutdown_by is None:
             self.shutdown_by = by
             self.exit_code = exit_code
-        self.games.stop()
+        self.games.stop_all()
         self._stop.set()
 
     # incoming chat
@@ -4459,8 +4909,9 @@ class BotCore:
             return
         if cmd.controller_only and not self.is_controller(msg):
             return
+        global_seconds = self.config.global_cooldown if cmd.global_cooldown else 0
         if cmd.cooldown and not self.cooldowns.check_command(
-            cmd.name, msg.user_id, self.config.user_cooldown, self.config.global_cooldown
+            cmd.name, msg.user_id, self.config.user_cooldown, global_seconds
         ):
             return
         self.stats.touch_user(msg.user_id, msg.login, msg.display_name, self.clock.now())
@@ -4527,9 +4978,16 @@ class BotCore:
             self.request_shutdown(by="crash", exit_code=EXIT_CRASH)
         finally:
             self._stop.set()
-            for task in (tick_task, outbox_task, stop_task):
+            for task in (tick_task, stop_task):
                 task.cancel()
-            await asyncio.gather(tick_task, outbox_task, stop_task, return_exceptions=True)
+            await asyncio.gather(tick_task, stop_task, return_exceptions=True)
+            # Let the send loop finish its current message instead of cancelling it mid-send.
+            try:
+                await asyncio.wait_for(outbox_task, 1.0)
+            except (TimeoutError, asyncio.CancelledError):
+                pass
+            except Exception:
+                logger.exception("outbox loop failed")
             await self.outbox.drain(3.0)
             await self.connector.close()
             if not connector_task.done():
@@ -4544,7 +5002,7 @@ class BotCore:
 
 Run: `.venv/bin/pytest tests/test_flows.py -q`
 
-Expected: PASS (19 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (23 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
@@ -4875,6 +5333,7 @@ git commit -m "Add the Twitch connector and login flow"
 - `.env` is read from next to the config file. Real environment variables win.
 - SIGINT and SIGTERM call `request_shutdown("signal")`, which stops cleanly with exit 0 (spec §13).
 - A logging filter hides TwitchIO's irrelevant "install starlette" hint.
+- A database written by a newer version of the bot exits with code 2, so systemd doesn't restart-loop.
 
 The CLI tests run the real process, the way a person would.
 
@@ -4942,6 +5401,19 @@ def test_auth_without_client_credentials_exits_2(tmp_path):
     assert "TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET" in result.stderr
 
 
+def test_database_newer_than_code_exits_2(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "data" / "console" / "bot.db"
+    db.parent.mkdir(parents=True)
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_version VALUES (99)")
+    result = run_bot("console", "--config", str(write_config(tmp_path)), tmp_path=tmp_path)
+    assert result.returncode == 2
+    assert "newer than this code" in result.stderr
+
+
 def test_bad_config_exits_2(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('channel = "has spaces"\n', encoding="utf-8")
@@ -4997,7 +5469,11 @@ def _setup_logging() -> None:
 async def _serve(config: Config, *, console: bool) -> int:
     clock = Clock()
     log = ActivityLog(config.data_dir / "logs", clock, config.log_retention_days)
-    stats = StatsStore(config.data_dir / "bot.db")
+    try:
+        stats = StatsStore(config.data_dir / "bot.db")
+    except RuntimeError as exc:  # the database was written by a newer version of the bot
+        print(f"Setup error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
     if console:
         from bot.connectors.console import ConsoleConnector
 
@@ -5069,7 +5545,7 @@ if __name__ == "__main__":
 
 Run: `.venv/bin/pytest tests/test_cli.py -q`
 
-Expected: PASS (4 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (5 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 5: Play a round by hand**
 
@@ -5082,7 +5558,7 @@ alice: ?coinflip
 @mod: ?bot shutdown
 ```
 
-Expected: replies like `bot → alice: Games: ?scramble ?hangman ?skip | ...`, then `bot → mod: ON · up 0s · game: none · v0.1.0`, then `bot → mod: Shutting down (requested by mod).`, and the process exits on its own (`echo $?` prints `0`). Games can't start yet: the word lists arrive in Task 18.
+Expected: replies like `bot → alice: Games: ?scramble ?hangman ?skip | ...`, then `bot → mod: ON · up 0s · games: 0 running · v0.1.0`, then `bot → mod: Shutting down (requested by mod).`, and the process exits on its own (`echo $?` prints `0`). Games can't start yet: the word lists arrive in Task 18.
 
 - [ ] **Step 6: Commit**
 
@@ -5276,13 +5752,13 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 162 tests pass.
+Expected: `15 passed`, then all 200 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
 Run: `.venv/bin/python -m bot console`, then play `?scramble`, `?scramble categories`,
-`?hangman streamers` (guess with `?g`), `?skip` from three different names, `?cookie`, and
-`?leaderboard`. Expected: words come from the new lists, and the bot never reveals a blank or
+`?hangman streamers` (guess with `?g`), `?hint`, `?skip`, two names playing at once, `?cookie`,
+and `?leaderboard`. Expected: words come from the new lists, and the bot never reveals a blank or
 garbled word.
 
 - [ ] **Step 9: Commit**
@@ -5330,25 +5806,30 @@ WantedBy=multi-user.target
 ````markdown
 # Offline Chat Bot
 
-A Twitch chat bot for jasontheween's offline chat: chat games (Scramble, Hangman), quick fun
-commands, per-game points with leaderboards, mod controls (pause, resume, shut down), and a
-daily activity log. Design: `docs/superpowers/specs/2026-10-04-offline-chat-bot-design.md`.
+A Twitch chat bot for jasontheween's offline chat: personal chat games (Scramble, Hangman),
+quick fun commands, per-game points with leaderboards, mod controls (pause, resume, shut down),
+and a daily activity log. Design: `docs/superpowers/specs/2026-10-04-offline-chat-bot-design.md`.
+
+Games are personal: `?scramble` starts **your** game, only your answers count, and the bot
+answers you in threaded replies. Many people can play at once (25 games by default), each
+person runs one game at a time, and new games pause while the bot's outgoing messages are
+backed up.
 
 ## Commands
 
 | Command | Who | What it does |
 |---|---|---|
 | `?help` / `?commands`, `?help <command>` | anyone | List commands, or explain one |
-| `?scramble [category]`, `?scramble categories` | anyone | Unscramble a word; 10/7/4 points depending on hints |
-| `?hangman [category]`, `?hangman categories` | anyone | Hangman; guess with `?g <letter>` or `?g <answer>` |
-| `?skip` | anyone | Vote to skip the current word (3 votes) |
+| `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer; `?hint` for a hint (10/7/4 points) |
+| `?hangman [category]`, `?hangman categories` | anyone | Your own Hangman; guess with `?g <letter>` or `?g <answer>` |
+| `?skip` | anyone | End your current game (no points) |
 | `?leaderboard [game] [1-10]` | anyone | Top players by points |
 | `?gamestats [game] [username]` | anyone | Wins, games played, points |
 | `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke` | anyone | Quick fun |
 | `?cookie`, `?cookie give <username>` | anyone | Daily fortune cookie (resets 00:00 UTC) |
 | `?bot off` / `?bot on` / `?bot status` | mods, broadcaster, owners | Pause, resume, check |
 | `?bot shutdown` | mods, broadcaster, owners | Stop the bot process. Only someone with access to the machine can start it again |
-| `?stopgame` | mods, broadcaster, owners | End the current game with no points |
+| `?stopgame` | mods, broadcaster, owners | End all running games with no points |
 
 Categories: animals, countries, food, games, general, streamers.
 
@@ -5397,8 +5878,8 @@ Console mode keeps its own database under `data/console/`, separate from the rea
 
 ## Settings
 
-- `config.toml` holds the non-secret settings: channel, prefix, cooldowns, enabled games, send
-  rate, and log retention.
+- `config.toml` holds the non-secret settings: channel, prefix, cooldowns, enabled games, how
+  many games can run at once, the busy threshold, the send rate, and log retention.
 - `.env` holds the secrets.
 - The word lists are plain text in `bot/content/words/`, one entry per line. Adding a file adds
   a category.
@@ -5444,7 +5925,7 @@ Console mode keeps its own database under `data/console/`, separate from the rea
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (162).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (200).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
@@ -5487,14 +5968,16 @@ can create accounts and approve logins. The agent walks him through it and recor
 **Checklist** (run `.venv/bin/python -m bot`; check each item off):
 - [ ] **Step 7:** The startup log shows `startup ... "is_mod": true`, and the bot's chat
   messages show the purple Chat Bot badge.
-- [ ] **Step 8:** Scramble ends three ways: won, timed out (wait 45 s), and skipped (three
-  `?skip`s). Hangman ends three ways too: won with `?g`, lost on 6 wrong letters, and timed
-  out. Typing a plain "W" during Hangman does nothing.
+- [ ] **Step 8:** Both accounts play their own games at the same time, and each one's answers
+  only affect their own game. Scramble ends three ways: won (try `?hint`), timed out (wait
+  45 s), and `?skip`. Hangman ends three ways too: won with `?g`, lost on 6 wrong letters, and
+  timed out. Typing a plain "W" during Hangman does nothing. Replies show as threaded replies.
 - [ ] **Step 9:** `?gamestats`, `?gamestats hangman <name>`, `?leaderboard`, and
   `?leaderboard scramble 3` show the right numbers.
 - [ ] **Step 10:** Every quick command answers: `?8ball`, `?coinflip`, `?catfact`, `?dogfact`,
   `?fact`, `?dadjoke`, `?cookie`, `?cookie give <second account>`, `?help`, `?help hangman`.
-- [ ] **Step 11:** The non-mod account's `?bot off` and `?stopgame` do nothing.
+- [ ] **Step 11:** The non-mod account's `?bot off` and `?stopgame` do nothing. A mod's
+  `?stopgame` ends both accounts' games.
 - [ ] **Step 12:** A mod's `?bot off` works: games are ignored. `?bot status` shows PAUSED.
   Restart the bot and it's still paused. `?bot on` resumes.
 - [ ] **Step 13:** `?bot shutdown` posts "Shutting down (requested by ...)" and the process exits.
