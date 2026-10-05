@@ -36,6 +36,28 @@ class Boom(Game):
         return "nothing"
 
 
+class Stubborn(Boom):
+    """A game whose on_timeout forgets to finish, and whose reveal raises."""
+
+    name = "stubborn"
+
+    def on_message(self, msg, now):
+        return None
+
+    def on_timeout(self) -> Outcome:
+        return Outcome(messages=["still going"])
+
+    def reveal(self) -> str:
+        raise RuntimeError("no answer")
+
+
+class BrokenStart(Boom):
+    name = "brokenstart"
+
+    def start(self) -> str:
+        raise RuntimeError("cannot start")
+
+
 class Harness:
     def __init__(self, tmp_path, clock: FakeClock, assets, max_games: int = 25):
         self.clock = clock
@@ -45,7 +67,8 @@ class Harness:
         self.stats = StatsStore(":memory:")
         self.log = ActivityLog(tmp_path / "logs", clock)
         self.manager = GameManager(
-            games={"scramble": Scramble, "hangman": Hangman, "boom": Boom},
+            games={"scramble": Scramble, "hangman": Hangman, "boom": Boom, "stubborn": Stubborn,
+                   "brokenstart": BrokenStart},
             stats=self.stats,
             log=self.log,
             clock=clock,
@@ -90,9 +113,9 @@ def h(tmp_path, clock, assets) -> Harness:
 
 def test_register_adds_start_skip_and_hidden_game_commands(h: Harness):
     names = {c.name for c in h.registry.all()}
-    assert names == {"scramble", "hangman", "boom", "skip", "hint", "g"}
+    assert names == {"scramble", "hangman", "boom", "stubborn", "brokenstart", "skip", "hint", "g"}
     start = h.registry.get("scramble")
-    assert start.cooldown and not start.global_cooldown  # anyone can start their own game
+    assert not start.cooldown  # the per-player game cooldown is the only limit on starting
     assert not h.registry.get("g").listed and not h.registry.get("g").cooldown
     assert not h.registry.get("skip").cooldown
 
@@ -134,14 +157,31 @@ async def test_one_game_per_player_and_per_player_cooldown(h: Harness):
     await h.command("?scramble animals")
     await h.command("?hangman animals")
     assert h.replies[-1] == "You already have a scramble game running."
-    h.chat("alligator")
+    h.chat("alligator")  # alice wins; her 10 s cooldown starts now
+    h.clock.advance(5)
     await h.command("?scramble animals")
-    assert h.replies[-1] == "Your next game in 10s."
+    assert h.replies[-1] == "Your next game in 5s."
     await h.command("?scramble animals", "bob")  # other players aren't blocked
     assert "id-bob" in h.manager.sessions
-    h.clock.advance(10)
+    h.clock.advance(5)
     await h.command("?scramble animals")
     assert "id-alice" in h.manager.sessions
+
+
+async def test_refusal_replies_are_rate_limited_per_player(h: Harness):
+    await h.command("?scramble animals")
+    await h.command("?scramble animals")
+    await h.command("?scramble animals")
+    assert h.replies == ["You already have a scramble game running."]
+    h.clock.advance(5)
+    await h.command("?scramble animals")
+    assert len(h.replies) == 2
+
+
+async def test_categories_then_pick_works_immediately(h: Harness):
+    await h.command("?scramble categories")
+    await h.command("?scramble food")
+    assert h.texts()[0].startswith("🔤 Unscramble (food)")
 
 
 async def test_max_running_games(tmp_path, clock, assets):
@@ -180,12 +220,15 @@ async def test_hint_command_reaches_only_your_game(h: Harness):
     assert h.texts()[-1] == "✅ alice got it: ALLIGATOR (+7)"
 
 
-async def test_hangman_board_updates_coalesce_per_player(h: Harness):
+async def test_hangman_board_updates_coalesce_per_game(h: Harness):
     await h.command("?hangman animals", "alice")
+    await h.command("?hangman animals", "bob")
     await h.command("?g z", "alice")
-    text, kw = h.said[-1]
-    assert "wrong: Z (1/6)" in text
-    assert kw["coalesce_key"] == "hangman-board:id-alice"
+    await h.command("?g z", "bob")
+    (text_a, kw_a), (_, kw_b) = h.said[-2], h.said[-1]
+    assert "wrong: Z (1/6)" in text_a
+    assert kw_a["coalesce_key"] == f"hangman-board:{h.manager.sessions['id-alice'].key}"
+    assert kw_a["coalesce_key"] != kw_b["coalesce_key"]
 
 
 async def test_timeout_ends_the_game(h: Harness):
@@ -233,10 +276,64 @@ async def test_stop_all_ends_every_game_without_points(h: Harness):
 async def test_game_error_ends_only_that_players_game(h: Harness):
     await h.command("?boom", "alice")
     await h.command("?scramble animals", "bob")
-    h.chat("anything", "alice")
-    assert h.texts()[-1] == "Game ended due to an error."
+    msg = h.chat("anything", "alice")
+    text, kw = h.said[-1]
+    assert text == "Game ended due to an error." and kw["reply_to"] == msg.id
     assert set(h.manager.sessions) == {"id-bob"}
     assert any(e["event"] == "error" and e["where"] == "game:boom.on_message" for e in h.events())
+    ends = [e for e in h.events() if e["event"] == "game_end"]
+    assert ends == [{**ends[0], "game": "boom", "outcome": "stopped"}]
+
+
+async def test_reveal_error_during_skip_ends_the_game_once(h: Harness):
+    await h.command("?stubborn", "alice")
+    await h.command("?skip", "alice")
+    ends = [e for e in h.events() if e["event"] == "game_end"]
+    assert len(ends) == 1 and ends[0]["outcome"] == "stopped"
+    assert h.manager.sessions == {}
+    assert h.stats._conn.execute("SELECT COUNT(*) FROM rounds").fetchone()[0] == 1
+
+
+async def test_timeout_is_forced_if_the_game_does_not_finish(h: Harness):
+    await h.command("?stubborn", "alice")
+    h.clock.advance(10)
+    h.manager.tick()
+    h.manager.tick()
+    assert h.manager.sessions == {}
+    assert [e["outcome"] for e in h.events() if e["event"] == "game_end"] == ["timeout"]
+
+
+async def test_start_failure_is_reported_and_starts_nothing(h: Harness):
+    await h.command("?brokenstart")
+    assert h.replies == ["Couldn't start that game."]
+    assert h.manager.sessions == {}
+
+
+async def test_stats_failure_still_ends_the_game(h: Harness, monkeypatch):
+    def broken(rec):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(h.stats, "record_round", broken)
+    await h.command("?scramble animals")
+    h.chat("alligator")
+    assert h.manager.sessions == {}
+    assert h.texts()[-1] == "✅ alice got it: ALLIGATOR (+10)"
+    assert h.manager.cooldown_remaining("id-alice") == 10
+    assert any(e["event"] == "error" and e["where"] == "stats.record_round" for e in h.events())
+
+
+async def test_in_game_command_for_a_different_game_is_ignored(h: Harness):
+    await h.command("?hangman animals", "bob")
+    await h.command("?hint", "bob")  # Hangman has no ?hint
+    assert len(h.said) == 1
+
+
+async def test_finish_records_the_players_current_name(h: Harness):
+    await h.command("?scramble animals")
+    renamed = make_msg("alligator", "alice")
+    renamed = renamed.__class__(**{**renamed.__dict__, "login": "alice_new", "display_name": "Alice_New"})
+    h.manager.on_message(renamed)
+    assert h.stats.find_user("alice_new") is not None
 
 
 async def test_game_messages_get_prefix_substituted(h: Harness):

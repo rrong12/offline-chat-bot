@@ -14,14 +14,17 @@ from datetime import datetime
 from bot.activity_log import ActivityLog
 from bot.assets import Assets
 from bot.clock import Clock
-from bot.commands import Command, CommandContext, CommandRegistry
+from bot.commands import Command, CommandContext, CommandRegistry, Handler
 from bot.connectors.base import ChatMessage
+from bot.cooldowns import Cooldowns
 from bot.games.base import Game, Outcome
 from bot.stats import PlayerResult, RoundRecord, StatsStore
 
 logger = logging.getLogger(__name__)
 
 Say = Callable[..., None]  # say(text, *, reply_to=None, coalesce_key=None, priority=False)
+
+NOTICE_SECONDS = 5.0  # at most one "can't start" or category-list reply per player this often
 
 
 @dataclass
@@ -65,15 +68,16 @@ class GameManager:
         self.max_games = max_games
         self._is_busy = is_busy
         self.sessions: dict[str, Session] = {}  # user_id -> that player's running game
-        self._cooldown_until: dict[str, float] = {}  # user_id -> when they may start again
+        self._cooldowns = Cooldowns(clock)  # per-player game cooldowns and notice rate limits
 
     # registration
 
     def register(self, registry: CommandRegistry) -> None:
+        # Start commands have no command cooldowns: the per-player game cooldown is the only limit
+        # on starting, and refusal replies are rate-limited separately (see _notice).
         for cls in self.games.values():
-            registry.add(
-                Command(cls.name, self._start_command, cls.usage, cls.description, "Games", global_cooldown=False)
-            )
+            handler = self._start_handler(cls)
+            registry.add(Command(cls.name, handler, cls.usage, cls.description, "Games", cooldown=False))
         registry.add(Command("skip", self._skip_command, "{p}skip", "End your current game.", "Games", cooldown=False))
         seen: set[str] = set()
         for cls in self.games.values():
@@ -87,11 +91,23 @@ class GameManager:
     # helpers
 
     def _reply(self, session: Session, text: str, coalesce_key: str | None = None) -> None:
-        key = f"{coalesce_key}:{session.user_id}" if coalesce_key else None
+        key = f"{coalesce_key}:{session.key}" if coalesce_key else None  # unique per player and round
         self._say(text.replace("{p}", self.prefix), reply_to=session.reply_to, coalesce_key=key)
 
+    def _notice(self, ctx: CommandContext, text: str) -> None:
+        """Reply to a start request we can't fulfil, at most once per NOTICE_SECONDS per player."""
+        if self._cooldowns.check_command("notice", ctx.msg.user_id, NOTICE_SECONDS, 0):
+            ctx.reply(text)
+
     def cooldown_remaining(self, user_id: str) -> float:
-        return max(0.0, self._cooldown_until.get(user_id, 0.0) - self.clock.mono())
+        return self._cooldowns.remaining(("game", user_id))
+
+    @staticmethod
+    def _seen(session: Session, msg: ChatMessage) -> None:
+        """Track the player's latest message (replies thread under it) and current names."""
+        session.reply_to = msg.id
+        session.login = msg.login
+        session.display_name = msg.display_name
 
     def status(self) -> str:
         return f"{len(self.sessions)} running"
@@ -115,26 +131,31 @@ class GameManager:
 
     # commands
 
-    async def _start_command(self, ctx: CommandContext) -> None:
-        cls = self.games[ctx.name]
+    def _start_handler(self, cls: type[Game]) -> Handler:
+        async def handler(ctx: CommandContext) -> None:
+            await self._start(cls, ctx)
+
+        return handler
+
+    async def _start(self, cls: type[Game], ctx: CommandContext) -> None:
         arg = ctx.args.strip().lower()
         categories = cls.category_names(self.assets)
         uid = ctx.msg.user_id
         if arg == "categories":
-            ctx.reply(f"{cls.title} categories: {', '.join(categories)}")
+            self._notice(ctx, f"{cls.title} categories: {', '.join(categories)}")
             return
         if uid in self.sessions:
-            ctx.reply(f"You already have a {self.sessions[uid].game.name} game running.")
+            self._notice(ctx, f"You already have a {self.sessions[uid].game.name} game running.")
             return
         remaining = self.cooldown_remaining(uid)
         if remaining > 0:
-            ctx.reply(f"Your next game in {math.ceil(remaining)}s.")
+            self._notice(ctx, f"Your next game in {math.ceil(remaining)}s.")
             return
         if len(self.sessions) >= self.max_games or self._is_busy():
-            ctx.reply("Too many games running right now, try again in a moment.")
+            self._notice(ctx, "Too many games running right now, try again in a moment.")
             return
         if categories and arg and arg not in categories:
-            ctx.reply(f"Unknown category. {cls.title} categories: {', '.join(categories)}")
+            self._notice(ctx, f"Unknown category. {cls.title} categories: {', '.join(categories)}")
             return
         category = (arg or self.rng.choice(categories)) if categories else None
         try:
@@ -145,7 +166,6 @@ class GameManager:
             self.log.write("error", where=f"game:{cls.name}.start", type=type(exc).__name__, message=str(exc))
             ctx.reply("Couldn't start that game.")
             return
-        self.stats.touch_user(uid, ctx.msg.login, ctx.msg.display_name, self.clock.now())
         session = Session(
             key=uuid.uuid4().hex[:8],
             game=game,
@@ -165,7 +185,7 @@ class GameManager:
         session = self.sessions.get(ctx.msg.user_id)
         if session is None:
             return
-        session.reply_to = ctx.msg.id
+        self._seen(session, ctx.msg)
         answer = self._guard(session, f"{session.game.name}.reveal", session.game.reveal)
         if answer is not None:
             self._finish(session, "skipped", [f"⏭️ Skipped. It was {answer}."], {}, set())
@@ -174,7 +194,7 @@ class GameManager:
         session = self.sessions.get(ctx.msg.user_id)
         if session is None or ctx.name not in session.game.commands:
             return
-        session.reply_to = ctx.msg.id
+        self._seen(session, ctx.msg)
         now = self.clock.now()
         outcome = self._guard(
             session,
@@ -189,10 +209,9 @@ class GameManager:
         session = self.sessions.get(msg.user_id)
         if session is None:
             return
+        self._seen(session, msg)
         now = self.clock.now()
         outcome = self._guard(session, f"{session.game.name}.on_message", lambda: session.game.on_message(msg, now))
-        if outcome is not None:
-            session.reply_to = msg.id  # thread the reply under the answer that produced it
         self._handle(session, outcome)
 
     def tick(self) -> None:
@@ -203,9 +222,12 @@ class GameManager:
             game = session.game
             if elapsed >= game.time_limit:
                 outcome = self._guard(session, f"{game.name}.on_timeout", game.on_timeout)
+                self._handle(session, outcome, default_result="timeout")
+                if self.sessions.get(session.user_id) is session:  # the game didn't end itself: force it
+                    self._finish(session, "timeout", [], {}, set())
             else:
                 outcome = self._guard(session, f"{game.name}.on_tick", lambda g=game, e=elapsed: g.on_tick(e))
-            self._handle(session, outcome)
+                self._handle(session, outcome)
 
     def stop_all(self) -> int:
         """End every running game with no points (?stopgame, ?bot off, shutdown). Returns how many."""
@@ -216,11 +238,12 @@ class GameManager:
 
     # outcomes
 
-    def _handle(self, session: Session, outcome: Outcome | str | None) -> None:
+    def _handle(self, session: Session, outcome: Outcome | str | None, default_result: str = "won") -> None:
         if not isinstance(outcome, Outcome) or self.sessions.get(session.user_id) is not session:
             return
         if outcome.finished:
-            self._finish(session, outcome.result or "won", outcome.messages, outcome.awards, outcome.winners)
+            result = outcome.result or default_result
+            self._finish(session, result, outcome.messages, outcome.awards, outcome.winners)
         else:
             for text in outcome.messages:
                 self._reply(session, text, outcome.coalesce_key)
@@ -228,8 +251,10 @@ class GameManager:
     def _finish(
         self, session: Session, result: str, messages: list[str], awards: dict[str, int], winners: set[str]
     ) -> None:
-        self.sessions.pop(session.user_id, None)
-        self._cooldown_until[session.user_id] = self.clock.mono() + self.cooldown_seconds
+        if self.sessions.get(session.user_id) is not session:  # already finished (or replaced): never twice
+            return
+        del self.sessions[session.user_id]
+        self._cooldowns.trigger(("game", session.user_id), self.cooldown_seconds)
         uid = session.user_id
         player = PlayerResult(uid, session.login, session.display_name, awards.get(uid, 0), uid in winners)
         try:
