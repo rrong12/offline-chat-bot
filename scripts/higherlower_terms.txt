@@ -70,9 +70,8 @@ Angry Birds|Angry Birds|games
 Kai Cenat|Kai Cenat|streamers
 xQc|xQc|streamers
 Pokimane|Pokimane|streamers
-Dream|Dream (YouTuber)|streamers
 Technoblade|Technoblade|streamers
-Shroud|Shroud (streamer)|streamers
+Shroud (streamer)|Shroud (streamer)|streamers
 Sodapoppin|Sodapoppin|streamers
 Asmongold|Asmongold|streamers
 Tyler1|Tyler1|streamers
@@ -84,7 +83,6 @@ Northernlion|Northernlion|streamers
 Ironmouse|Ironmouse|streamers
 Sykkuno|Sykkuno|streamers
 IShowSpeed|IShowSpeed|streamers
-Wilbur Soot|Wilbur Soot|streamers
 Quackity|Quackity|streamers
 TommyInnit|TommyInnit|streamers
 Summit1g|Summit1g|streamers
@@ -214,14 +212,14 @@ Mango|Mango|food
 Watermelon|Watermelon|food
 Strawberry|Strawberry|food
 Banana|Banana|food
-Apple|Apple|food
+Apple (the fruit)|Apple|food
 Pineapple|Pineapple|food
 Peanut Butter|Peanut butter|food
 
 # --- brands ---
 YouTube|YouTube|brands
 Google|Google|brands
-Amazon|Amazon (company)|brands
+Amazon (the company)|Amazon (company)|brands
 Netflix|Netflix|brands
 Disney|The Walt Disney Company|brands
 Nike|Nike, Inc.|brands
@@ -261,7 +259,7 @@ Kit Kat|Kit Kat|brands
 Gatorade|Gatorade|brands
 Monster Energy|Monster Energy|brands
 Chick-fil-A|Chick-fil-A|brands
-Subway|Subway (restaurant)|brands
+Subway (restaurant)|Subway (restaurant)|brands
 Domino's Pizza|Domino's Pizza|brands
 Pizza Hut|Pizza Hut|brands
 Burger King|Burger King|brands
@@ -343,7 +341,7 @@ South Africa|South Africa|countries
 Nigeria|Nigeria|countries
 Kenya|Kenya|countries
 Saudi Arabia|Saudi Arabia|countries
-Turkey|Turkey|countries
+Turkey (the country)|Turkey|countries
 Greece|Greece|countries
 Netherlands|Netherlands|countries
 Sweden|Sweden|countries
@@ -390,7 +388,7 @@ Moana|Moana (2016 film)|movies
 Coco|Coco (2017 film)|movies
 Up (the movie)|Up (2009 film)|movies
 The Incredibles|The Incredibles|movies
-Cars|Cars (film)|movies
+Cars (the movie)|Cars (film)|movies
 Ratatouille (the movie)|Ratatouille (film)|movies
 WALL-E|WALL-E|movies
 Inside Out|Inside Out (2015 film)|movies
@@ -448,8 +446,7 @@ Golf|Golf|sports
 Boxing|Boxing|sports
 Volleyball|Volleyball|sports
 Ice Hockey|Ice hockey|sports
-Swimming|Swimming (sport)|sports
-Cricket|Cricket|sports
+Cricket (the sport)|Cricket|sports
 Rugby|Rugby union|sports
 Table Tennis|Table tennis|sports
 Badminton|Badminton|sports

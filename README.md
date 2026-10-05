@@ -3,7 +3,7 @@
 A Twitch chat bot for jasontheween's offline chat: personal chat games (Scramble, Hangman,
 Trivia, Riddle, Higher or Lower), quick fun commands, per-game points with leaderboards, mod
 controls (pause, resume, shut down), and a daily activity log. Designs:
-`docs/superpowers/specs/` (Phase 1 core, Phase 2 games).
+`docs/superpowers/specs/` (Phase 1 core, Phase 2 games, Phase 3 `?rng`).
 
 Games are personal: `?scramble` starts **your** game, only your answers count, and the bot
 answers you in threaded replies. Many people can play at once (25 games by default), each
@@ -15,7 +15,7 @@ bot's outgoing messages are backed up.
 | Command | Who | What it does |
 |---|---|---|
 | `?help` / `?commands`, `?help <command>` | anyone | List commands, or explain one |
-| `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer; `?hint` for a hint (10/7/4 points) |
+| `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer (or `?g <word>`); `?hint` for a hint (10/7/4 points) |
 | `?hangman [category]`, `?hangman categories` | anyone | Your own Hangman; guess with `?g <letter>` or `?g <answer>` |
 | `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`; medium 10/7/4, hard 15/10/6 points). Questions from Open Trivia DB (CC BY-SA 4.0) |
 | `?riddle` | anyone | Your own riddle: `?g <answer>`, 3 guesses, `?hint` for a clue then the letter count (10/7/4 points) |
@@ -33,7 +33,8 @@ bot's outgoing messages are backed up.
 Scramble and Hangman categories: animals, countries, food, games, general, streamers. Trivia
 categories: animals, anime, games, general, geography, history, movies, music, science, sports, tv.
 
-A player doesn't get the same trivia question or riddle again within their last 50.
+A player doesn't get the same trivia question or riddle again within their last 50 since the bot
+last started (a small pool, like animals/easy trivia, comes round sooner, oldest first).
 
 ## Install
 
@@ -102,7 +103,8 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 ## Settings
 
 - `config.toml` holds the non-secret settings: channel, prefix, cooldowns, enabled games, how
-  many games can run at once, the busy threshold, the send rate, and log retention.
+  many games can run at once, the busy threshold, the send rate, log retention, and whether
+  `?rng` awards its meme badges (`[rng] meme_badges`).
 - `.env` holds the secrets.
 - The word lists are plain text in `bot/content/words/`, one entry per line. Adding a file adds
   a category.
@@ -110,7 +112,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 ## Data and logs
 
-- `data/bot.db` (SQLite) holds points, rounds, daily cookies, and the paused flag. The paused
+- `data/bot.db` (SQLite) holds points, rounds, daily cookies, `?rng` rolls, and the paused flag. The paused
   flag survives restarts.
 - `data/logs/activity-YYYY-MM-DD.jsonl` is one file per UTC day. It records commands, game
   starts and ends, admin actions (who paused or shut down the bot), connection events, and

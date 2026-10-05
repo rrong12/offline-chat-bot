@@ -75,7 +75,8 @@ def _words(text: str, drop_article: bool = True) -> list[str]:
 
 def _numbers(words: list[str]) -> set[str]:
     """Numbers named, as digits: "three" and "3" are the same number."""
-    return {str(int(w)) if w.isdigit() else NUMBER_VALUES[w] for w in words if w.isdigit() or w in NUMBER_VALUES}
+    digits = {w for w in words if w.isascii() and w.isdigit()}  # ASCII only: int() rejects other digit characters
+    return {str(int(w)) for w in digits} | {NUMBER_VALUES[w] for w in words if w in NUMBER_VALUES}
 
 
 def _content(words: list[str], context: list[str] = ()) -> int:
@@ -173,7 +174,7 @@ class Riddle(Game):
         following = words[i + 1] if i + 1 < len(words) else None
         if w == "i" and (i == 0 or (following is not None and len(following) > 1)):
             return False
-        if w == "a" and following == answer and answer not in "aeiou":
+        if w == "a" and following in (answer, "letter") and answer not in "aeiou":  # "is it a letter m"
             return False
         return True
 

@@ -1125,6 +1125,21 @@ async def test_a_non_string_item_id_is_not_remembered(tmp_path, clock, assets):
     h = Harness(tmp_path, clock, assets, extra_games={"badid": BadId})
     await h.command("?badid science")
     assert "id-alice" in h.manager.sessions and h.manager._recent == {}
+
+
+class BrokenContent(Quiz):
+    name = "brokencontent"
+    aliases = ()
+
+    @classmethod
+    def category_names(cls, assets):
+        raise FileNotFoundError("content/missing.json")
+
+
+async def test_a_broken_content_file_gets_a_reply(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"brokencontent": BrokenContent})
+    await h.command("?brokencontent")
+    assert h.replies == ["Couldn't start that game."]
 ```
 
 - [ ] **Step 2: Write `tests/test_scramble.py`**
@@ -1520,7 +1535,13 @@ class GameManager:
 
     async def _start(self, cls: type[Game], ctx: CommandContext) -> None:
         tokens = ctx.args.lower().split()
-        categories = cls.category_names(self.assets)
+        try:
+            categories = cls.category_names(self.assets)
+        except Exception as exc:  # a missing or broken content file: say so instead of going quiet
+            logger.exception("could not list %s categories", cls.name)
+            self.log.write("error", where=f"game:{cls.name}.categories", type=type(exc).__name__, message=str(exc))
+            self._notice(ctx, cls, "Couldn't start that game.")
+            return
         uid = ctx.msg.user_id
         if tokens == ["categories"]:
             self._notice(ctx, cls, self._options(cls, categories))
@@ -1986,7 +2007,7 @@ class Hangman(Game):
 - [ ] **Step 8: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_manager.py tests/test_scramble.py -q`, then `.venv/bin/pytest -q`.
-Expected: `57 passed`, then the whole suite passes (326 passed).
+Expected: `58 passed`, then the whole suite passes (327 passed).
 
 - [ ] **Step 9: Commit**
 
@@ -2004,7 +2025,7 @@ Spec §3. Questions come from `content/trivia.json` (built in Task 7). Each has 
 
 - **Starting:** the category comes from the manager. A missing difficulty, or one this category has no questions for, becomes a random available one. Recently seen questions are skipped (`pick_unseen`).
 - **Easy:** the four options are shuffled once and lettered A-D, 20 s. One guess: a letter or the option's text (if the text matches two options that read alike, the player is asked for the letter). Right: 5 points; wrong ends the game showing the right option. Nonsense gets one "Answer with ?g and a letter" reminder, then silence. No hints.
-- **Medium and hard:** typed, 30 s, 3 guesses. A guess matches if `typo_match` accepts it against any accepted form of the answer (`accepted_answers`): with and without a leading article, accents and ligatures folded ("Solskjær"), apostrophes removed inside words ("Xi'an"), "&" read as "and", number words ("fifty seven"), ordinal words, Roman numerals II-XX and "WW2" as digits ("World War II" = "ww2" = "world war 2"), "St." as "saint"; the place before a comma ("Cupertino, California", "Laika, the dog"; not numbers or lists like "1,776 ft" or "2, 3, 1"), a number without its unit ("88 mph", "1000 km/h", "50's"), a name without its middle initial (letters only: "Class 3-E" keeps its 3), "Mt." as "mount" or left out, a name without its title ("Sir", "Pope", "Professor"...), the answer without a parenthetical (or the parenthetical itself when the rest can't be typed, "Φ (phi)"), and for "Who..." questions the surname alone (with its particle: "van halen").
+- **Medium and hard:** typed, 30 s, 3 guesses. A guess matches if `typo_match` accepts it against any accepted form of the answer (`accepted_answers`): with and without a leading article, accents and ligatures folded ("Solskjær"), apostrophes removed inside words ("Xi'an"), "&" read as "and", number words ("fifty seven"), ordinal words, Roman numerals II-XX and "WW2" as digits ("World War II" = "ww2" = "world war 2"), "St." as "saint"; the place before a comma ("Cupertino, California", "Laika, the dog"; not numbers or lists like "1,776 ft" or "2, 3, 1"), a number without its unit ("88 mph", "1000 km/h", "50's"), a name without its middle initial (letters only: "Class 3-E" keeps its 3), "Mt." as "mount" or left out, a name without its title ("Sir", "Pope", "Professor"...), the answer without a parenthetical (or the parenthetical itself when the rest can't be typed, "Φ (phi)"), an epithet left out ("Kahless the Unforgettable"), initials of a 3-4 word answer ("CPU"), words the question already says left out ("Pancreatic" for "pancreatic cancer", "108" for "Vault 108"), a pair in either order, the last word singular or plural, and for questions about a person ("who...", "which football player...") the surname alone (with its particle: "van halen"). A guess may also put up to 2 words before the answer ("New England Patriots" for "Patriots"), as long as no number is dropped and more than a bare number is left.
 - **Hints:** word and letter count with the first letter, then about half the letters in place, describing what is typed (no parenthetical; "phi" for "Φ (phi)"; "characters" when there are digits). A number (also with a unit, "7 years"), or an answer of 1-2 characters, gets one hint that gives nothing away ("A 1-digit number"). Points: medium 10/7/4, hard 15/10/6 by hints used; hints never use up guesses.
 - `?help trivia` credits Open Trivia DB and its CC BY-SA 4.0 license, since chat can't see the credits file.
 - `opening()` builds the question message; the content test (Task 10) uses it to check every question fits in one chat message.
@@ -2066,7 +2087,9 @@ def test_easy_nonsense_gets_one_reminder_then_silence(assets):
     game = make(assets, level="easy")
     assert g(game, "banana").messages == ["Answer with {p}g and a letter, A to D."]
     assert g(game, "banana") is None
-    assert not game.on_command("hint", "", make_msg("?hint"), None)  # no hints on easy
+    hint = lambda: game.on_command("hint", "", make_msg("?hint"), None)  # noqa: E731
+    assert hint().messages == ["Multiple-choice questions have no hints."]  # said once
+    assert hint() is None
 
 
 def test_typed_start_and_right_answer(assets):
@@ -2137,11 +2160,12 @@ def test_unknown_category_raises(assets):
 
 def one_question(tmp_path, answer: str, difficulty: str = "medium") -> Trivia:
     import json
+    import uuid
 
     from bot.assets import Assets
 
-    root = tmp_path / "content"
-    root.mkdir(parents=True, exist_ok=True)
+    root = tmp_path / uuid.uuid4().hex / "content"  # content is cached per path: a fresh one each call
+    root.mkdir(parents=True)
     q = {"id": "x", "category": "general", "difficulty": difficulty, "question": "Q?", "answer": answer}
     (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
     return Trivia("general", random.Random(1), Assets(root), level=difficulty)
@@ -2283,6 +2307,55 @@ def test_surname_with_a_particle(tmp_path):
 def test_hints_describe_what_is_typed(tmp_path, answer, hint):
     game = one_question(tmp_path, answer)
     assert game.on_command("hint", "", make_msg("?hint"), None).messages == [hint]
+
+
+def test_unusual_digits_never_crash(tmp_path):
+    game = one_question(tmp_path, "Fifty-Seven")
+    assert g(game, "fifty " + chr(0x10A40)).messages == ["❌ Not it, 2 guesses left."]  # a Kharosthi digit
+
+
+def test_who_shortcut_needs_a_plain_surname(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir()
+    q = {"id": "x", "category": "games", "difficulty": "medium", "question": "Who made King's Quest?",
+         "answer": "Sierra On-Line"}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    assert g(Trivia("games", random.Random(1), Assets(root), level="medium"), "line").result != "won"
+
+
+def asked(tmp_path, question: str, answer: str) -> Trivia:
+    import json
+    import uuid
+
+    from bot.assets import Assets
+
+    root = tmp_path / uuid.uuid4().hex / "content"
+    root.mkdir(parents=True)
+    q = {"id": "x", "category": "general", "difficulty": "medium", "question": question, "answer": answer}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    return Trivia("general", random.Random(1), Assets(root), level="medium")
+
+
+@pytest.mark.parametrize("question, answer, guess, right", [
+    ("Steve Jobs died from which form of cancer?", "Pancreatic", "pancreatic cancer", True),  # question words
+    ("What vault in Fallout 3 is home to clones?", "Vault 108", "108", True),
+    ("Who won Super Bowl LI?", "Patriots", "new england patriots", True),  # words before the answer
+    ("Which football player is on the FIFA 19 cover?", "Lionel Messi", "messi", True),  # a person question
+    ("What is the brain of the computer?", "Central Processing Unit", "cpu", True),  # initials
+    ("Who founded the Klingon Empire?", "Kahless the Unforgettable", "kahless", True),
+    ("How many times was Einstein married?", "Twice", "2", True),
+    ("What gas do the sun's layers have most?", "Hydrogen & Helium", "helium and hydrogen", True),
+    ("Which instrument has valves?", "French Horn", "french horns", True),  # plural
+    ("Which Halo game came after Halo 3?", "Halo 3: ODST", "halo 4 odst", False),  # numbers are never dropped
+    ("How many times was Einstein married?", "Twice", "dota 2", False),  # a bare number isn't left over
+    ("Who played Ron Swanson?", "Nick Offerman", "no", False),  # no two-letter initials
+])
+def test_more_natural_forms(tmp_path, question, answer, guess, right):
+    assert asked(tmp_path, question, answer)._matches(guess) is right
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2329,11 +2402,19 @@ _CANONICAL = {
     **{r: str(n) for n, r in enumerate(
         "- - ii iii iv - vi vii viii ix - xi xii xiii xiv xv xvi xvii xviii xix xx".split()) if r != "-"},
     "mt": "mount",
+    "once": "1", "twice": "2", "thrice": "3",
     "st": "saint",
     "ww1": "world war 1", "wwi": "world war 1", "ww2": "world war 2", "wwii": "world war 2",
 }
 _PHRASES = {"first world war": "world war 1", "second world war": "world war 2"}
-_TITLES = frozenset("sir dame count countess professor prof pope officer doctor dr captain lord lady".split())
+_TITLES = frozenset(
+    "sir dame count countess professor prof pope officer doctor dr captain lord lady king queen prince princess "
+    "emperor empress duke duchess archduke general admiral president".split())
+_PERSON_QUESTION = re.compile(
+    r"(?i)\bwho\b|\bwhich (?:\w+ ){0,2}(?:person|people|player|actor|actress|singer|artist|rapper|president"
+    r"|footballer|character|man|woman|author|writer|director|composer|scientist|athlete|manager|coach"
+    r"|mathematician|inventor|painter|explorer|emperor|king|queen|poet|philosopher|musician|drummer"
+    r"|guitarist|youtuber|streamer|founder|leader|ruler|monarch|pope|chef|designer)s?\b")
 _PARTICLES = frozenset("van von de del della da di du la le".split())
 
 
@@ -2349,7 +2430,7 @@ def _canonical(text: str) -> str:
     out: list[str] = []
     for w in " ".join(_CANONICAL.get(w, w) for w in joined.split()).split():
         w = m.group(1) if (m := _ORDINAL.match(w)) else w
-        if out and out[-1] in {str(n) for n in _TENS.values()} and w.isdigit() and len(w) == 1 and w != "0":
+        if out and out[-1] in {str(n) for n in _TENS.values()} and w in "123456789" and len(w) == 1:
             out[-1] = str(int(out[-1]) + int(w))  # "fifty seven" -> 57
         else:
             out.append(w)
@@ -2383,8 +2464,39 @@ def accepted_answers(answer: str, question: str = "") -> set[str]:
             forms.add(" ".join(words[1:]))
         if words[:1] and words[0] in _TITLES and len(words) > 1:  # "Sir Alex Ferguson" -> "alex ferguson"
             forms.add(" ".join(words[1:]))
-    if re.match(r"(?i)\s*who\b", question):  # "Who directed ...?" -> "miyazaki", "van halen"
-        name = _canonical(_PARENTHETICAL.sub("", answer)).split()
+    asked = set(_canonical(question).split())
+    for form in list(forms):
+        words = form.split()
+        rest = [w for w in words if w not in asked]  # "What type of cancer ...?" -> "pancreatic"
+        if rest and len(rest) < len(words) and any(len(w) >= 4 or w.isdigit() for w in rest):
+            forms.add(" ".join(rest))  # also "Vault 108" -> "108" when the question says "vault"
+        if " the " in f" {form} " and words[0] != "the":  # "kahless the unforgettable" -> "kahless"
+            before = form.split(" the ")[0]
+            if len(before) >= 4:
+                forms.add(before)
+        if words[:1] == ["letter"] and len(words) == 2:  # "the letter a" -> "a"
+            forms.add(words[1])
+        if 3 <= len(words) <= 4 and all(w.isalpha() for w in words):  # "central processing unit" -> "cpu"
+            forms.add("".join(w[0] for w in words))
+        if form.count(" and ") == 1:  # "hydrogen and helium" = "helium and hydrogen"
+            left, right = form.split(" and ")
+            forms.add(f"{right} and {left}")
+    for form in list(forms):  # the last word singular or plural: "french horns", "capillary"
+        *head, last = form.split()
+        if not last.isalpha() or len(last) < 3:
+            continue
+        if last.endswith("ies") and len(last) >= 5:
+            other = last[:-3] + "y"
+        elif last.endswith("s") and len(last) >= 5:
+            other = last[:-1]
+        elif last.endswith("y") and len(last) >= 4:
+            other = last[:-1] + "ies"
+        else:
+            other = last + "s"
+        forms.add(" ".join([*head, other]))
+    raw_name = _PARENTHETICAL.sub("", answer).split()
+    if _PERSON_QUESTION.search(question) and raw_name and raw_name[-1].isalpha():  # not "Sierra On-Line"
+        name = _canonical(" ".join(raw_name)).split()  # "Who directed ...?" -> "miyazaki", "van halen"
         if 2 <= len(name) <= 4 and len(name[-1]) >= 4:
             forms.add(name[-1])
             if name[-2] in _PARTICLES:
@@ -2458,9 +2570,11 @@ class Trivia(Game):
             rng.shuffle(self.options)
             self.time_limit = self.EASY_TIME
         self._accepted = accepted_answers(self.answer, self.question)
+        self._asked = set(_canonical(self.question).split())
         self.guesses_left = self.GUESSES
         self.hints_used = 0
         self._told_how = False  # the "answer with A-D" reminder is sent at most once
+        self._told_no_hints = False
         outside = _PARENTHETICAL.sub("", self.answer).strip()
         inner = _PARENTHETICAL.search(self.answer)
         # hints describe what's typed: skip "(Clown)", but use "phi" for "Φ (phi)"
@@ -2518,7 +2632,18 @@ class Trivia(Game):
         return Outcome(messages=[f"❌ It was {self._correct_text()}."], finished=True, result="lost")
 
     def _matches(self, guess: str) -> bool:
-        return any(typo_match(g, a, TYPO_MIN_LETTERS) for g in _forms(guess) for a in self._accepted)
+        guesses = _forms(guess)
+        for form in list(guesses):
+            words = form.split()
+            rest = [w for w in words if w not in self._asked]  # "pancreatic cancer" when the question says cancer
+            if rest and len(rest) < len(words):
+                guesses.add(" ".join(rest))
+            for n in (1, 2):  # "new england patriots" for "Patriots": the answer, with up to 2 words before it
+                dropped, kept = words[:n], words[n:]
+                # never drop a number ("halo 4 recon" isn't "recon"), and never leave only one ("dota 2" isn't "2")
+                if kept and not any(ch.isdigit() for w in dropped for ch in w) and any(w.isalpha() for w in kept):
+                    guesses.add(" ".join(kept))
+        return any(typo_match(g, a, TYPO_MIN_LETTERS) for g in guesses for a in self._accepted)
 
     def _guess_typed(self, args: str, msg: ChatMessage) -> Outcome:
         if self._matches(args):
@@ -2535,7 +2660,12 @@ class Trivia(Game):
             text = number.group(1)
         chars = [ch for ch in text if ch.isalnum()]
         short = len(chars) <= 2 or text.replace(",", "").isdigit()  # "starts with 8" would give these away
-        if self.easy or self.hints_used >= (1 if short else len(self.POINTS[self.level]) - 1):
+        if self.easy:
+            if self._told_no_hints:
+                return None
+            self._told_no_hints = True
+            return Outcome(messages=["Multiple-choice questions have no hints."])
+        if self.hints_used >= (1 if short else len(self.POINTS[self.level]) - 1):
             return None
         self.hints_used += 1
         kind = "letter" if all(ch.isalpha() for ch in chars) else "character"
@@ -2569,7 +2699,7 @@ class Trivia(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_trivia.py -q`, then `.venv/bin/pytest -q`.
-Expected: `66 passed`, then the whole suite passes (392 passed).
+Expected: `80 passed`, then the whole suite passes (407 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2686,11 +2816,12 @@ def test_apostrophes_are_removed_not_split(tmp_path):
 
 def riddle(tmp_path, text: str, answers: list[str]) -> Riddle:
     import json
+    import uuid
 
     from bot.assets import Assets
 
-    root = tmp_path / "content"
-    root.mkdir(exist_ok=True)
+    root = tmp_path / uuid.uuid4().hex / "content"  # content is cached per path: a fresh one each call
+    root.mkdir(parents=True)
     entry = {"riddle": text, "answers": answers, "clue": "A clue."}
     (root / "riddles.json").write_text(json.dumps([entry]), encoding="utf-8")
     return Riddle(None, random.Random(1), Assets(root))
@@ -2736,6 +2867,7 @@ def test_letter_answers_reject_hedges(tmp_path):
     text = "What comes once in a minute and twice in a moment?"
     assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "is it a m?") == "won"
     assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "the letter M") == "won"
+    assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "is it a letter m") == "won"
     assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "m or n") == "list"
     assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "n m t") == "list"
 
@@ -2855,7 +2987,8 @@ def _words(text: str, drop_article: bool = True) -> list[str]:
 
 def _numbers(words: list[str]) -> set[str]:
     """Numbers named, as digits: "three" and "3" are the same number."""
-    return {str(int(w)) if w.isdigit() else NUMBER_VALUES[w] for w in words if w.isdigit() or w in NUMBER_VALUES}
+    digits = {w for w in words if w.isascii() and w.isdigit()}  # ASCII only: int() rejects other digit characters
+    return {str(int(w)) for w in digits} | {NUMBER_VALUES[w] for w in words if w in NUMBER_VALUES}
 
 
 def _content(words: list[str], context: list[str] = ()) -> int:
@@ -2953,7 +3086,7 @@ class Riddle(Game):
         following = words[i + 1] if i + 1 < len(words) else None
         if w == "i" and (i == 0 or (following is not None and len(following) > 1)):
             return False
-        if w == "a" and following == answer and answer not in "aeiou":
+        if w == "a" and following in (answer, "letter") and answer not in "aeiou":  # "is it a letter m"
             return False
         return True
 
@@ -3003,7 +3136,7 @@ class Riddle(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_riddle.py -q`, then `.venv/bin/pytest -q`.
-Expected: `38 passed`, then the whole suite passes (430 passed).
+Expected: `38 passed`, then the whole suite passes (445 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -3269,7 +3402,7 @@ class HigherLower(Game):
 - [ ] **Step 4: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_higherlower.py -q`, then `.venv/bin/pytest -q`.
-Expected: `11 passed`, then the whole suite passes (441 passed).
+Expected: `11 passed`, then the whole suite passes (456 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -4344,7 +4477,7 @@ bot's outgoing messages are backed up.
 | Command | Who | What it does |
 |---|---|---|
 | `?help` / `?commands`, `?help <command>` | anyone | List commands, or explain one |
-| `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer; `?hint` for a hint (10/7/4 points) |
+| `?scramble [category]`, `?scramble categories` | anyone | Your own word to unscramble: type the answer (or `?g <word>`); `?hint` for a hint (10/7/4 points) |
 | `?hangman [category]`, `?hangman categories` | anyone | Your own Hangman; guess with `?g <letter>` or `?g <answer>` |
 | `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`; medium 10/7/4, hard 15/10/6 points). Questions from Open Trivia DB (CC BY-SA 4.0) |
 | `?riddle` | anyone | Your own riddle: `?g <answer>`, 3 guesses, `?hint` for a clue then the letter count (10/7/4 points) |
@@ -4361,7 +4494,8 @@ bot's outgoing messages are backed up.
 Scramble and Hangman categories: animals, countries, food, games, general, streamers. Trivia
 categories: animals, anime, games, general, geography, history, movies, music, science, sports, tv.
 
-A player doesn't get the same trivia question or riddle again within their last 50.
+A player doesn't get the same trivia question or riddle again within their last 50 since the bot
+last started (a small pool, like animals/easy trivia, comes round sooner, oldest first).
 
 ## Install
 
@@ -4499,7 +4633,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 - [ ] **Step 11: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_flows.py tests/test_cli.py tests/test_config.py tests/test_stats_help_commands.py -q`, then `.venv/bin/pytest -q`.
-Expected: `83 passed`, then the whole suite passes (447 passed).
+Expected: `83 passed`, then the whole suite passes (462 passed).
 
 - [ ] **Step 12: Commit**
 
@@ -4575,7 +4709,8 @@ CATEGORIES: dict[str, tuple[int, ...]] = {
 }
 DIFFICULTIES = ("easy", "medium", "hard")
 # Typed questions must make sense without seeing the options ("Which is not a country in Africa?").
-NEEDS_OPTIONS = re.compile(r"\b(?:these|following|below|above|not|except|none of)\b", re.IGNORECASE)
+NEEDS_OPTIONS = re.compile(r"\b(?:these|following|below|above|not|isn't|isnt|except|none of|released first"
+                           r"|came first)\b", re.IGNORECASE)
 # Typed answers nobody types the same way twice: dates with a month, long numbers, approximate figures.
 _MONTH = (r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?"
           r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b")  # whole month names only: not "Mario Party 4"
@@ -4588,7 +4723,8 @@ MATURE_TOPICS = re.compile(
     r"\b(?:cocaine|heroin|cannabis|marijuana|thc|weed|drugs?|cartel|overdose|beer|brewery|vodka|whisk(?:e)?y|rum"
     r"|cocktails?|alcohol(?:ic)?|liquor|drunk|tobacco|cigarettes?|smoking|sex(?:ual|y)?|breasts?|harem|hot coffee"
     r"|stripper|suicide|kill (?:themselves|himself|herself|yourself)|schutzstaffel|to love-ru"
-    r"|high ?school (?:dxd|of the dead)|copulat\w*|courtesans?|testicles?|morenatsu)\b",
+    r"|high ?school (?:dxd|of the dead)|copulat\w*|courtesans?|testic\w*|morenatsu|breweries|beerbongs?|cider"
+    r"|smokin|pills?|meth|poopy\w*|butthole|skinny dipping)\b|f\*\*\*",
     re.IGNORECASE,
 )
 # Checked and wrong, garbled, or out of date (see docs/superpowers/plans, Phase 2 execution log).
@@ -4599,11 +4735,37 @@ EXCLUDED_IDS = frozenset({
     "0a60a0d744", "9b1d123380", "8c394874bc", "4ed32265c4", "4edefa5a85", "975a5db97b", "c51570b283",
     "1059611032", "5561256950", "edee009d10", "6e0ed953fc", "9ea627bce0", "6addd9f6e9", "87737bf23e",
     "58c424f37e", "2a4bb44099",
+    # final content check: drug, alcohol, crude or sexual references
+    "b24b2ec6aa", "73250405bd", "c83119d927", "7b10c8f2f4", "42ad40f1e2", "bfe6f9c09a", "87cae92ada", "e624668a3d",
+    "90da5b293c", "18ae936edf", "4a552ee754", "ee23034f51", "c2b44eb8fb", "92d20bd2ba", "efac808e7c", "de05405af0",
+    "36c06af8e7", "77d6f53911", "4753e66b33", "0fc6d7fffd", "2422cc1091", "8a1e491575", "2bf8aaeeef", "dd2bd4c0c2",
+    "d47d9e3117", "a2b28d227f", "7b60cf9d2c", "377aea9bec", "cda3197f67", "5f73d1ec4d", "b665177bd4", "cd05af5050",
+    "48e8ef921d", "44137d054a", "5658e8c7ed", "3baa0215cc", "38402e4d13",
+    # real tragedies asked as trivia; graphic horror or violence; political flashpoints
+    "dfaa821c00", "9c4037dac2", "b80d786341", "3b391d6b14", "57cdce9ef6", "988d7a8357", "33242191b5", "15364ba138",
+    "c39015cf72", "474216f98c", "85bd4e31e7", "d8117c67fa", "97127fb761", "c4652602c5", "34e3ac73be", "b9dc508a27",
+    "7a08b7408e", "bd654a3270", "8ee79243f7", "e8fbc67d8b", "117834b7bc", "8418188f53", "cbc8dd1211", "2181f83cac",
+    "4728ca8a42", "18c2806ac2", "6243576a4d", "47fdbadd42", "9ab5a7037e", "8e1992cc3e", "c8ae5e49b8", "1ef2cacab3",
+    "e20b11145d", "0535be57ab",
+    # wrong, disputed, outdated or misspelled
+    "d36be0c6b3", "8f2e689589", "967cd0585b", "2f5173e788", "698b3fcb16", "6b04a405c0", "d957b5ebc1", "a087e2c231",
+    "5b7e24e95e", "bd77947a49", "f05d2bd06c", "1c2b34a9d4", "e1865026f0", "a5a816db95", "9d1664bf8c", "1428729d73",
+    "4a066cdd4f", "0c6bac2620", "5a3fe091bb", "53defe178e", "25c4d6db63", "c630b1ae24", "de84760186", "9fdf44eeb8",
+    "e9e2cddf5c", "947d4001a4", "95cdbc54ea", "89263f34b5", "75dde8bc87", "ab4e2f29d5", "afe6a659c6", "dba06a6755",
+    "57bed4fc07", "4c8184b541", "0503212f1e", "850e33e09a", "7956f9d43a", "795f421ab4", "4e57dcbb57", "976350cbe8",
+    "ab0e72f545", "999384a64c", "4743af3412", "6bafaee378", "9e23bb25e9", "c66fffc21a", "cbd1fcc6c2", "0254780543",
+    "e21b77c3b1", "266b7ab855",
+    # typed questions that need their options or have several right answers
+    "28b9949d5a", "23a7861c7f", "5be9b74e3d", "aa8b57cdf5", "f15f3a1dd2", "fc4692f4a1", "ae648bca41", "88f137cd88",
+    "57d3a3b40e", "4aa43368fd", "b630474c0b", "39397a83f4", "6b31e0682e", "ea68f2ae68", "0e3eb290c0", "58f88e8388",
+    "c2262c53f0", "83478bc71a", "ae367cae75", "8fea975549", "8910491353", "e2f1097a0e", "15c665e1a0",
+    # stored answers in a form nobody types
+    "4b4d08eda9", "73b2fb60a5", "78d25ae8e4", "8473a3da17", "56bd2fab46", "4169066b55", "27dbcb43fc", "f104bb9f27",
 })
 # Checked by hand: typed questions the "needs its options" or date filter would wrongly drop.
 KEEP_IDS = frozenset({
-    "95c4855061", "cc8223f928", "9a3af53f71", "60cde368d5", "e3b9706abe", "c39015cf72", "1df1830466",
-    "af81c2f47c", "cbd1fcc6c2", "769ed5ba08",
+    "95c4855061", "cc8223f928", "9a3af53f71", "60cde368d5", "e3b9706abe", "1df1830466", "af81c2f47c",
+    "769ed5ba08",
 })
 MAX_TYPED_WORDS = 3
 MAX_TYPED_CHARS = 25
@@ -4778,12 +4940,12 @@ The adapted question bank is shared under the same license.
 - [ ] **Step 3: Generate `bot/content/trivia.json`**
 
 Run: `.venv/bin/python scripts/fetch_trivia.py`
-Expected: it takes about 25 minutes; the last line reads `wrote N questions` with N around 3,000.
+Expected: it takes about 25 minutes; the last line reads `wrote N questions` with N around 2,800.
 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 447 passed.
+Expected: 462 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4803,11 +4965,11 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
 
 ```json
 [
-  {"riddle": "What has hands but can't clap?", "answers": ["clock", "watch", "clocks"], "clue": "You probably check me several times a day."},
+  {"riddle": "What has hands but can't clap?", "answers": ["clock", "watch", "clocks", "stopwatch"], "clue": "You probably check me several times a day."},
   {"riddle": "What has to be broken before you can use it?", "answers": ["egg", "eggs"], "clue": "Breakfast often starts by cracking one open."},
   {"riddle": "What gets wetter the more it dries?", "answers": ["towel", "towels"], "clue": "You grab one after a shower or a swim."},
   {"riddle": "What has 88 keys but can't open a single door?", "answers": ["piano", "pianos", "keyboard"], "clue": "It makes music when you press its black and white parts."},
-  {"riddle": "What has a head and a tail but no body?", "answers": ["coin", "coins", "penny", "pennies", "quarter"], "clue": "Flip me to settle a tough choice."},
+  {"riddle": "What has a head and a tail but no body?", "answers": ["coin", "coins", "penny", "pennies", "quarter", "dime", "nickel"], "clue": "Flip me to settle a tough choice."},
   {"riddle": "What goes up but never comes down?", "answers": ["age"], "clue": "Every birthday makes this number bigger."},
   {"riddle": "What has one eye but can't see, and is very sharp at the other end?", "answers": ["needle", "needles"], "clue": "Tailors push thread through me."},
   {"riddle": "What has lots of teeth but never bites?", "answers": ["comb", "combs", "zipper"], "clue": "You run me through your hair to tidy it."},
@@ -4819,7 +4981,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What is full of holes but still holds water?", "answers": ["sponge", "sponges"], "clue": "You use me to scrub the dishes."},
   {"riddle": "What goes up when the rain comes down?", "answers": ["umbrella", "umbrellas", "brolly"], "clue": "You open me over your head on a stormy day."},
   {"riddle": "What has four legs but can't walk, and holds your dinner every night?", "answers": ["table", "tables", "dinner table", "kitchen table"], "clue": "You set plates and forks on me."},
-  {"riddle": "I'm tall when I'm young and short when I'm old. What am I?", "answers": ["candle", "candles"], "clue": "I have a wick and I melt as I glow."},
+  {"riddle": "I'm tall when I'm young and short when I'm old. What am I?", "answers": ["candle", "candles", "pencil", "pencils"], "clue": "I have a wick and I melt as I glow."},
   {"riddle": "What can travel around the world while staying in a corner?", "answers": ["stamp", "stamps", "postage stamp"], "clue": "You stick me on an envelope before mailing it."},
   {"riddle": "I have a spine but no bones, a cover but no blanket, and pages full of stories. What am I?", "answers": ["book", "books", "novel"], "clue": "Libraries are full of me."},
   {"riddle": "What has an eye but can't see, and spins with powerful winds?", "answers": ["hurricane", "hurricanes", "tornado", "tornadoes", "storm", "cyclone", "typhoon"], "clue": "Weather reporters warn people when one is coming."},
@@ -4915,7 +5077,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
   {"riddle": "What contains all 26 letters but only has eight letters itself?", "answers": ["alphabet", "alphabets", "abc", "abcs"], "clue": "Kids sing a song to learn it, from A to Z."},
   {"riddle": "What always points north, has a needle, and helps hikers find their way?", "answers": ["compass", "compasses"], "clue": "Sailors carried one long before phones had maps."},
   {"riddle": "What kind of nut has a hole in the middle but no shell?", "answers": ["doughnut", "doughnuts", "donut", "donuts"], "clue": "It's a round sweet treat, often covered in sprinkles."},
-  {"riddle": "What has a hundred legs but can only lean against the wall?", "answers": ["broom", "brooms", "broomstick", "mop"], "clue": "You sweep the floor with me."},
+  {"riddle": "What has a hundred legs but can only lean against the wall?", "answers": ["broom", "brooms", "broomstick", "mop", "brush"], "clue": "You sweep the floor with me."},
   {"riddle": "I'm lighter than what I'm made of, and most of me hides below the surface. What am I?", "answers": ["iceberg", "icebergs", "ice", "ice cube"], "clue": "I float in freezing seas near the poles."},
   {"riddle": "What comes down but never goes up?", "answers": ["rain", "raindrop", "raindrops", "rainfall", "snow"], "clue": "Grab an umbrella when it starts falling."},
   {"riddle": "What becomes whiter the dirtier it gets?", "answers": ["chalkboard", "chalkboards", "blackboard", "blackboards"], "clue": "Teachers wrote on it in classrooms before whiteboards."},
@@ -5023,7 +5185,7 @@ About 200 classic, clean riddles, written for the bot by one agent and checked b
 - [ ] **Step 2: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 447 passed.
+Expected: 462 passed.
 
 - [ ] **Step 3: Commit**
 
@@ -5038,7 +5200,7 @@ git commit -m "Phase 2: riddles"
 - Replace: `scripts/higherlower_terms.txt`, `scripts/fetch_pageviews.py`
 - Generate: `bot/content/higherlower.json`
 
-`scripts/higherlower_terms.txt` lists about 440 well-known, family-friendly terms (display name, exact English Wikipedia title, category). `scripts/fetch_pageviews.py` resolves each title through redirects, then sums last month's user page views from the Wikimedia REST API. It sends a generic User-Agent with the repo URL (no personal email), waits 1 s between requests, and retries HTTP 429 and dropped connections with backoff. Missing and disambiguation pages are skipped; a term whose article differs from the title asked for, or with under 3,000 views, is printed for a check by hand. If more than 5% of the terms fail, the old file is left alone. The game never shows a category, so a display name says what is meant when it could be read two ways: "Venom (the movie)", "Titanic (the movie)", "FIFA (video games)", "Wednesday (TV show)"; Star Wars and Harry Potter use the franchise articles.
+`scripts/higherlower_terms.txt` lists about 440 well-known, family-friendly terms (display name, exact English Wikipedia title, category). `scripts/fetch_pageviews.py` resolves each title through redirects, then sums last month's user page views from the Wikimedia REST API. It sends a generic User-Agent with the repo URL (no personal email), waits 1 s between requests, and retries HTTP 429 and dropped connections with backoff. Missing and disambiguation pages are skipped; a term whose article differs from the title asked for, or with under 3,000 views, is printed for a check by hand. If more than 5% of the terms fail, the old file is left alone. The game never shows a category, so a display name says what is meant when it could be read two ways: "Venom (the movie)", "Titanic (the movie)", "FIFA (video games)", "Wednesday (TV show)", "Apple (the fruit)", "Turkey (the country)"; Star Wars and Harry Potter use the franchise articles. Two creators with recent controversies were left out.
 
 - [ ] **Step 1: Write `scripts/higherlower_terms.txt`**
 
@@ -5115,9 +5277,8 @@ Angry Birds|Angry Birds|games
 Kai Cenat|Kai Cenat|streamers
 xQc|xQc|streamers
 Pokimane|Pokimane|streamers
-Dream|Dream (YouTuber)|streamers
 Technoblade|Technoblade|streamers
-Shroud|Shroud (streamer)|streamers
+Shroud (streamer)|Shroud (streamer)|streamers
 Sodapoppin|Sodapoppin|streamers
 Asmongold|Asmongold|streamers
 Tyler1|Tyler1|streamers
@@ -5129,7 +5290,6 @@ Northernlion|Northernlion|streamers
 Ironmouse|Ironmouse|streamers
 Sykkuno|Sykkuno|streamers
 IShowSpeed|IShowSpeed|streamers
-Wilbur Soot|Wilbur Soot|streamers
 Quackity|Quackity|streamers
 TommyInnit|TommyInnit|streamers
 Summit1g|Summit1g|streamers
@@ -5259,14 +5419,14 @@ Mango|Mango|food
 Watermelon|Watermelon|food
 Strawberry|Strawberry|food
 Banana|Banana|food
-Apple|Apple|food
+Apple (the fruit)|Apple|food
 Pineapple|Pineapple|food
 Peanut Butter|Peanut butter|food
 
 # --- brands ---
 YouTube|YouTube|brands
 Google|Google|brands
-Amazon|Amazon (company)|brands
+Amazon (the company)|Amazon (company)|brands
 Netflix|Netflix|brands
 Disney|The Walt Disney Company|brands
 Nike|Nike, Inc.|brands
@@ -5306,7 +5466,7 @@ Kit Kat|Kit Kat|brands
 Gatorade|Gatorade|brands
 Monster Energy|Monster Energy|brands
 Chick-fil-A|Chick-fil-A|brands
-Subway|Subway (restaurant)|brands
+Subway (restaurant)|Subway (restaurant)|brands
 Domino's Pizza|Domino's Pizza|brands
 Pizza Hut|Pizza Hut|brands
 Burger King|Burger King|brands
@@ -5388,7 +5548,7 @@ South Africa|South Africa|countries
 Nigeria|Nigeria|countries
 Kenya|Kenya|countries
 Saudi Arabia|Saudi Arabia|countries
-Turkey|Turkey|countries
+Turkey (the country)|Turkey|countries
 Greece|Greece|countries
 Netherlands|Netherlands|countries
 Sweden|Sweden|countries
@@ -5435,7 +5595,7 @@ Moana|Moana (2016 film)|movies
 Coco|Coco (2017 film)|movies
 Up (the movie)|Up (2009 film)|movies
 The Incredibles|The Incredibles|movies
-Cars|Cars (film)|movies
+Cars (the movie)|Cars (film)|movies
 Ratatouille (the movie)|Ratatouille (film)|movies
 WALL-E|WALL-E|movies
 Inside Out|Inside Out (2015 film)|movies
@@ -5493,8 +5653,7 @@ Golf|Golf|sports
 Boxing|Boxing|sports
 Volleyball|Volleyball|sports
 Ice Hockey|Ice hockey|sports
-Swimming|Swimming (sport)|sports
-Cricket|Cricket|sports
+Cricket (the sport)|Cricket|sports
 Rugby|Rugby union|sports
 Table Tennis|Table tennis|sports
 Badminton|Badminton|sports
@@ -5644,7 +5803,7 @@ Expected: it takes a few minutes; it prints `wrote N terms for <month>` and any 
 - [ ] **Step 4: Run the whole suite**
 
 Run: `.venv/bin/pytest -q`
-Expected: 447 passed.
+Expected: 462 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -5872,7 +6031,7 @@ def test_no_game_has_a_category_named_like_a_level():
 - [ ] **Step 2: Run the tests**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `24 passed`, then the whole suite passes (452 passed).
+Expected: `24 passed`, then the whole suite passes (467 passed).
 
 - [ ] **Step 3: Commit**
 
@@ -5883,4 +6042,39 @@ git commit -m "Phase 2: content tests for trivia, riddles and Higher or Lower"
 
 ## Execution log
 
-Added while the plan is executed.
+Built from a tested prototype on 2026-10-05: implementer subagents applied each task from this plan
+(code extracted verbatim), then a spec-compliance review and a code-quality review checked each one.
+Content (trivia download, riddles, page views) was generated while prototyping and copied in.
+
+- **Tasks 1-10** were committed as 6b47f0b, 30f0a52, 1c7e383, 9a669e9, fe0f9d4, a91737a, 533b836,
+  38cf96f, b5cfbab and 1a7d28e. Every task's tests failed first and then passed with the plan's counts.
+- **Review fixes, round 1:**
+  - 57ffefe: answer matching keeps numbers exact, strips only real articles, folds accents.
+  - 70cd470: refusal notices keyed by game, so an alias can't get around them.
+  - 3003a72: a test that close view counts are never paired.
+- **Review fixes, round 2 (cff37d1):**
+  - Framework: games without options ignore extra words; the repeat history is ordered, so small
+    pools never repeat back to back; a broken time limit ends only its game; the memory bound is tested.
+  - Trivia: natural answer variants, digit-group and first-letter rules for typos, no-giveaway hints,
+    and credits in `?help`.
+  - Trivia content: mature topics, symbol answers, dates, option-dependent questions and wrong ids
+    removed (3,199 to 2,985 questions).
+  - Riddle: filler-aware word limit, spacing, plurals, negation, numbers and letter hedges.
+  - Higher or Lower: film articles corrected, and `?leaderboard hl` works.
+- **Review fixes, round 3 (885c5a4):**
+  - Riddle: either-or hedges, number and letter edge cases.
+  - Trivia: a stricter comma rule, titles, surname particles, WW2 and number words; 15 more questions
+    excluded and 10 good ones restored (2,979).
+  - Higher or Lower: display names say what they mean, and up/down are accepted.
+- **Riddle content:** 216 written by one agent; an independent checker fixed 30 and removed 2. Later
+  reviews removed alternatives that let wrong guesses win.
+- **Final review (whole branch):** the code review found it ready to merge; its minor items were
+  fixed:
+  - ASCII-only digits; "is it a letter m"; the surname shortcut needs a plain surname;
+  - easy questions say once that they have no hints; a broken content file gets a reply;
+  - README gaps; test helpers that could read stale cached content.
+- **Final content check:** about 150 more trivia questions excluded: real tragedies, drug, alcohol and
+  crude titles, graphic horror, wrong or outdated facts, misspellings, option-dependent questions, and
+  answers nobody types. 2,826 remain. Matching now also accepts question words left out, initials,
+  epithets, pairs in either order, plurals and words before the answer. Riddles gained a few answers.
+  Higher or Lower dropped two creators and clarified ambiguous names.

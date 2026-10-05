@@ -34,11 +34,19 @@ _CANONICAL = {
     **{r: str(n) for n, r in enumerate(
         "- - ii iii iv - vi vii viii ix - xi xii xiii xiv xv xvi xvii xviii xix xx".split()) if r != "-"},
     "mt": "mount",
+    "once": "1", "twice": "2", "thrice": "3",
     "st": "saint",
     "ww1": "world war 1", "wwi": "world war 1", "ww2": "world war 2", "wwii": "world war 2",
 }
 _PHRASES = {"first world war": "world war 1", "second world war": "world war 2"}
-_TITLES = frozenset("sir dame count countess professor prof pope officer doctor dr captain lord lady".split())
+_TITLES = frozenset(
+    "sir dame count countess professor prof pope officer doctor dr captain lord lady king queen prince princess "
+    "emperor empress duke duchess archduke general admiral president".split())
+_PERSON_QUESTION = re.compile(
+    r"(?i)\bwho\b|\bwhich (?:\w+ ){0,2}(?:person|people|player|actor|actress|singer|artist|rapper|president"
+    r"|footballer|character|man|woman|author|writer|director|composer|scientist|athlete|manager|coach"
+    r"|mathematician|inventor|painter|explorer|emperor|king|queen|poet|philosopher|musician|drummer"
+    r"|guitarist|youtuber|streamer|founder|leader|ruler|monarch|pope|chef|designer)s?\b")
 _PARTICLES = frozenset("van von de del della da di du la le".split())
 
 
@@ -54,7 +62,7 @@ def _canonical(text: str) -> str:
     out: list[str] = []
     for w in " ".join(_CANONICAL.get(w, w) for w in joined.split()).split():
         w = m.group(1) if (m := _ORDINAL.match(w)) else w
-        if out and out[-1] in {str(n) for n in _TENS.values()} and w.isdigit() and len(w) == 1 and w != "0":
+        if out and out[-1] in {str(n) for n in _TENS.values()} and w in "123456789" and len(w) == 1:
             out[-1] = str(int(out[-1]) + int(w))  # "fifty seven" -> 57
         else:
             out.append(w)
@@ -88,8 +96,39 @@ def accepted_answers(answer: str, question: str = "") -> set[str]:
             forms.add(" ".join(words[1:]))
         if words[:1] and words[0] in _TITLES and len(words) > 1:  # "Sir Alex Ferguson" -> "alex ferguson"
             forms.add(" ".join(words[1:]))
-    if re.match(r"(?i)\s*who\b", question):  # "Who directed ...?" -> "miyazaki", "van halen"
-        name = _canonical(_PARENTHETICAL.sub("", answer)).split()
+    asked = set(_canonical(question).split())
+    for form in list(forms):
+        words = form.split()
+        rest = [w for w in words if w not in asked]  # "What type of cancer ...?" -> "pancreatic"
+        if rest and len(rest) < len(words) and any(len(w) >= 4 or w.isdigit() for w in rest):
+            forms.add(" ".join(rest))  # also "Vault 108" -> "108" when the question says "vault"
+        if " the " in f" {form} " and words[0] != "the":  # "kahless the unforgettable" -> "kahless"
+            before = form.split(" the ")[0]
+            if len(before) >= 4:
+                forms.add(before)
+        if words[:1] == ["letter"] and len(words) == 2:  # "the letter a" -> "a"
+            forms.add(words[1])
+        if 3 <= len(words) <= 4 and all(w.isalpha() for w in words):  # "central processing unit" -> "cpu"
+            forms.add("".join(w[0] for w in words))
+        if form.count(" and ") == 1:  # "hydrogen and helium" = "helium and hydrogen"
+            left, right = form.split(" and ")
+            forms.add(f"{right} and {left}")
+    for form in list(forms):  # the last word singular or plural: "french horns", "capillary"
+        *head, last = form.split()
+        if not last.isalpha() or len(last) < 3:
+            continue
+        if last.endswith("ies") and len(last) >= 5:
+            other = last[:-3] + "y"
+        elif last.endswith("s") and len(last) >= 5:
+            other = last[:-1]
+        elif last.endswith("y") and len(last) >= 4:
+            other = last[:-1] + "ies"
+        else:
+            other = last + "s"
+        forms.add(" ".join([*head, other]))
+    raw_name = _PARENTHETICAL.sub("", answer).split()
+    if _PERSON_QUESTION.search(question) and raw_name and raw_name[-1].isalpha():  # not "Sierra On-Line"
+        name = _canonical(" ".join(raw_name)).split()  # "Who directed ...?" -> "miyazaki", "van halen"
         if 2 <= len(name) <= 4 and len(name[-1]) >= 4:
             forms.add(name[-1])
             if name[-2] in _PARTICLES:
@@ -163,9 +202,11 @@ class Trivia(Game):
             rng.shuffle(self.options)
             self.time_limit = self.EASY_TIME
         self._accepted = accepted_answers(self.answer, self.question)
+        self._asked = set(_canonical(self.question).split())
         self.guesses_left = self.GUESSES
         self.hints_used = 0
         self._told_how = False  # the "answer with A-D" reminder is sent at most once
+        self._told_no_hints = False
         outside = _PARENTHETICAL.sub("", self.answer).strip()
         inner = _PARENTHETICAL.search(self.answer)
         # hints describe what's typed: skip "(Clown)", but use "phi" for "Φ (phi)"
@@ -223,7 +264,18 @@ class Trivia(Game):
         return Outcome(messages=[f"❌ It was {self._correct_text()}."], finished=True, result="lost")
 
     def _matches(self, guess: str) -> bool:
-        return any(typo_match(g, a, TYPO_MIN_LETTERS) for g in _forms(guess) for a in self._accepted)
+        guesses = _forms(guess)
+        for form in list(guesses):
+            words = form.split()
+            rest = [w for w in words if w not in self._asked]  # "pancreatic cancer" when the question says cancer
+            if rest and len(rest) < len(words):
+                guesses.add(" ".join(rest))
+            for n in (1, 2):  # "new england patriots" for "Patriots": the answer, with up to 2 words before it
+                dropped, kept = words[:n], words[n:]
+                # never drop a number ("halo 4 recon" isn't "recon"), and never leave only one ("dota 2" isn't "2")
+                if kept and not any(ch.isdigit() for w in dropped for ch in w) and any(w.isalpha() for w in kept):
+                    guesses.add(" ".join(kept))
+        return any(typo_match(g, a, TYPO_MIN_LETTERS) for g in guesses for a in self._accepted)
 
     def _guess_typed(self, args: str, msg: ChatMessage) -> Outcome:
         if self._matches(args):
@@ -240,7 +292,12 @@ class Trivia(Game):
             text = number.group(1)
         chars = [ch for ch in text if ch.isalnum()]
         short = len(chars) <= 2 or text.replace(",", "").isdigit()  # "starts with 8" would give these away
-        if self.easy or self.hints_used >= (1 if short else len(self.POINTS[self.level]) - 1):
+        if self.easy:
+            if self._told_no_hints:
+                return None
+            self._told_no_hints = True
+            return Outcome(messages=["Multiple-choice questions have no hints."])
+        if self.hints_used >= (1 if short else len(self.POINTS[self.level]) - 1):
             return None
         self.hints_used += 1
         kind = "letter" if all(ch.isalpha() for ch in chars) else "character"

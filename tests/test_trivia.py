@@ -52,7 +52,9 @@ def test_easy_nonsense_gets_one_reminder_then_silence(assets):
     game = make(assets, level="easy")
     assert g(game, "banana").messages == ["Answer with {p}g and a letter, A to D."]
     assert g(game, "banana") is None
-    assert not game.on_command("hint", "", make_msg("?hint"), None)  # no hints on easy
+    hint = lambda: game.on_command("hint", "", make_msg("?hint"), None)  # noqa: E731
+    assert hint().messages == ["Multiple-choice questions have no hints."]  # said once
+    assert hint() is None
 
 
 def test_typed_start_and_right_answer(assets):
@@ -123,11 +125,12 @@ def test_unknown_category_raises(assets):
 
 def one_question(tmp_path, answer: str, difficulty: str = "medium") -> Trivia:
     import json
+    import uuid
 
     from bot.assets import Assets
 
-    root = tmp_path / "content"
-    root.mkdir(parents=True, exist_ok=True)
+    root = tmp_path / uuid.uuid4().hex / "content"  # content is cached per path: a fresh one each call
+    root.mkdir(parents=True)
     q = {"id": "x", "category": "general", "difficulty": difficulty, "question": "Q?", "answer": answer}
     (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
     return Trivia("general", random.Random(1), Assets(root), level=difficulty)
@@ -269,3 +272,52 @@ def test_surname_with_a_particle(tmp_path):
 def test_hints_describe_what_is_typed(tmp_path, answer, hint):
     game = one_question(tmp_path, answer)
     assert game.on_command("hint", "", make_msg("?hint"), None).messages == [hint]
+
+
+def test_unusual_digits_never_crash(tmp_path):
+    game = one_question(tmp_path, "Fifty-Seven")
+    assert g(game, "fifty " + chr(0x10A40)).messages == ["❌ Not it, 2 guesses left."]  # a Kharosthi digit
+
+
+def test_who_shortcut_needs_a_plain_surname(tmp_path):
+    import json
+
+    from bot.assets import Assets
+
+    root = tmp_path / "content"
+    root.mkdir()
+    q = {"id": "x", "category": "games", "difficulty": "medium", "question": "Who made King's Quest?",
+         "answer": "Sierra On-Line"}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    assert g(Trivia("games", random.Random(1), Assets(root), level="medium"), "line").result != "won"
+
+
+def asked(tmp_path, question: str, answer: str) -> Trivia:
+    import json
+    import uuid
+
+    from bot.assets import Assets
+
+    root = tmp_path / uuid.uuid4().hex / "content"
+    root.mkdir(parents=True)
+    q = {"id": "x", "category": "general", "difficulty": "medium", "question": question, "answer": answer}
+    (root / "trivia.json").write_text(json.dumps({"questions": [q]}), encoding="utf-8")
+    return Trivia("general", random.Random(1), Assets(root), level="medium")
+
+
+@pytest.mark.parametrize("question, answer, guess, right", [
+    ("Steve Jobs died from which form of cancer?", "Pancreatic", "pancreatic cancer", True),  # question words
+    ("What vault in Fallout 3 is home to clones?", "Vault 108", "108", True),
+    ("Who won Super Bowl LI?", "Patriots", "new england patriots", True),  # words before the answer
+    ("Which football player is on the FIFA 19 cover?", "Lionel Messi", "messi", True),  # a person question
+    ("What is the brain of the computer?", "Central Processing Unit", "cpu", True),  # initials
+    ("Who founded the Klingon Empire?", "Kahless the Unforgettable", "kahless", True),
+    ("How many times was Einstein married?", "Twice", "2", True),
+    ("What gas do the sun's layers have most?", "Hydrogen & Helium", "helium and hydrogen", True),
+    ("Which instrument has valves?", "French Horn", "french horns", True),  # plural
+    ("Which Halo game came after Halo 3?", "Halo 3: ODST", "halo 4 odst", False),  # numbers are never dropped
+    ("How many times was Einstein married?", "Twice", "dota 2", False),  # a bare number isn't left over
+    ("Who played Ron Swanson?", "Nick Offerman", "no", False),  # no two-letter initials
+])
+def test_more_natural_forms(tmp_path, question, answer, guess, right):
+    assert asked(tmp_path, question, answer)._matches(guess) is right

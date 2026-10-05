@@ -574,3 +574,18 @@ async def test_a_non_string_item_id_is_not_remembered(tmp_path, clock, assets):
     h = Harness(tmp_path, clock, assets, extra_games={"badid": BadId})
     await h.command("?badid science")
     assert "id-alice" in h.manager.sessions and h.manager._recent == {}
+
+
+class BrokenContent(Quiz):
+    name = "brokencontent"
+    aliases = ()
+
+    @classmethod
+    def category_names(cls, assets):
+        raise FileNotFoundError("content/missing.json")
+
+
+async def test_a_broken_content_file_gets_a_reply(tmp_path, clock, assets):
+    h = Harness(tmp_path, clock, assets, extra_games={"brokencontent": BrokenContent})
+    await h.command("?brokencontent")
+    assert h.replies == ["Couldn't start that game."]

@@ -651,18 +651,6 @@
 ]
 },
 {
-"id": "cd05af5050",
-"category": "general",
-"difficulty": "easy",
-"question": "What does a funambulist walk on?",
-"answer": "A Tight Rope",
-"wrong": [
-"Broken Glass",
-"Balls",
-"The Moon"
-]
-},
-{
 "id": "9aaab18981",
 "category": "general",
 "difficulty": "easy",
@@ -771,18 +759,6 @@
 ]
 },
 {
-"id": "b9dc508a27",
-"category": "general",
-"difficulty": "easy",
-"question": "What type of animal was Harambe, who was shot after a child fell into it's enclosure at the Cincinnati Zoo?",
-"answer": "Gorilla",
-"wrong": [
-"Tiger",
-"Panda",
-"Crocodile"
-]
-},
-{
 "id": "b59317b03f",
 "category": "general",
 "difficulty": "easy",
@@ -804,18 +780,6 @@
 "Christianity",
 "Judaism",
 "Rastafarianism"
-]
-},
-{
-"id": "75dde8bc87",
-"category": "general",
-"difficulty": "easy",
-"question": "How tall is the Burj Khalifa?",
-"answer": "2,722 ft",
-"wrong": [
-"2,717 ft",
-"2,546 ft",
-"3,024 ft"
 ]
 },
 {
@@ -996,18 +960,6 @@
 "Belgium",
 "Germany",
 "France"
-]
-},
-{
-"id": "3b391d6b14",
-"category": "general",
-"difficulty": "easy",
-"question": "What airline was the owner of the plane that crashed off the coast of Nova Scotia in 1998?",
-"answer": "Swiss Air",
-"wrong": [
-"Air France",
-"British Airways",
-"TWA"
 ]
 },
 {
@@ -1311,18 +1263,6 @@
 ]
 },
 {
-"id": "5f73d1ec4d",
-"category": "general",
-"difficulty": "easy",
-"question": "Five dollars is worth how many nickels?",
-"answer": "100",
-"wrong": [
-"50",
-"25",
-"69"
-]
-},
-{
 "id": "47608bcd3b",
 "category": "general",
 "difficulty": "easy",
@@ -1524,18 +1464,6 @@
 "Eightslash",
 "And Sign",
 "Obelus"
-]
-},
-{
-"id": "89263f34b5",
-"category": "general",
-"difficulty": "easy",
-"question": "How many fingers does a single human hand have?",
-"answer": "Four",
-"wrong": [
-"Five",
-"Ten",
-"Eight"
 ]
 },
 {
@@ -2063,13 +1991,6 @@
 "answer": "1980s"
 },
 {
-"id": "95cdbc54ea",
-"category": "general",
-"difficulty": "medium",
-"question": "What is the average life span of a garden ant?",
-"answer": "15 years"
-},
-{
 "id": "ff2c9e0f95",
 "category": "general",
 "difficulty": "medium",
@@ -2098,13 +2019,6 @@
 "answer": "The Netherlands"
 },
 {
-"id": "ab0e72f545",
-"category": "general",
-"difficulty": "medium",
-"question": "Which mountain has the highest peak in North America?",
-"answer": "Denali, USA"
-},
-{
 "id": "f0a937a278",
 "category": "general",
 "difficulty": "medium",
@@ -2124,13 +2038,6 @@
 "difficulty": "medium",
 "question": "The phrase \"accident waiting to happen\" is an example of what type of figure of speech?",
 "answer": "Idiom"
-},
-{
-"id": "7b10c8f2f4",
-"category": "general",
-"difficulty": "medium",
-"question": "Which country has the most Trappist breweries?",
-"answer": "Belgium"
 },
 {
 "id": "f9b62a9434",
@@ -2196,13 +2103,6 @@
 "answer": "Tennis"
 },
 {
-"id": "57cdce9ef6",
-"category": "general",
-"difficulty": "medium",
-"question": "What was the destination of the missing flight MH370?",
-"answer": "Beijing"
-},
-{
 "id": "f49b24a49f",
 "category": "general",
 "difficulty": "medium",
@@ -2250,13 +2150,6 @@
 "difficulty": "medium",
 "question": "\"Gum arabic\" is a natural gum consisting of the hardened sap of which tree species?",
 "answer": "Acacia"
-},
-{
-"id": "b630474c0b",
-"category": "general",
-"difficulty": "medium",
-"question": "Frank Lloyd Wright was the architect behind what famous building?",
-"answer": "The Guggenheim"
 },
 {
 "id": "188c7ef1c5",
@@ -2399,13 +2292,6 @@
 "answer": "Tardar Sauce"
 },
 {
-"id": "947d4001a4",
-"category": "general",
-"difficulty": "medium",
-"question": "In what year was McDonald's founded?",
-"answer": "1955"
-},
-{
 "id": "3d5b199e06",
 "category": "general",
 "difficulty": "medium",
@@ -2446,13 +2332,6 @@
 "difficulty": "medium",
 "question": "Linus Pauling, one of the only winners of multiple Nobel Prizes, earned his Nobel Prizes in Chemistry and what?",
 "answer": "Peace"
-},
-{
-"id": "48e8ef921d",
-"category": "general",
-"difficulty": "medium",
-"question": "According to the BBPA, what is the most common pub name in the UK?",
-"answer": "Red Lion"
 },
 {
 "id": "99c55ba50e",
@@ -2595,13 +2474,6 @@
 "answer": "Wasabi"
 },
 {
-"id": "36c06af8e7",
-"category": "general",
-"difficulty": "medium",
-"question": "What is a \"dakimakura\"?",
-"answer": "A body pillow"
-},
-{
 "id": "f0a94961af",
 "category": "general",
 "difficulty": "medium",
@@ -2621,13 +2493,6 @@
 "difficulty": "medium",
 "question": "What was the original name of the search engine \"Google\"?",
 "answer": "BackRub"
-},
-{
-"id": "5b7e24e95e",
-"category": "general",
-"difficulty": "medium",
-"question": "What fast food chain has the most locations globally?",
-"answer": "Subway"
 },
 {
 "id": "7d421d4110",
@@ -2658,13 +2523,6 @@
 "answer": "Red"
 },
 {
-"id": "57d3a3b40e",
-"category": "general",
-"difficulty": "medium",
-"question": "Which country drives on the left side of the road?",
-"answer": "Japan"
-},
-{
 "id": "2c42ebb926",
 "category": "general",
 "difficulty": "medium",
@@ -2672,32 +2530,11 @@
 "answer": "Ampersand"
 },
 {
-"id": "4aa43368fd",
-"category": "general",
-"difficulty": "medium",
-"question": "What English word means to \"think deeply\"?",
-"answer": "Contemplate"
-},
-{
-"id": "ea68f2ae68",
-"category": "general",
-"difficulty": "medium",
-"question": "Who is a co-founder of music streaming service Spotify?",
-"answer": "Daniel Ek"
-},
-{
 "id": "a53495e77b",
 "category": "general",
 "difficulty": "hard",
 "question": "Before the 19th Century, the \"Living Room\" was originally called the...",
 "answer": "Parlor"
-},
-{
-"id": "dba06a6755",
-"category": "general",
-"difficulty": "hard",
-"question": "Which film star has his statue in Leicester Square?",
-"answer": "Charlie Chaplin"
 },
 {
 "id": "5937d2f189",
@@ -2754,13 +2591,6 @@
 "difficulty": "hard",
 "question": "The words \"bungalow\" and \"shampoo\" originate from the languages of which country?",
 "answer": "India"
-},
-{
-"id": "266b7ab855",
-"category": "general",
-"difficulty": "hard",
-"question": "In the MMO RPG \"Realm of the Mad God\", what dungeon is widely considered to be the most difficult?",
-"answer": "The Shatter's"
 },
 {
 "id": "f948f2bf48",
@@ -2910,13 +2740,6 @@
 "answer": "Costa Rica"
 },
 {
-"id": "b80d786341",
-"category": "general",
-"difficulty": "hard",
-"question": "Virtual reality company Oculus VR lost which of it's co-founders in a freak car accident in 2013?",
-"answer": "Andrew Scott Reisse"
-},
-{
 "id": "c0957adef8",
 "category": "general",
 "difficulty": "hard",
@@ -2982,18 +2805,6 @@
 "Kirby Super Star",
 "Kirby's Dream Land 2",
 "Kirby's Dream Land"
-]
-},
-{
-"id": "90da5b293c",
-"category": "games",
-"difficulty": "easy",
-"question": "What does IWHBYD stand for on the skull in the Halo series?",
-"answer": "I Would Have Been Your Daddy",
-"wrong": [
-"I Wanna Have Babies You Down",
-"I Would Hate Being Your Driver",
-"I Would Have Bought Your Dog"
 ]
 },
 {
@@ -3198,18 +3009,6 @@
 "January 13th, 2019",
 "September 6th, 2018",
 "October 1st, 2019"
-]
-},
-{
-"id": "18ae936edf",
-"category": "games",
-"difficulty": "easy",
-"question": "Which of the following is NOT a summon in the game \"South Park: The Stick of Truth\"?",
-"answer": "Towelie",
-"wrong": [
-"Jesus",
-"Mr. Hankey",
-"Mr. Slave"
 ]
 },
 {
@@ -4641,18 +4440,6 @@
 ]
 },
 {
-"id": "4a552ee754",
-"category": "games",
-"difficulty": "easy",
-"question": "In the video game \"Postal 2\", what is the name of Postal Dude's dog?",
-"answer": "Champ",
-"wrong": [
-"Snoopy",
-"Krotchy",
-"Duke"
-]
-},
-{
 "id": "c728ab4a33",
 "category": "games",
 "difficulty": "easy",
@@ -4710,18 +4497,6 @@
 "Rex",
 "Zeke",
 "Nia"
-]
-},
-{
-"id": "5658e8c7ed",
-"category": "games",
-"difficulty": "easy",
-"question": "Which of the following characters from the game \"Overwatch\" was revealed to be homosexual in December of 2016?",
-"answer": "Tracer",
-"wrong": [
-"Widowmaker",
-"Sombra",
-"Symmetra"
 ]
 },
 {
@@ -5205,18 +4980,6 @@
 ]
 },
 {
-"id": "77d6f53911",
-"category": "games",
-"difficulty": "easy",
-"question": "Which student in Yandere Simulator is known for asking irritating and stupid questions?",
-"answer": "Midori Gurin",
-"wrong": [
-"Kokona Hruka",
-"Oka Ruto",
-"Pipi Osu"
-]
-},
-{
 "id": "83f05375c4",
 "category": "games",
 "difficulty": "easy",
@@ -5250,18 +5013,6 @@
 "Eeloo",
 "Kerbol",
 "Minmus"
-]
-},
-{
-"id": "8418188f53",
-"category": "games",
-"difficulty": "easy",
-"question": "Which psychopath(s) in Dead Rising 1 gave you the small chainsaw?",
-"answer": "Adam the Clown",
-"wrong": [
-"Cliff Hudson",
-"The convicts",
-"Larry the butcher"
 ]
 },
 {
@@ -5493,18 +5244,6 @@
 ]
 },
 {
-"id": "a2b28d227f",
-"category": "games",
-"difficulty": "easy",
-"question": "Which of the following is not a character in the video game Doki Doki Literature Club?",
-"answer": "Nico",
-"wrong": [
-"Monika",
-"Natsuki",
-"Sayori"
-]
-},
-{
 "id": "1df96d5c76",
 "category": "games",
 "difficulty": "easy",
@@ -5682,18 +5421,6 @@
 "Apple",
 "Google",
 "Yahoo"
-]
-},
-{
-"id": "a5a816db95",
-"category": "games",
-"difficulty": "easy",
-"question": "In the video game Overwatch, which playable character is infamous for saying \"It's high noon.\"?",
-"answer": "McCree",
-"wrong": [
-"Hanzo",
-"Pharah",
-"Soldier: 76"
 ]
 },
 {
@@ -6225,18 +5952,6 @@
 ]
 },
 {
-"id": "698b3fcb16",
-"category": "games",
-"difficulty": "easy",
-"question": "Which of the following Zelda games did not feature Ganon as a final boss?",
-"answer": "Majora's Mask",
-"wrong": [
-"Ocarina of Time",
-"Skyward Sword",
-"Breath of the Wild"
-]
-},
-{
 "id": "87291733cc",
 "category": "games",
 "difficulty": "easy",
@@ -6525,18 +6240,6 @@
 ]
 },
 {
-"id": "7b60cf9d2c",
-"category": "games",
-"difficulty": "easy",
-"question": "In the survival horror game, \"Cry of Fear,\" what was the name of Simon's close friend/potential love interest?",
-"answer": "Sophie",
-"wrong": [
-"Olivia",
-"Jessica",
-"Alice"
-]
-},
-{
 "id": "df0ed86933",
 "category": "games",
 "difficulty": "easy",
@@ -6778,13 +6481,6 @@
 "answer": "AK-47"
 },
 {
-"id": "8473a3da17",
-"category": "games",
-"difficulty": "medium",
-"question": "\"Rollercoaster Tycoon\" was programmed mostly entirely in...",
-"answer": "x86 Assembly"
-},
-{
 "id": "38027c45fa",
 "category": "games",
 "difficulty": "medium",
@@ -6804,13 +6500,6 @@
 "difficulty": "medium",
 "question": "In which U.S. state is Far Cry 5's fictional setting 'Hope County' located?",
 "answer": "Montana"
-},
-{
-"id": "afe6a659c6",
-"category": "games",
-"difficulty": "medium",
-"question": "Who was the first female protagonist in a video game?",
-"answer": "Samus Aran"
 },
 {
 "id": "ee0af27a49",
@@ -6897,13 +6586,6 @@
 "answer": "Illumise"
 },
 {
-"id": "377aea9bec",
-"category": "games",
-"difficulty": "medium",
-"question": "What is the mod \"Cry of Fear\" based off of?",
-"answer": "Half-Life"
-},
-{
 "id": "126a78ef39",
 "category": "games",
 "difficulty": "medium",
@@ -6972,13 +6654,6 @@
 "difficulty": "medium",
 "question": "Final Fantasy VI was originally released outside Japan under what name?",
 "answer": "Final Fantasy III"
-},
-{
-"id": "28b9949d5a",
-"category": "games",
-"difficulty": "medium",
-"question": "In Team Fortress 2, which class wields a shotgun?",
-"answer": "Everyone Listed"
 },
 {
 "id": "74d5e7fe45",
@@ -7268,20 +6943,6 @@
 "answer": "Astron Belt"
 },
 {
-"id": "1c2b34a9d4",
-"category": "games",
-"difficulty": "medium",
-"question": "In \"Overwatch,\" what is the hero McCree's full name?",
-"answer": "Jesse McCree"
-},
-{
-"id": "e1865026f0",
-"category": "games",
-"difficulty": "medium",
-"question": "According to Overwatch's lore, who was once a member of the Deadlock Gang?",
-"answer": "McCree"
-},
-{
 "id": "273c670892",
 "category": "games",
 "difficulty": "medium",
@@ -7294,13 +6955,6 @@
 "difficulty": "medium",
 "question": "What is the name of Cream the Rabbit's mom in the \"Sonic the Hedgehog\" series?",
 "answer": "Vanilla"
-},
-{
-"id": "7956f9d43a",
-"category": "games",
-"difficulty": "medium",
-"question": "In Call of Duty: Modern Warfare 2, how many consecutive kills does it require to earn the \"Tactical Nuke\" killstreak?",
-"answer": "25"
 },
 {
 "id": "cce6e5c63b",
@@ -7513,13 +7167,6 @@
 "answer": "Yo-kai Watch"
 },
 {
-"id": "e8fbc67d8b",
-"category": "games",
-"difficulty": "medium",
-"question": "In the Jackbox party game Monster Seeking Monster, which monster can steal two hearts from other monsters under certain conditions?",
-"answer": "Serial Killer"
-},
-{
 "id": "2237fc1bb8",
 "category": "games",
 "difficulty": "medium",
@@ -7539,13 +7186,6 @@
 "difficulty": "medium",
 "question": "When was Nintendo's Virtual Boy released?",
 "answer": "1995"
-},
-{
-"id": "117834b7bc",
-"category": "games",
-"difficulty": "medium",
-"question": "Which stage was planned to be a part of \"Sonic the Hedgehog 2\", but was scrapped during development?",
-"answer": "Genocide City Zone"
 },
 {
 "id": "8ee1b6073c",
@@ -7616,13 +7256,6 @@
 "difficulty": "medium",
 "question": "In \"Halo 2\", what is the name of the monitor of Installation 05?",
 "answer": "2401 Penitent Tangent"
-},
-{
-"id": "850e33e09a",
-"category": "games",
-"difficulty": "medium",
-"question": "In \"Overwatch\", how much health does Roadhog's \"Take a Breather\" ability recover?",
-"answer": "300"
 },
 {
 "id": "8c6c31b7b4",
@@ -8395,13 +8028,6 @@
 "answer": "120"
 },
 {
-"id": "8fea975549",
-"category": "games",
-"difficulty": "medium",
-"question": "What block in Minecraft has the highest blast resistance?",
-"answer": "Barrier"
-},
-{
 "id": "261cf4912a",
 "category": "games",
 "difficulty": "medium",
@@ -8451,13 +8077,6 @@
 "answer": "James McCaffrey"
 },
 {
-"id": "56bd2fab46",
-"category": "games",
-"difficulty": "medium",
-"question": "In the \"Ace Attorney\" series, what is the relationship between Apollo Justice and Trucy Wright?",
-"answer": "They're half-siblings"
-},
-{
 "id": "773ead268a",
 "category": "games",
 "difficulty": "medium",
@@ -8477,13 +8096,6 @@
 "difficulty": "medium",
 "question": "What is the name of the machine that fails and essentially dooms mankind in the beginning of the first Half-Life game?",
 "answer": "Anti-mass spectrometer"
-},
-{
-"id": "cbc8dd1211",
-"category": "games",
-"difficulty": "medium",
-"question": "In Dead by Daylight, which killer perk applies the mangled effect?",
-"answer": "Sloppy Butcher"
 },
 {
 "id": "0dd291d4d2",
@@ -8689,13 +8301,6 @@
 "answer": "Half-Life: Opposing Force"
 },
 {
-"id": "8910491353",
-"category": "games",
-"difficulty": "medium",
-"question": "In Call of Duty: United Offensive, what two soldiers share a name of a video game character?",
-"answer": "Gordon & Freeman"
-},
-{
 "id": "00b52df6a2",
 "category": "games",
 "difficulty": "medium",
@@ -8743,13 +8348,6 @@
 "difficulty": "medium",
 "question": "The rights to the \"Rayman\" series are owned by which company?",
 "answer": "Ubisoft"
-},
-{
-"id": "4169066b55",
-"category": "games",
-"difficulty": "medium",
-"question": "In Undertale, how much do Spider Donuts cost in Hotland?",
-"answer": "9999G"
 },
 {
 "id": "3347b77768",
@@ -8806,13 +8404,6 @@
 "difficulty": "medium",
 "question": "The walls of the Goldenrod City Gym in \"Pokémon Gold and Silver\" are arranged in the shape of which Pokémon?",
 "answer": "Clefairy"
-},
-{
-"id": "78d25ae8e4",
-"category": "games",
-"difficulty": "medium",
-"question": "What name did \"Mario\", from \"Super Mario Brothers\", originally have?",
-"answer": "Ossan"
 },
 {
 "id": "6b02a1a1a8",
@@ -8885,13 +8476,6 @@
 "answer": "22"
 },
 {
-"id": "cda3197f67",
-"category": "games",
-"difficulty": "medium",
-"question": "How many normal endings are there in Cry Of Fear's campaign mode?",
-"answer": "4"
-},
-{
 "id": "1b3f05b59f",
 "category": "games",
 "difficulty": "medium",
@@ -8960,13 +8544,6 @@
 "difficulty": "medium",
 "question": "Which city hosted the CS:GO Dreamhack Open 2015?",
 "answer": "Cluj-Napoca"
-},
-{
-"id": "ab4e2f29d5",
-"category": "games",
-"difficulty": "medium",
-"question": "What was the FIRST Valve game to have VR?",
-"answer": "The Lab"
 },
 {
 "id": "76832b02c9",
@@ -9438,13 +9015,6 @@
 "answer": "Alonsus Faol"
 },
 {
-"id": "83478bc71a",
-"category": "games",
-"difficulty": "hard",
-"question": "In what year was the game \"Eliminator\" released?",
-"answer": "1998"
-},
-{
 "id": "e279af5fa6",
 "category": "games",
 "difficulty": "hard",
@@ -9662,13 +9232,6 @@
 "answer": "Electroman Adventures"
 },
 {
-"id": "aa8b57cdf5",
-"category": "games",
-"difficulty": "hard",
-"question": "Which game was exclusive to Dreamcast?",
-"answer": "Pen Pen TriIcelon"
-},
-{
 "id": "1a4976ddb7",
 "category": "games",
 "difficulty": "hard",
@@ -9704,13 +9267,6 @@
 "answer": "Generator 5"
 },
 {
-"id": "2181f83cac",
-"category": "games",
-"difficulty": "hard",
-"question": "In the alternate timeline in Mortal Kombat, which character was the one to slaughter the Shirai Ryu clan?",
-"answer": "Quan Chi"
-},
-{
 "id": "bbf7dd9566",
 "category": "games",
 "difficulty": "hard",
@@ -9730,13 +9286,6 @@
 "difficulty": "hard",
 "question": "In TF2 Lore, what are the names of the Heavy's younger sisters?",
 "answer": "Yana and Bronislava"
-},
-{
-"id": "5be9b74e3d",
-"category": "games",
-"difficulty": "hard",
-"question": "Which retro video game was released first?",
-"answer": "Space Invaders"
 },
 {
 "id": "aa89ad1c85",
@@ -9807,13 +9356,6 @@
 "difficulty": "hard",
 "question": "Where are Terror Fiends more commonly found in the Nintendo game Miitopia?",
 "answer": "New Lumos"
-},
-{
-"id": "0c6bac2620",
-"category": "games",
-"difficulty": "hard",
-"question": "What was the world's first video game?",
-"answer": "Draughts"
 },
 {
 "id": "2d06011a90",
@@ -10086,18 +9628,6 @@
 "Mosasaurus",
 "Pteranodon",
 "Tyrannosaurus Rex"
-]
-},
-{
-"id": "87cae92ada",
-"category": "movies",
-"difficulty": "easy",
-"question": "Who in Pulp Fiction says \"No, they got the metric system there, they wouldn't know what the f*** a Quarter Pounder is.\"",
-"answer": "Vincent Vega",
-"wrong": [
-"Jules Winnfield",
-"Jimmie Dimmick",
-"Butch Coolidge"
 ]
 },
 {
@@ -10677,18 +10207,6 @@
 ]
 },
 {
-"id": "4c8184b541",
-"category": "movies",
-"difficulty": "easy",
-"question": "Which animated movie was first to feature a celebrity as a voice actor?",
-"answer": "Aladdin",
-"wrong": [
-"Toy Story",
-"James and the Giant Peach",
-"The Hunchback of Notre Dame"
-]
-},
-{
 "id": "f79515e07f",
 "category": "movies",
 "difficulty": "easy",
@@ -10938,18 +10456,6 @@
 "Dragon King",
 "Iron Monkey",
 "Master Tang"
-]
-},
-{
-"id": "3baa0215cc",
-"category": "movies",
-"difficulty": "easy",
-"question": "Which movie contains the quote, \"Say hello to my little friend!\"?",
-"answer": "Scarface",
-"wrong": [
-"Reservoir Dogs",
-"Heat",
-"Goodfellas"
 ]
 },
 {
@@ -11269,13 +10775,6 @@
 "answer": "The Vikings"
 },
 {
-"id": "18c2806ac2",
-"category": "movies",
-"difficulty": "medium",
-"question": "Who played the Cenobite called \"Pinhead\" in the original Hellraiser films?",
-"answer": "Doug Bradley"
-},
-{
 "id": "853a8d175b",
 "category": "movies",
 "difficulty": "medium",
@@ -11309,13 +10808,6 @@
 "difficulty": "medium",
 "question": "Who directed the 1973 film \"American Graffiti\"?",
 "answer": "George Lucas"
-},
-{
-"id": "fc4692f4a1",
-"category": "movies",
-"difficulty": "medium",
-"question": "Which actor auditioned for the role of Luke Skywalker?",
-"answer": "Kurt Russell"
 },
 {
 "id": "8995467ec5",
@@ -11444,13 +10936,6 @@
 "answer": "Titanic"
 },
 {
-"id": "f15f3a1dd2",
-"category": "movies",
-"difficulty": "medium",
-"question": "Which movie sequel had improved box office results compared to its original film?",
-"answer": "Toy Story 2"
-},
-{
 "id": "bae2857656",
 "category": "movies",
 "difficulty": "medium",
@@ -11470,13 +10955,6 @@
 "difficulty": "medium",
 "question": "This movie contains the quote, \"I love the smell of napalm in the morning!\"",
 "answer": "Apocalypse Now"
-},
-{
-"id": "6243576a4d",
-"category": "movies",
-"difficulty": "medium",
-"question": "Before getting the shotgun, what did the titular hobo in 'Hobo with a Shotgun' want to purchase?",
-"answer": "a lawnmower"
 },
 {
 "id": "b1995053f3",
@@ -11561,13 +11039,6 @@
 "difficulty": "medium",
 "question": "In Star Wars, what's the name of the new Government created after the defeat of the Galactic Empire?",
 "answer": "The New Republic"
-},
-{
-"id": "0254780543",
-"category": "movies",
-"difficulty": "medium",
-"question": "Who performed the opening theme song for the James Bond 007 movie \"Goldfinger\"?",
-"answer": "Shirley Basey"
 },
 {
 "id": "43c13b918a",
@@ -11668,13 +11139,6 @@
 "answer": "Wensleydale"
 },
 {
-"id": "9ab5a7037e",
-"category": "movies",
-"difficulty": "medium",
-"question": "The killer in the 1981 film 'My Bloody Valentine' wears what sort of outfit?",
-"answer": "Mining gear"
-},
-{
 "id": "b39ec10fa2",
 "category": "movies",
 "difficulty": "medium",
@@ -11729,13 +11193,6 @@
 "difficulty": "hard",
 "question": "Which was the first of Alfred Hitchcock's movies to be filmed in colour?",
 "answer": "Rope"
-},
-{
-"id": "8e1992cc3e",
-"category": "movies",
-"difficulty": "hard",
-"question": "In the 1976 film 'Taxi Driver', how many guns did Travis buy from the salesman?",
-"answer": "4"
 },
 {
 "id": "7e4444c8e3",
@@ -11836,20 +11293,6 @@
 "answer": "Sigourney Weaver"
 },
 {
-"id": "5a3fe091bb",
-"category": "movies",
-"difficulty": "hard",
-"question": "What did the first moving picture depict?",
-"answer": "A galloping horse"
-},
-{
-"id": "47fdbadd42",
-"category": "movies",
-"difficulty": "hard",
-"question": "In the Friday The 13th series, what year did Jason drown in?",
-"answer": "1957"
-},
-{
 "id": "06a2acd316",
 "category": "movies",
 "difficulty": "hard",
@@ -11925,13 +11368,6 @@
 "difficulty": "hard",
 "question": "Which 1994 film did Roger Ebert famously despise, saying \"I hated hated hated hated hated this movie\".",
 "answer": "North"
-},
-{
-"id": "4728ca8a42",
-"category": "movies",
-"difficulty": "hard",
-"question": "What was the name of the actor who played Leatherface in the 1974 horror film, The Texas Chainsaw Massacre?",
-"answer": "Gunnar Hansen"
 },
 {
 "id": "cade115cc3",
@@ -12039,18 +11475,6 @@
 "Doin' It Right",
 "Instant Crush",
 "The Game of Love"
-]
-},
-{
-"id": "8a1e491575",
-"category": "music",
-"difficulty": "easy",
-"question": "Finish these lyrics from the 2016 song \"Panda\" by Desiigner: \"I got broads in _______\".",
-"answer": "Atlanta",
-"wrong": [
-"Savannah",
-"Augusta",
-"Marietta"
 ]
 },
 {
@@ -12171,18 +11595,6 @@
 "Justin Timberlake",
 "Harry Styles",
 "Gary Barlow"
-]
-},
-{
-"id": "38402e4d13",
-"category": "music",
-"difficulty": "easy",
-"question": "Which song is NOT by singer Tom Jones?",
-"answer": "Never Gonna Give You Up",
-"wrong": [
-"It's Not Unusual",
-"What's New Pussycat",
-"Delilah"
 ]
 },
 {
@@ -12402,18 +11814,6 @@
 ]
 },
 {
-"id": "c4652602c5",
-"category": "music",
-"difficulty": "easy",
-"question": "Which of the following songs did Elton John perform following Princess Diane's passing?",
-"answer": "Candles in the Wind",
-"wrong": [
-"I Guess That's Why They Call It The Blues",
-"Your Song",
-"Island Girl"
-]
-},
-{
 "id": "f8c0dd4bfc",
 "category": "music",
 "difficulty": "easy",
@@ -12507,18 +11907,6 @@
 "Chris Isaak",
 "Chris Wallace",
 "Chris Connelly"
-]
-},
-{
-"id": "e624668a3d",
-"category": "music",
-"difficulty": "easy",
-"question": "According to the American rapper Nelly, what should you do when its hot in here?",
-"answer": "Take off all your clothes",
-"wrong": [
-"Take a cool shower",
-"Drink some water",
-"Go skinny dipping"
 ]
 },
 {
@@ -12858,18 +12246,6 @@
 ]
 },
 {
-"id": "2422cc1091",
-"category": "music",
-"difficulty": "easy",
-"question": "Which of the following is an album by punk rock band Anti-Flag?",
-"answer": "For Blood And Empire",
-"wrong": [
-"Infinity On High",
-"21st Century Breakdown",
-"No Pads, No Helmets...Just Balls"
-]
-},
-{
 "id": "ad6358a888",
 "category": "music",
 "difficulty": "easy",
@@ -12978,18 +12354,6 @@
 ]
 },
 {
-"id": "efac808e7c",
-"category": "music",
-"difficulty": "easy",
-"question": "Which of these artists has Lil A collaborated with?",
-"answer": "Lil Fortnite",
-"wrong": [
-"Lil Pump",
-"Boonk Gang",
-"6ix9ine"
-]
-},
-{
 "id": "90e68fd5e9",
 "category": "music",
 "difficulty": "easy",
@@ -12999,30 +12363,6 @@
 "Kenyan",
 "Kazakhstan",
 "Kuwaiti"
-]
-},
-{
-"id": "73250405bd",
-"category": "music",
-"difficulty": "easy",
-"question": "Who performed \"I Took A Pill In Ibiza\"?",
-"answer": "Mike Posner",
-"wrong": [
-"Avicii",
-"Robbie Williams",
-"Harry Styles"
-]
-},
-{
-"id": "4753e66b33",
-"category": "music",
-"difficulty": "easy",
-"question": "Which rap group released the album \"Straight Outta Compton\"?",
-"answer": "N.W.A",
-"wrong": [
-"Wu-Tang Clan",
-"Run-D.M.C.",
-"Beastie Boys"
 ]
 },
 {
@@ -13059,18 +12399,6 @@
 "1998",
 "2000",
 "2001"
-]
-},
-{
-"id": "0fc6d7fffd",
-"category": "music",
-"difficulty": "easy",
-"question": "Whose albums included \"Back in Black\" and \"Ballbreaker\"?",
-"answer": "AC/DC",
-"wrong": [
-"Iron Maiden",
-"Black Sabbath",
-"Metallica"
 ]
 },
 {
@@ -13412,25 +12740,11 @@
 "answer": "1997"
 },
 {
-"id": "58f88e8388",
-"category": "music",
-"difficulty": "medium",
-"question": "What is the relationship between the band members of American rock band King of Leon?",
-"answer": "Brothers & cousins"
-},
-{
 "id": "d5c103895d",
 "category": "music",
 "difficulty": "medium",
 "question": "How many semitones are in an octave?",
 "answer": "12"
-},
-{
-"id": "c83119d927",
-"category": "music",
-"difficulty": "medium",
-"question": "What is the name of the second studio album released by American rapper Post Malone in 2018?",
-"answer": "Beerbongs & Bentleys"
 },
 {
 "id": "c37a90536f",
@@ -13445,13 +12759,6 @@
 "difficulty": "medium",
 "question": "Who is the bassist of the British rock band Queen?",
 "answer": "John Deacon"
-},
-{
-"id": "42ad40f1e2",
-"category": "music",
-"difficulty": "medium",
-"question": "According to their 1974 hit, what were Brownsville Station doing \"In The Boys' Room\"?",
-"answer": "Smokin'"
 },
 {
 "id": "872543f6f9",
@@ -13811,13 +13118,6 @@
 "answer": "Careless Whisper"
 },
 {
-"id": "27dbcb43fc",
-"category": "music",
-"difficulty": "medium",
-"question": "Saul Hudson (Slash) of the band Guns N' Roses is known for playing what type of guitar?",
-"answer": "Les Paul Standard"
-},
-{
 "id": "0b67ccf5c9",
 "category": "music",
 "difficulty": "medium",
@@ -14063,13 +13363,6 @@
 "answer": "Paul McCartney"
 },
 {
-"id": "9d1664bf8c",
-"category": "music",
-"difficulty": "medium",
-"question": "In which city did American rap producer DJ Khaled originate from?",
-"answer": "Miami"
-},
-{
 "id": "5b94545076",
 "category": "music",
 "difficulty": "medium",
@@ -14145,13 +13438,6 @@
 "difficulty": "medium",
 "question": "In music theory, how many notes are in a seventh chord?",
 "answer": "4"
-},
-{
-"id": "bfe6f9c09a",
-"category": "music",
-"difficulty": "medium",
-"question": "Which novelty band was best known for their UK chart hits \"Combine Harvester\" and \"I Am a Cider Drinker\" in 1976?",
-"answer": "The Wurzels"
 },
 {
 "id": "5f6bc3d069",
@@ -14392,13 +13678,6 @@
 "answer": "JYP"
 },
 {
-"id": "92d20bd2ba",
-"category": "music",
-"difficulty": "medium",
-"question": "What song on ScHoolboy Q's album Black Face LP featured Kanye West?",
-"answer": "THat Part"
-},
-{
 "id": "2fe10db947",
 "category": "music",
 "difficulty": "medium",
@@ -14439,13 +13718,6 @@
 "difficulty": "medium",
 "question": "Which alternative rock band released the critically-acclaimed album \"OK Computer\"?",
 "answer": "Radiohead"
-},
-{
-"id": "34e3ac73be",
-"category": "music",
-"difficulty": "medium",
-"question": "\"The Day the Music Died\" was a tragic plane crash that killed three musicians in which decade?",
-"answer": "50's"
 },
 {
 "id": "a13f920698",
@@ -14511,13 +13783,6 @@
 "answer": "Rebecca Sugar"
 },
 {
-"id": "88f137cd88",
-"category": "music",
-"difficulty": "hard",
-"question": "Who is a pioneer of \"Minimal Music\" in 1960s?",
-"answer": "Steve Reich"
-},
-{
 "id": "ea6fa726e9",
 "category": "music",
 "difficulty": "hard",
@@ -14551,13 +13816,6 @@
 "difficulty": "hard",
 "question": "Pete Townshend collaborated with which famous guitarist for an event at Brixton Academy in 1985?",
 "answer": "David Gilmour"
-},
-{
-"id": "53defe178e",
-"category": "music",
-"difficulty": "hard",
-"question": "Who was the original drummer for The Beatles?",
-"answer": "Tommy Moore"
 },
 {
 "id": "9c83b8b079",
@@ -14602,13 +13860,6 @@
 "answer": "In Rainbows"
 },
 {
-"id": "24c2bf0543",
-"category": "music",
-"difficulty": "hard",
-"question": "Which artists' version of the song \"The Tide is High\" came first?",
-"answer": "The Paragons"
-},
-{
 "id": "f0063f93ed",
 "category": "music",
 "difficulty": "hard",
@@ -14628,13 +13879,6 @@
 "difficulty": "hard",
 "question": "Which British band won the first edition of the Brit Awards in 1977?",
 "answer": "The Beatles"
-},
-{
-"id": "474216f98c",
-"category": "music",
-"difficulty": "hard",
-"question": "What event inspired The Cranberries song \"Zombie\" ?",
-"answer": "The Warrington Bombings"
 },
 {
 "id": "5e1fc6f1cf",
@@ -14899,18 +14143,6 @@
 "Toast",
 "Captain Crunch",
 "Bacon and Eggs"
-]
-},
-{
-"id": "b24b2ec6aa",
-"category": "tv",
-"difficulty": "easy",
-"question": "In the television show Breaking Bad, what is the street name of Walter and Jesse's notorious product?",
-"answer": "Blue Sky",
-"wrong": [
-"Baby Blue",
-"Rock Candy",
-"Pure Glass"
 ]
 },
 {
@@ -15238,18 +14470,6 @@
 ]
 },
 {
-"id": "44137d054a",
-"category": "tv",
-"difficulty": "easy",
-"question": "In \"Breaking Bad\", Walter White is a high school teacher diagnosed with which form of cancer?",
-"answer": "Lung Cancer",
-"wrong": [
-"Prostate Cancer",
-"Brain Cancer",
-"Testicular Cancer"
-]
-},
-{
 "id": "f8ba450534",
 "category": "tv",
 "difficulty": "easy",
@@ -15562,18 +14782,6 @@
 ]
 },
 {
-"id": "c2b44eb8fb",
-"category": "tv",
-"difficulty": "easy",
-"question": "On the show \"Rick and Morty\", in episode \"Total Rickall\", who was a parasite?",
-"answer": "Pencilvester",
-"wrong": [
-"Beth Smith",
-"Summer Smith",
-"Mr. Poopy Butthole"
-]
-},
-{
 "id": "0924affaa1",
 "category": "tv",
 "difficulty": "easy",
@@ -15583,18 +14791,6 @@
 "3",
 "7",
 "12"
-]
-},
-{
-"id": "ee23034f51",
-"category": "tv",
-"difficulty": "easy",
-"question": "In \"Rick And Morty\", who shot \"Mr. Poopybutthole\" in the episode \"Total Rickall\"?",
-"answer": "Beth",
-"wrong": [
-"Rick",
-"Jerry",
-"Morty"
 ]
 },
 {
@@ -15757,13 +14953,6 @@
 "answer": "Jesse Pinkman"
 },
 {
-"id": "c66fffc21a",
-"category": "tv",
-"difficulty": "medium",
-"question": "Which British writer wrote for both Doctor Who and Sherlock?",
-"answer": "Steven Moffatt"
-},
-{
 "id": "aa9b1769a8",
 "category": "tv",
 "difficulty": "medium",
@@ -15874,13 +15063,6 @@
 "difficulty": "medium",
 "question": "Who composed the theme song for The Simpsons?",
 "answer": "Danny Elfman"
-},
-{
-"id": "999384a64c",
-"category": "tv",
-"difficulty": "medium",
-"question": "\"The A Team\" first aired in the USA and in the UK in what year?",
-"answer": "1983"
 },
 {
 "id": "ebb49ca617",
@@ -16128,13 +15310,6 @@
 "answer": "Sto-vo-kor"
 },
 {
-"id": "0503212f1e",
-"category": "tv",
-"difficulty": "hard",
-"question": "In season one of the US Kitchen Nightmares, Gordan Ramsay tried to save 10 different restaurants. How many ended up closing afterwards?",
-"answer": "9"
-},
-{
 "id": "b4dce2d10b",
 "category": "tv",
 "difficulty": "hard",
@@ -16220,18 +15395,6 @@
 "Stardust Crusaders",
 "Requiem for a Dream",
 "God Knows"
-]
-},
-{
-"id": "2bf8aaeeef",
-"category": "anime",
-"difficulty": "easy",
-"question": "What color is Ryūko Matoi's half of the Scissor Blade in the anime Kill la KIll?",
-"answer": "Red",
-"wrong": [
-"Green",
-"Blue",
-"Purple"
 ]
 },
 {
@@ -16379,18 +15542,6 @@
 ]
 },
 {
-"id": "8ee79243f7",
-"category": "anime",
-"difficulty": "easy",
-"question": "In \"Future Diary\", what is the name of Yuno Gasai's Phone Diary?",
-"answer": "Yukiteru Diary",
-"wrong": [
-"Murder Diary",
-"Escape Diary",
-"Justice Diary"
-]
-},
-{
 "id": "bd15d20134",
 "category": "anime",
 "difficulty": "easy",
@@ -16511,18 +15662,6 @@
 ]
 },
 {
-"id": "57bed4fc07",
-"category": "anime",
-"difficulty": "easy",
-"question": "What is the name of the corgi in Cowboy Bebop?",
-"answer": "Einstein",
-"wrong": [
-"Edward",
-"Rocket",
-"Joel"
-]
-},
-{
 "id": "0c31b05436",
 "category": "anime",
 "difficulty": "easy",
@@ -16580,18 +15719,6 @@
 "Karuha",
 "Mineha",
 "Mayu"
-]
-},
-{
-"id": "bd654a3270",
-"category": "anime",
-"difficulty": "easy",
-"question": "In \"A Certain Scientific Railgun\", how many \"sisters\" did Accelerator have to kill to achieve the rumored level 6?",
-"answer": "20,000",
-"wrong": [
-"128",
-"10,000",
-"5,000"
 ]
 },
 {
@@ -16807,13 +15934,6 @@
 "answer": "American Football"
 },
 {
-"id": "d47d9e3117",
-"category": "anime",
-"difficulty": "medium",
-"question": "In the anime, \"Super Sonico\", what is Super Sonico's favorite food?",
-"answer": "Macroons"
-},
-{
 "id": "5b57a8f8fd",
 "category": "anime",
 "difficulty": "medium",
@@ -16847,13 +15967,6 @@
 "difficulty": "medium",
 "question": "What is the name of the infamous pachinko machine from \"Kaiji\"?",
 "answer": "The Bog"
-},
-{
-"id": "0e3eb290c0",
-"category": "anime",
-"difficulty": "medium",
-"question": "How does the character Dragowizard, Qinus Axia's from the anime \"Buddyfight\" differ between the Japanese and English dubs?",
-"answer": "Different Gender"
 },
 {
 "id": "61b50cd44b",
@@ -17066,13 +16179,6 @@
 "answer": "Eiichiro Oda"
 },
 {
-"id": "ae648bca41",
-"category": "anime",
-"difficulty": "medium",
-"question": "Which band name isn't a Stand in \"JoJo's Bizarre Adventure\"?",
-"answer": "AC/DC"
-},
-{
 "id": "fd2669d714",
 "category": "anime",
 "difficulty": "medium",
@@ -17129,13 +16235,6 @@
 "answer": "D. D. D"
 },
 {
-"id": "dd2bd4c0c2",
-"category": "anime",
-"difficulty": "medium",
-"question": "What was studio Trigger's first original long-form animated series for television?",
-"answer": "Kill la Kill"
-},
-{
 "id": "0b5977f432",
 "category": "anime",
 "difficulty": "medium",
@@ -17190,13 +16289,6 @@
 "difficulty": "hard",
 "question": "Which song was the callsign for Stefan Verdemann's KWFM radio station in Urasawa Naoki's \"Monster\"?",
 "answer": "Over the Rainbow"
-},
-{
-"id": "1428729d73",
-"category": "anime",
-"difficulty": "hard",
-"question": "Which animation studio produced \"Log Horizon\"?",
-"answer": "Satelite"
 },
 {
 "id": "6cb6e620fb",
@@ -17394,18 +16486,6 @@
 ]
 },
 {
-"id": "b665177bd4",
-"category": "sports",
-"difficulty": "easy",
-"question": "How many points did LeBron James score in his first NBA game?",
-"answer": "25",
-"wrong": [
-"19",
-"69",
-"41"
-]
-},
-{
 "id": "a3b9cd2657",
 "category": "sports",
 "difficulty": "easy",
@@ -17559,18 +16639,6 @@
 "5",
 "3",
 "2"
-]
-},
-{
-"id": "e21b77c3b1",
-"category": "sports",
-"difficulty": "easy",
-"question": "Which team has won the most Stanley Cups in the NHL?",
-"answer": "Montreal Canadians",
-"wrong": [
-"Chicago Blackhawks",
-"Toronto Maple Leafs",
-"Detroit Red Wings"
 ]
 },
 {
@@ -17994,13 +17062,6 @@
 ]
 },
 {
-"id": "bd77947a49",
-"category": "sports",
-"difficulty": "medium",
-"question": "Which NBA player has the most games played over the course of their career?",
-"answer": "Robert Parish"
-},
-{
 "id": "7a406e6abe",
 "category": "sports",
 "difficulty": "medium",
@@ -18111,13 +17172,6 @@
 "difficulty": "medium",
 "question": "What country hosted the 2014 Winter Olympics?",
 "answer": "Russia"
-},
-{
-"id": "c39015cf72",
-"category": "sports",
-"difficulty": "medium",
-"question": "In Formula 1, the Virtual Safety Car was introduced following the fatal crash of which driver?",
-"answer": "Jules Bianchi"
 },
 {
 "id": "d5c86fb8ce",
@@ -18239,13 +17293,6 @@
 "answer": "James Rodríguez"
 },
 {
-"id": "73b2fb60a5",
-"category": "sports",
-"difficulty": "medium",
-"question": "The song \"Three Lions\" by the Lightning Seeds was made for which major football event in 1996?",
-"answer": "European Championships"
-},
-{
 "id": "f7c92d5eab",
 "category": "sports",
 "difficulty": "medium",
@@ -18281,13 +17328,6 @@
 "answer": "Duck"
 },
 {
-"id": "15364ba138",
-"category": "sports",
-"difficulty": "medium",
-"question": "Who won the 1994 San Marino Grand Prix, the race in which Ayrton Senna was killed?",
-"answer": "Michael Schumacher"
-},
-{
 "id": "088965795a",
 "category": "sports",
 "difficulty": "medium",
@@ -18309,32 +17349,11 @@
 "answer": "India"
 },
 {
-"id": "f05d2bd06c",
-"category": "sports",
-"difficulty": "medium",
-"question": "Josh Mansour is part of what NRL team?",
-"answer": "Penrith Panthers"
-},
-{
-"id": "9c4037dac2",
-"category": "sports",
-"difficulty": "medium",
-"question": "Which professional wrestler fell from the rafters to his death during a live Pay-Per-View event in 1999?",
-"answer": "Owen Hart"
-},
-{
 "id": "75639b86bb",
 "category": "sports",
 "difficulty": "medium",
 "question": "Edson Arantes do Nascimento is the full name of which legendary football player?",
 "answer": "Pelé"
-},
-{
-"id": "4b4d08eda9",
-"category": "sports",
-"difficulty": "medium",
-"question": "In 2016, who won the Formula 1 World Constructor's Championship for the third time in a row?",
-"answer": "Mercedes-AMG Petronas"
 },
 {
 "id": "ccc0e1ae1a",
@@ -19050,18 +18069,6 @@
 ]
 },
 {
-"id": "25c4d6db63",
-"category": "science",
-"difficulty": "easy",
-"question": "Which element has the highest melting point?",
-"answer": "Carbon",
-"wrong": [
-"Tungsten",
-"Platinum",
-"Osmium"
-]
-},
-{
 "id": "73bf89363a",
 "category": "science",
 "difficulty": "easy",
@@ -19143,18 +18150,6 @@
 "The Curiosity Rover",
 "Curious George",
 "Stephen Curry"
-]
-},
-{
-"id": "8f2e689589",
-"category": "science",
-"difficulty": "easy",
-"question": "What organelle aids in synthesis of DNA in cells?",
-"answer": "Ribosomes",
-"wrong": [
-"Nuclei",
-"Lysosomes",
-"Mitochondria"
 ]
 },
 {
@@ -19395,18 +18390,6 @@
 "Universal Simtex Blot",
 "Unified Signal Bus",
 "Unityped Semtex Backer"
-]
-},
-{
-"id": "6bafaee378",
-"category": "science",
-"difficulty": "easy",
-"question": "The numbering system with a radix of 16 is more commonly referred to as",
-"answer": "Hexidecimal",
-"wrong": [
-"Binary",
-"Duodecimal",
-"Octal"
 ]
 },
 {
@@ -20022,18 +19005,6 @@
 ]
 },
 {
-"id": "d36be0c6b3",
-"category": "science",
-"difficulty": "easy",
-"question": "What is the equation for the area of a sphere?",
-"answer": "(4/3)πr^3",
-"wrong": [
-"4πr^2",
-"(1/3)πhr^2",
-"πr^4"
-]
-},
-{
 "id": "c118319105",
 "category": "science",
 "difficulty": "easy",
@@ -20193,13 +19164,6 @@
 "answer": "Capillaries"
 },
 {
-"id": "85bd4e31e7",
-"category": "science",
-"difficulty": "medium",
-"question": "Which NASA Space Shuttle broke apart during atmospheric re-entry on February 1, 2003?",
-"answer": "Columbia"
-},
-{
 "id": "51f61da3d9",
 "category": "science",
 "difficulty": "medium",
@@ -20275,13 +19239,6 @@
 "difficulty": "medium",
 "question": "What cell organelle is known as \"the powerhouse of the cell?\"",
 "answer": "Mitochondria"
-},
-{
-"id": "e9e2cddf5c",
-"category": "science",
-"difficulty": "medium",
-"question": "What is the Linnean name of the domestic apple tree?",
-"answer": "Malus pumila"
 },
 {
 "id": "254e773bb7",
@@ -20473,13 +19430,6 @@
 "answer": "Hydrogen"
 },
 {
-"id": "7a08b7408e",
-"category": "science",
-"difficulty": "medium",
-"question": "What was the category of the 2005 hurricane, Hurricane Katrina, in the Saffir-Simpson hurricane wind scale?",
-"answer": "Category 5"
-},
-{
 "id": "c1263095eb",
 "category": "science",
 "difficulty": "medium",
@@ -20506,13 +19456,6 @@
 "difficulty": "medium",
 "question": "Who developed the first successful polio vaccine in the 1950s?",
 "answer": "Jonas Salk"
-},
-{
-"id": "d8117c67fa",
-"category": "science",
-"difficulty": "medium",
-"question": "On which mission did the Space Shuttle Columbia break up upon re-entry?",
-"answer": "STS-107"
 },
 {
 "id": "1f6c3d5ad4",
@@ -20557,13 +19500,6 @@
 "answer": "Red"
 },
 {
-"id": "c2262c53f0",
-"category": "science",
-"difficulty": "medium",
-"question": "The Axiom of Preventive Medicine states that people with ___ risk for a disease should be screened and we should treat ___ of those people.",
-"answer": "low, all"
-},
-{
 "id": "9ee6465c52",
 "category": "science",
 "difficulty": "medium",
@@ -20590,13 +19526,6 @@
 "difficulty": "medium",
 "question": "On the periodic table of elements, what is the symbol for Tin?",
 "answer": "Sn"
-},
-{
-"id": "967cd0585b",
-"category": "science",
-"difficulty": "medium",
-"question": "In Psychology, which need appears highest in the \"Maslow's hierarchy of needs\" pyramid?",
-"answer": "Esteem"
 },
 {
 "id": "b2f8bea8f7",
@@ -20648,13 +19577,6 @@
 "answer": "Tornadoes"
 },
 {
-"id": "39397a83f4",
-"category": "science",
-"difficulty": "medium",
-"question": "What is radiation measured in?",
-"answer": "Gray"
-},
-{
 "id": "affba3d18d",
 "category": "science",
 "difficulty": "medium",
@@ -20667,13 +19589,6 @@
 "difficulty": "medium",
 "question": ".at is the top-level domain for what country?",
 "answer": "Austria"
-},
-{
-"id": "c630b1ae24",
-"category": "science",
-"difficulty": "medium",
-"question": "When was the programming language \"C#\" released?",
-"answer": "2000"
 },
 {
 "id": "f01e09183b",
@@ -20760,13 +19675,6 @@
 "answer": "Hewlett-Packard"
 },
 {
-"id": "ae367cae75",
-"category": "science",
-"difficulty": "medium",
-"question": "In programming, what do you call functions with the same name but different implementations?",
-"answer": "Overloading"
-},
-{
 "id": "f8ed757bed",
 "category": "science",
 "difficulty": "medium",
@@ -20842,13 +19750,6 @@
 "difficulty": "medium",
 "question": "How fast is USB 3.1 Gen 2 theoretically?",
 "answer": "10 Gb/s"
-},
-{
-"id": "23a7861c7f",
-"category": "science",
-"difficulty": "medium",
-"question": "Which operating system was released first?",
-"answer": "Mac OS"
 },
 {
 "id": "332b5877ec",
@@ -21215,13 +20116,6 @@
 "answer": "Henry"
 },
 {
-"id": "de05405af0",
-"category": "science",
-"difficulty": "hard",
-"question": "Where is the Gluteus Maximus muscle located?",
-"answer": "Butt"
-},
-{
 "id": "42ec0d33eb",
 "category": "science",
 "difficulty": "hard",
@@ -21346,13 +20240,6 @@
 "difficulty": "hard",
 "question": "What common name is given to the medial condition, tibial stress syndrome (MTSS)?",
 "answer": "Shin Splints"
-},
-{
-"id": "9fdf44eeb8",
-"category": "science",
-"difficulty": "hard",
-"question": "What is considered the rarest form of color blindness?",
-"answer": "Blue"
 },
 {
 "id": "57aac115b6",
@@ -21530,13 +20417,6 @@
 "answer": "Folium of Descartes"
 },
 {
-"id": "795f421ab4",
-"category": "science",
-"difficulty": "hard",
-"question": "What is the fourth digit of π?",
-"answer": "1"
-},
-{
 "id": "1461017207",
 "category": "science",
 "difficulty": "hard",
@@ -21549,13 +20429,6 @@
 "difficulty": "hard",
 "question": "The decimal number 31 in hexadecimal would be what?",
 "answer": "1F"
-},
-{
-"id": "cbd1fcc6c2",
-"category": "science",
-"difficulty": "hard",
-"question": "The notion of a \"set that contains all sets which do not contain themselves\" is a paradoxical idea attributed to which English philosopher?",
-"answer": "Bertrand Russel"
 },
 {
 "id": "fdc90fc076",
@@ -21991,18 +20864,6 @@
 "The Fiftieth State",
 "The Second State",
 "The Sixteenth State"
-]
-},
-{
-"id": "a087e2c231",
-"category": "geography",
-"difficulty": "easy",
-"question": "Which of these is the name of the largest city in the US state Tennessee?",
-"answer": "Memphis",
-"wrong": [
-"Thebes",
-"Alexandria",
-"Luxor"
 ]
 },
 {
@@ -23226,13 +22087,6 @@
 "answer": "Vientiane"
 },
 {
-"id": "d957b5ebc1",
-"category": "geography",
-"difficulty": "medium",
-"question": "How many sovereign states are members of the United Nations?",
-"answer": "195"
-},
-{
 "id": "4640dd75d7",
 "category": "geography",
 "difficulty": "medium",
@@ -23289,13 +22143,6 @@
 "answer": "Quebec"
 },
 {
-"id": "988d7a8357",
-"category": "geography",
-"difficulty": "medium",
-"question": "What island in the Canary Islands was the scene of one of the worst air disasters in history with the collision of two jumbo jets?",
-"answer": "Tenerife"
-},
-{
 "id": "6f9dcd6292",
 "category": "geography",
 "difficulty": "medium",
@@ -23336,13 +22183,6 @@
 "difficulty": "medium",
 "question": "What city has the busiest airport in the world?",
 "answer": "Atlanta, Georgia USA"
-},
-{
-"id": "976350cbe8",
-"category": "geography",
-"difficulty": "medium",
-"question": "Which European city has the highest mileage of canals in the world?",
-"answer": "Birmingham"
 },
 {
 "id": "94c796b5fa",
@@ -23527,13 +22367,6 @@
 "answer": "Tyler, Texas"
 },
 {
-"id": "4e57dcbb57",
-"category": "geography",
-"difficulty": "hard",
-"question": "Which is the largest freshwater lake in the world?",
-"answer": "Lake Superior"
-},
-{
 "id": "61e86f75ed",
 "category": "geography",
 "difficulty": "hard",
@@ -23700,13 +22533,6 @@
 "difficulty": "hard",
 "question": "What is the capital city of Bermuda?",
 "answer": "Hamilton"
-},
-{
-"id": "6b31e0682e",
-"category": "geography",
-"difficulty": "hard",
-"question": "What is special about Lake Titicaca?",
-"answer": "Highest navigable lake"
 },
 {
 "id": "cbd3e6a620",
@@ -24057,18 +22883,6 @@
 ]
 },
 {
-"id": "4743af3412",
-"category": "history",
-"difficulty": "easy",
-"question": "Who discovered Penicillin?",
-"answer": "Alexander Flemming",
-"wrong": [
-"Marie Curie",
-"Alfred Nobel",
-"Louis Pasteur"
-]
-},
-{
 "id": "38cb18a94a",
 "category": "history",
 "difficulty": "easy",
@@ -24150,18 +22964,6 @@
 "Italy",
 "Germany",
 "Japan"
-]
-},
-{
-"id": "6b04a405c0",
-"category": "history",
-"difficulty": "easy",
-"question": "Who succeded Josef Stalin as the leader of the Soviet Union?",
-"answer": "Nikita Krushchev",
-"wrong": [
-"Lavrentiy Beria",
-"Vyacheslav Molotov",
-"Georgy Malenkov"
 ]
 },
 {
@@ -24597,18 +23399,6 @@
 ]
 },
 {
-"id": "9e23bb25e9",
-"category": "history",
-"difficulty": "easy",
-"question": "Who was the first American in space?",
-"answer": "Alan Shephard",
-"wrong": [
-"Neil Armstrong",
-"John Glenn",
-"Jim Lovell"
-]
-},
-{
 "id": "666eb26d8d",
 "category": "history",
 "difficulty": "easy",
@@ -24642,18 +23432,6 @@
 "1299",
 "1353",
 "1498"
-]
-},
-{
-"id": "dfaa821c00",
-"category": "history",
-"difficulty": "easy",
-"question": "Who was among those killed in the 2010 Smolensk, Russia plane crash tragedy?",
-"answer": "The Polish President",
-"wrong": [
-"Pope John Paul II",
-"Bang-Ding Ow",
-"Albert Putin"
 ]
 },
 {
@@ -24913,13 +23691,6 @@
 "answer": "Siege of Petersburg"
 },
 {
-"id": "2f5173e788",
-"category": "history",
-"difficulty": "medium",
-"question": "What is the bloodiest event in United States history, in terms of casualties?",
-"answer": "Battle of Antietam"
-},
-{
 "id": "bba1978be3",
 "category": "history",
 "difficulty": "medium",
@@ -25016,13 +23787,6 @@
 "difficulty": "medium",
 "question": "What is the name of the famous Apache leader who died in 1909 at the age of 70?",
 "answer": "Geronimo"
-},
-{
-"id": "e20b11145d",
-"category": "history",
-"difficulty": "medium",
-"question": "Which WWII tank ace is credited with having destroyed the most tanks?",
-"answer": "Kurt Knispel"
 },
 {
 "id": "233df1f4f8",
@@ -25207,13 +23971,6 @@
 "answer": "James I"
 },
 {
-"id": "1ef2cacab3",
-"category": "history",
-"difficulty": "medium",
-"question": "In relation to the British Occupation in Ireland, what does the IRA stand for.",
-"answer": "Irish Republican Army"
-},
-{
 "id": "7deb2933ed",
 "category": "history",
 "difficulty": "medium",
@@ -25233,13 +23990,6 @@
 "difficulty": "medium",
 "question": "What was Genghis Khan's real name?",
 "answer": "Temüjin"
-},
-{
-"id": "15c665e1a0",
-"category": "history",
-"difficulty": "medium",
-"question": "Where and when was the first cardboard box made for industrial use?",
-"answer": "England, 1817"
 },
 {
 "id": "c8d0dc9c8e",
@@ -25529,13 +24279,6 @@
 "answer": "Louis XIV"
 },
 {
-"id": "0535be57ab",
-"category": "history",
-"difficulty": "medium",
-"question": "Which Las Vegas casino was originally constructed and operated by mobster Bugsy Siegel?",
-"answer": "The Flamingo"
-},
-{
 "id": "82c9084a82",
 "category": "history",
 "difficulty": "medium",
@@ -25548,13 +24291,6 @@
 "difficulty": "medium",
 "question": "Who was the first emperor of Rome?",
 "answer": "Augustus"
-},
-{
-"id": "97127fb761",
-"category": "history",
-"difficulty": "medium",
-"question": "What year did the Boxing Day earthquake & tsunami occur in the Indian Ocean?",
-"answer": "2004"
 },
 {
 "id": "a96aa85fa1",
@@ -25662,13 +24398,6 @@
 "answer": "1997"
 },
 {
-"id": "f104bb9f27",
-"category": "history",
-"difficulty": "medium",
-"question": "Where was Abraham Lincoln when he was assassinated by John Wilkes Booth in 1865?",
-"answer": "At the theatre"
-},
-{
 "id": "a2f25576f0",
 "category": "history",
 "difficulty": "medium",
@@ -25704,13 +24433,6 @@
 "answer": "Airship Dock"
 },
 {
-"id": "c8ae5e49b8",
-"category": "history",
-"difficulty": "medium",
-"question": "Which country attacked the USS Liberty on June 8, 1967?",
-"answer": "Israel"
-},
-{
 "id": "ff396f81ff",
 "category": "history",
 "difficulty": "medium",
@@ -25737,20 +24459,6 @@
 "difficulty": "hard",
 "question": "After the 1516 Battle of Marj Dabiq, the Ottoman Empire took control of Jerusalem from which sultanate?",
 "answer": "Mamluk"
-},
-{
-"id": "33242191b5",
-"category": "history",
-"difficulty": "hard",
-"question": "In which year did the Tokyo Subway Sarin Attack occur?",
-"answer": "1995"
-},
-{
-"id": "e2f1097a0e",
-"category": "history",
-"difficulty": "hard",
-"question": "During World War I, which nation's monarchs were blood related?",
-"answer": "England, Germany, Russia"
 },
 {
 "id": "de4a5b46be",
@@ -26012,13 +24720,6 @@
 "answer": "South Africa"
 },
 {
-"id": "de84760186",
-"category": "history",
-"difficulty": "hard",
-"question": "Who was the first man to travel into outer space twice?",
-"answer": "Gus Grissom"
-},
-{
 "id": "aecd663497",
 "category": "history",
 "difficulty": "hard",
@@ -26087,13 +24788,6 @@
 "difficulty": "hard",
 "question": "Who was the first man to travel into outer space?",
 "answer": "Yuri Gagarin"
-},
-{
-"id": "4a066cdd4f",
-"category": "history",
-"difficulty": "hard",
-"question": "What was the first recorded object to ever reach space?",
-"answer": "Bumper-WAC"
 },
 {
 "id": "b6bd4a5852",

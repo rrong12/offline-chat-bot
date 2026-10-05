@@ -162,7 +162,13 @@ class GameManager:
 
     async def _start(self, cls: type[Game], ctx: CommandContext) -> None:
         tokens = ctx.args.lower().split()
-        categories = cls.category_names(self.assets)
+        try:
+            categories = cls.category_names(self.assets)
+        except Exception as exc:  # a missing or broken content file: say so instead of going quiet
+            logger.exception("could not list %s categories", cls.name)
+            self.log.write("error", where=f"game:{cls.name}.categories", type=type(exc).__name__, message=str(exc))
+            self._notice(ctx, cls, "Couldn't start that game.")
+            return
         uid = ctx.msg.user_id
         if tokens == ["categories"]:
             self._notice(ctx, cls, self._options(cls, categories))

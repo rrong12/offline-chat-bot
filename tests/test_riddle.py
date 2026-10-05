@@ -91,11 +91,12 @@ def test_apostrophes_are_removed_not_split(tmp_path):
 
 def riddle(tmp_path, text: str, answers: list[str]) -> Riddle:
     import json
+    import uuid
 
     from bot.assets import Assets
 
-    root = tmp_path / "content"
-    root.mkdir(exist_ok=True)
+    root = tmp_path / uuid.uuid4().hex / "content"  # content is cached per path: a fresh one each call
+    root.mkdir(parents=True)
     entry = {"riddle": text, "answers": answers, "clue": "A clue."}
     (root / "riddles.json").write_text(json.dumps([entry]), encoding="utf-8")
     return Riddle(None, random.Random(1), Assets(root))
@@ -141,6 +142,7 @@ def test_letter_answers_reject_hedges(tmp_path):
     text = "What comes once in a minute and twice in a moment?"
     assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "is it a m?") == "won"
     assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "the letter M") == "won"
+    assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "is it a letter m") == "won"
     assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "m or n") == "list"
     assert outcome(riddle(tmp_path, text, ["m", "letter m"]), "n m t") == "list"
 

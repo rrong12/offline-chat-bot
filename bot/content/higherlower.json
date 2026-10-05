@@ -381,19 +381,13 @@
 "views": 24308
 },
 {
-"name": "Dream",
-"article": "Dream (YouTuber)",
-"category": "streamers",
-"views": 16133
-},
-{
 "name": "Technoblade",
 "article": "Technoblade",
 "category": "streamers",
 "views": 67314
 },
 {
-"name": "Shroud",
+"name": "Shroud (streamer)",
 "article": "Shroud (gamer)",
 "category": "streamers",
 "views": 6087
@@ -463,12 +457,6 @@
 "article": "IShowSpeed",
 "category": "streamers",
 "views": 112283
-},
-{
-"name": "Wilbur Soot",
-"article": "Wilbur Soot",
-"category": "streamers",
-"views": 10298
 },
 {
 "name": "Quackity",
@@ -1221,7 +1209,7 @@
 "views": 60637
 },
 {
-"name": "Apple",
+"name": "Apple (the fruit)",
 "article": "Apple",
 "category": "food",
 "views": 77089
@@ -1251,7 +1239,7 @@
 "views": 548798
 },
 {
-"name": "Amazon",
+"name": "Amazon (the company)",
 "article": "Amazon (company)",
 "category": "brands",
 "views": 231587
@@ -1491,7 +1479,7 @@
 "views": 38977
 },
 {
-"name": "Subway",
+"name": "Subway (restaurant)",
 "article": "Subway (restaurant)",
 "category": "brands",
 "views": 24781
@@ -1959,7 +1947,7 @@
 "views": 245237
 },
 {
-"name": "Turkey",
+"name": "Turkey (the country)",
 "article": "Turkey",
 "category": "countries",
 "views": 252874
@@ -2229,7 +2217,7 @@
 "views": 59389
 },
 {
-"name": "Cars",
+"name": "Cars (the movie)",
 "article": "Cars (film)",
 "category": "movies",
 "views": 129465
@@ -2553,13 +2541,7 @@
 "views": 28474
 },
 {
-"name": "Swimming",
-"article": "Competitive swimming",
-"category": "sports",
-"views": 9028
-},
-{
-"name": "Cricket",
+"name": "Cricket (the sport)",
 "article": "Cricket",
 "category": "sports",
 "views": 113346
