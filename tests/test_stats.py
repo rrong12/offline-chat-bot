@@ -154,3 +154,9 @@ def test_state_round_trip_survives_reopen(tmp_path: Path):
     reopened = StatsStore(path)
     assert reopened.get_state("paused") == "1"
     reopened.close()
+
+
+def test_file_database_uses_wal_with_normal_sync(tmp_path: Path):
+    s = StatsStore(tmp_path / "bot.db")
+    assert s._conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert s._conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL

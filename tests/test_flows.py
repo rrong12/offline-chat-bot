@@ -130,6 +130,17 @@ async def test_busy_brake_when_messages_back_up(tmp_path, clock, assets):
     assert bot.core.games.sessions == {}
 
 
+async def test_busy_brake_skips_fun_stats_and_help_but_not_control(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets)
+    for i in range(10):
+        bot.core.outbox.enqueue(f"backlog {i}")
+    for line in ("alice: ?coinflip", "bob: ?gamestats", "carol: ?help", "dave: ?cookie"):
+        await bot.core.on_message(parse_console_line(line, clock, bot.ids))
+    assert len(bot.core.outbox) == 10
+    await bot.core.on_message(parse_console_line("@mod: ?bot status", clock, bot.ids))
+    assert len(bot.core.outbox) == 11
+
+
 async def test_non_mod_cannot_control_and_mod_can_pause_and_resume(bot: Bot):
     await bot.say("random: ?bot shutdown")
     await bot.say("random: ?bot off")

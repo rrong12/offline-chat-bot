@@ -78,6 +78,10 @@ async def test_gamestats_game_and_other_user(c: Cmds):
     assert await c.run("?gamestats bob") == "📊 Bob: 17 pts, 2 wins, 2 played | scramble 2W/2P 17pts"
 
 
+async def test_gamestats_one_win_is_singular(c: Cmds):
+    assert await c.run("?gamestats hangman carol") == "📊 Carol · hangman: 1 win / 1 played · 12 pts · rank #1"
+
+
 async def test_gamestats_played_without_points_has_no_rank(c: Cmds):
     assert await c.run("?gamestats hangman") == "📊 alice · hangman: 0 wins / 1 played · 0 pts"
 

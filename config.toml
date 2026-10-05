@@ -5,7 +5,7 @@ prefix = "?"
 
 [cooldowns]
 user_seconds = 10           # per person, per command
-global_seconds = 5          # per command, across the whole chat (not used for starting games)
+global_seconds = 5          # per command, across the whole chat (not for games, ?cookie, ?gamestats, ?help)
 
 [games]
 enabled = ["scramble", "hangman"]

@@ -107,7 +107,7 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     channel = raw_channel.strip().lower() if isinstance(raw_channel, str) else ""
     if not _CHANNEL.fullmatch(channel):
         raise ConfigError(f"channel must be a Twitch username, got {raw_channel!r}")
-    if channel == PLACEHOLDER_CHANNEL:
+    if require_twitch and channel == PLACEHOLDER_CHANNEL:  # console mode and auth work before it's set
         raise ConfigError("set channel in config.toml to the Twitch channel the bot should join")
 
     prefix = _get(table, "prefix", "?")

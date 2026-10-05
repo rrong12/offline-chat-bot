@@ -108,19 +108,21 @@ async def test_fact_text_keeps_decomposed_accents(assets, clock):
 
 
 @pytest.mark.parametrize("text, safe", [
-    ("Some people are gatoring around.", False),  # long fragment "gator" at a word start
-    ("Navigators use the stars.", True),  # a fragment inside a word is fine
-    ("Gat is a short fragment.", False),  # short fragment "gat" as a whole word
+    ("Gat is a whole word.", False),  # "gat": the whole word...
     ("Gats too.", False),  # ... or its plural
-    ("Gather round.", True),  # short fragments never match as prefixes
-    (" was a famous idea.", False),  # cut off at the start
+    ("Gather round.", True),  # ... but not a word starting with it
+    ("Some people are gatoring around.", False),  # "gator*": any word starting with it
+    ("Navigators use the stars.", True),  # ... but not one merely containing it
+    ("A megablobfish swam by.", False),  # "*blob*": any word containing it
+    (" was a famous idea.", False),  # starts lowercase: cut off
     ("42 is the answer.", True),
     ('"Quoted" facts are fine.', True),
+    (chr(0x201C) + "Curly" + chr(0x201D) + " quotes and $5 are fine.", True),
 ])
 async def test_fact_filter_blocks_bad_words_and_truncated_text(content_dir, clock, text, safe):
     from bot.assets import Assets
 
-    (content_dir / "blocked_rot13.txt").write_text("tng\ntngbe\n", encoding="utf-8")  # gat, gator
+    (content_dir / "blocked_prose_rot13.txt").write_text("tng\ntngbe*\n*oybo*\n", encoding="utf-8")
     fun = Fun(Assets(content_dir), clock, FakeHttp({"https://catfact.ninja/fact": {"fact": text}}))
     await fun.run("?catfact")
     assert (fun.replies[0] != "🐱 fallback catfacts line") is safe

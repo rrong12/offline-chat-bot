@@ -36,41 +36,54 @@ def _get(data: Any, *path: str | int) -> Any:
     return data
 
 
-# Innocent words that start with a blocked fragment of 4+ letters (checked as prefixes).
-_INNOCENT_PREFIXES = (
-    "analy", "analog", "analges", "spice", "spicy", "cockt", "cockr", "cockp", "cockat", "cocker",
-    "dicken", "rapese", "tardi", "tardy", "retardant", "homog", "homon", "homoph", "pakist",
-    "negroni", "coonh", "pussyc", "pussyw", "booby", "nudib", "heilo",
+# Innocent words that look like blocked ones, checked as prefixes of each word.
+_INNOCENT = (
+    "analects", "analges", "analog", "analy", "booby", "boobies", "cockat", "cocker", "cockfight", "cockle",
+    "cockney", "cockp", "cockr", "cockscomb", "cockt", "cocky", "cummings", "dicken", "dickey", "dickinson", "milford",
+    "negroni", "penistone", "pissarro", "pussyc", "pussyf", "pussyw", "rapese", "retardant", "scunthorpe",
+    "shitzu", "titter", "tittle", "wankel",
 )
+_ES_PLURALS = ("ses", "xes", "zes", "ches", "shes")  # "-es" plurals ("spices" is not one)
+_HOMO_SPECIES = {"antecessor", "erectus", "ergaster", "floresiensis", "habilis", "heidelbergensis", "naledi",
+                 "neanderthalensis", "sapiens"}
 
 
 class BlockedWords:
-    """Finds blocked words in prose ("mentally retarded" yes; "night", "Japanese", "mustard" no).
+    """Finds blocked words in prose, by the patterns in content/blocked_prose_rot13.txt:
+    "word" is the whole word or its plural, "word*" a word start, "*word*" anywhere in a word."""
 
-    Fragments of 3 letters must be the whole word (or that word + "s"); longer fragments match at
-    the start of a word unless the word is a known innocent one (analysis, spices, Pakistan, ...).
-    """
-
-    def __init__(self, fragments: list[str]) -> None:
-        self.short = {f for f in fragments if len(f) < 4}
-        self.long = tuple(f for f in fragments if len(f) >= 4)
+    def __init__(self, patterns: list[str]) -> None:
+        self.whole = {p for p in patterns if "*" not in p}
+        self.prefix = tuple(p[:-1] for p in patterns if p.endswith("*") and not p.startswith("*"))
+        self.inside = tuple(p[1:-1] for p in patterns if p.startswith("*") and p.endswith("*"))
 
     @classmethod
     def load(cls, assets: Assets) -> BlockedWords:
         try:
-            return cls([codecs.decode(line, "rot13") for line in assets.lines("blocked_rot13")])
+            return cls([codecs.decode(line, "rot13") for line in assets.lines("blocked_prose_rot13")])
         except FileNotFoundError:
             return cls([])
 
     def found_in(self, text: str) -> bool:
-        for word in re.findall(r"[a-z]+", text.lower()):
-            if word in self.short or (word.endswith("s") and word[:-1] in self.short):
-                return True
-            if word == "homo" or word.startswith(_INNOCENT_PREFIXES):  # "Homo sapiens", "analysis"
+        words = re.findall(r"[a-z]+", text.lower())
+        for i, word in enumerate(words):
+            if word.startswith(_INNOCENT):
                 continue
-            if word.startswith(self.long):
+            stems = (word, word[:-1] if word.endswith("s") else "", word[:-2] if word.endswith(_ES_PLURALS) else "")
+            if any(stem in self.whole for stem in stems) and not _fine_in_context(words, i):
+                return True
+            if word.startswith(self.prefix) or any(part in word for part in self.inside):
                 return True
         return False
+
+
+def _fine_in_context(words: list[str], i: int) -> bool:
+    """A few blocked whole words are fine next to a specific word: "Homo sapiens", "Maine Coon"."""
+    if words[i] in ("homo", "homos"):
+        return i + 1 < len(words) and words[i + 1] in _HOMO_SPECIES
+    if words[i] in ("coon", "coons"):
+        return i > 0 and words[i - 1] in ("maine", "main")  # the breed, often misspelled
+    return False
 
 
 def _safe_text(value: Any, blocked: BlockedWords | None = None) -> str | None:
@@ -83,7 +96,7 @@ def _safe_text(value: Any, blocked: BlockedWords | None = None) -> str | None:
     text = "".join(ch for ch in text if ch.isprintable())  # then drop control characters
     if not text or len(text) > MAX_FACT or _UNSAFE.search(text):
         return None
-    if not (text[0].isupper() or text[0].isdigit() or text[0] in "\"'"):  # looks truncated
+    if text[0].islower():  # looks cut off mid-sentence
         return None
     if blocked is not None and blocked.found_in(text):
         return None

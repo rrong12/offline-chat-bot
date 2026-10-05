@@ -17,6 +17,7 @@ def test_repo_config_file_is_valid_once_a_channel_is_set(tmp_path):
     shipped = (Path(__file__).parent.parent / "config.toml").read_text(encoding="utf-8")
     with pytest.raises(ConfigError, match="set channel"):
         load_config(write(tmp_path, shipped), ENV)  # the placeholder must be replaced
+    load_config(write(tmp_path, shipped), {}, require_twitch=False)  # console mode works before it's set
     cfg = load_config(write(tmp_path, shipped.replace('"your_channel"', '"real_channel"')), ENV)
     assert cfg.prefix == "?" and cfg.enabled_games == ("scramble", "hangman")
 

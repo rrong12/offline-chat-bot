@@ -31,6 +31,8 @@ from bot.text import format_duration
 logger = logging.getLogger(__name__)
 
 EXIT_OK, EXIT_CRASH, EXIT_CONFIG, EXIT_AUTH = 0, 1, 2, 3
+# While the busy brake is on, these groups are ignored so game messages keep flowing.
+BUSY_SKIPPED_GROUPS = ("Stats", "Fun", "Info")
 NON_MOD_RATE = 0.6  # messages/s; Twitch's limit for a non-mod account is 20 per 30 s
 
 
@@ -77,7 +79,7 @@ class BotCore:
             prefix=config.prefix,
             cooldown_seconds=config.game_cooldown,
             max_games=config.max_games,
-            is_busy=lambda: len(self.outbox) >= config.busy_queue,
+            is_busy=self.is_busy,
         )
         self.games.register(self.registry)
         register_stats(self.registry, stats=stats, game_names=list(games))
@@ -98,6 +100,10 @@ class BotCore:
         self._stop = asyncio.Event()
 
     # state
+
+    def is_busy(self) -> bool:
+        """The busy brake: too many bot messages are waiting to be sent."""
+        return len(self.outbox) >= self.config.busy_queue
 
     def is_controller(self, msg: ChatMessage) -> bool:
         return is_controller(msg, self.config.owner_ids)
@@ -152,6 +158,8 @@ class BotCore:
         if cmd is None:
             return
         if cmd.controller_only and not self.is_controller(msg):
+            return
+        if cmd.group in BUSY_SKIPPED_GROUPS and self.is_busy():
             return
         global_seconds = self.config.global_cooldown if cmd.global_cooldown else 0
         if cmd.cooldown and not self.cooldowns.check_command(

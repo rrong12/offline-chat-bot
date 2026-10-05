@@ -45,13 +45,48 @@ def test_blocked_fragment_list_exists():
     assert all(f.isalpha() and f == f.lower() for f in fragments)
 
 
-def test_blocked_list_catches_bad_words_in_prose_but_not_common_words():
+def _prose_patterns():
+    import codecs
+
+    return [codecs.decode(line, "rot13") for line in REAL.lines("blocked_prose_rot13")]
+
+
+def test_prose_blocked_list_format():
+    patterns = _prose_patterns()
+    assert len(patterns) >= 50
+    for p in patterns:
+        assert re.fullmatch(r"\*?[a-z]+\*?", p) and (p.startswith("*") <= p.endswith("*")), p
+
+
+def test_prose_blocked_list_catches_every_pattern_in_its_forms():
+    # Built from the encoded list, so no blocked word is spelled out in this file.
     blocked = BlockedWords.load(REAL)
-    assert blocked.found_in("His parents thought he was mentally retarded.")
+    for p in _prose_patterns():
+        core = p.strip("*")
+        if p.startswith("*"):
+            forms = [core, "x" + core + "y", core.capitalize() + "ed"]
+        elif p.endswith("*"):
+            forms = [core, core + "ed", core.upper() + "S"]
+        else:
+            forms = [core, core + "s", core.capitalize()]
+        for form in forms:
+            assert blocked.found_in(f"They said {form} once."), p
+
+
+def test_prose_blocked_list_allows_common_words():
+    blocked = BlockedWords.load(REAL)
     for fine in (
         "The night sky over Japan is beautiful.", "Japanese analysts studied spices from Pakistan.",
-        "Mustard is a condiment.", "Charles Dickens wrote fast.", "Homo sapiens evolved in Africa.",
-        "The title of the book.", "Cumulative rainfall rose.", "A cocktail party.", "Tardigrades survive space.",
+        "Mustard is a condiment.", "Charles Dickens and Emily Dickinson wrote a lot.",
+        "Homo sapiens evolved in Africa.",
+        "Homo erectus used fire.", "Homologous structures share an origin.", "The title of the book.",
+        "Cumulative rainfall rose.", "A cocktail party in Cockney London.", "Tardigrades survive space.",
+        "Maine Coon cats are large.", "The Main Coon cat.", "Puss in Boots is a cat.",
+        "Males are bigger than the opposite sex.",
+        "Felis nigripes is the black-footed cat.", "The shitzu is a toy breed.", "The siege lasted a year.",
+        "Blue-footed boobies dance.", "Spica is a bright star.", "Milford Sound is in New Zealand.",
+        "The Wankel engine is a rotary engine.", "Cats reach sexual maturity early.", "A cocky rooster crowed.",
+        "Scunthorpe is a town.", "Grapes, drapes and scrapes.", "Cockatoos and cockroaches.",
     ):
         assert not blocked.found_in(fine), fine
 
