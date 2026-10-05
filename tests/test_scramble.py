@@ -15,6 +15,13 @@ def test_only_valid_words_and_categories(assets):
     assert game.word == "ALLIGATOR"
 
 
+def test_words_that_cannot_be_scrambled_are_skipped():
+    from bot.games.scramble import _valid
+
+    assert not _valid("aaaa") and not _valid("AaAa")
+    assert _valid("abba")
+
+
 def test_start_message_shows_scramble_that_differs(assets):
     game = make(assets)
     assert game.scrambled != game.word

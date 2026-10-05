@@ -13,7 +13,8 @@ from bot.text import normalize
 
 
 def _valid(entry: str) -> bool:
-    return entry.isascii() and entry.isalpha() and 4 <= len(entry) <= 10
+    # Needs two distinct letters, or no scramble can differ from the word ("aaaa").
+    return entry.isascii() and entry.isalpha() and 4 <= len(entry) <= 10 and len(set(entry.lower())) > 1
 
 
 class Scramble(Game):
