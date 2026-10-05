@@ -32,7 +32,7 @@ pytest-asyncio.
   with `.venv/bin/pytest`.
 - **Code is pre-verified:** the code in this plan was written and run before the plan was
   saved. Each task's tests pass using only the files from that task and the ones before it, in
-  this order (220 tests in total before the content task). Copy the code exactly. If a step's
+  this order (221 tests in total before the content task). Copy the code exactly. If a step's
   output differs from "Expected", stop and investigate (superpowers:systematic-debugging).
   Don't adjust the test to match.
 - **TDD rhythm:** write the test file, run it and see it fail, write the implementation, run it
@@ -4005,7 +4005,8 @@ Argument rules from spec §5:
 - `?leaderboard [game] [limit]` accepts its arguments in either order. The limit is clamped to 1 to 10, and the default is 5.
 - `?gamestats [game] [username]` treats the first argument as a game if it names one, and otherwise as a username. A leading `@` is stripped.
 - A typed name that isn't found is never echoed ("No stats for that user yet.").
-- `?help <x>` echoes `x` only if it looks like a command name, so the bot never repeats arbitrary text.
+- `?help <x>` never echoes `x` ("No command by that name."). Underscore-joined troll phrases look like command names.
+- Limits must be plain ASCII digits: `str.isdigit()` accepts "²", which `int()` rejects.
 
 **Files:**
 - Create: `bot/stats_commands.py`, `bot/help.py`
@@ -4070,6 +4071,13 @@ async def test_leaderboard_game_and_limit_in_any_order(c: Cmds):
     assert await c.run("?leaderboard 99") == "🏆 Top 2 overall: 1. Carol (22) 2. Bob (17)"
 
 
+async def test_leaderboard_limit_edge_cases(c: Cmds):
+    assert await c.run("?leaderboard 0") == "🏆 Top 1 overall: 1. Carol (22)"
+    assert await c.run("?leaderboard -5") == "🏆 Top 1 overall: 1. Carol (22)"
+    assert await c.run("?leaderboard " + chr(0xB2)) == "Unknown game. Games: scramble, hangman"  # superscript two
+    assert await c.run("?leaderboard SCRAMBLE 1 extra words") == "🏆 Top 1 scramble: 1. Bob (17)"
+
+
 async def test_leaderboard_unknown_game_and_empty(c: Cmds):
     assert await c.run("?leaderboard chess") == "Unknown game. Games: scramble, hangman"
     empty = Cmds()
@@ -4094,6 +4102,7 @@ async def test_gamestats_played_without_points_has_no_rank(c: Cmds):
 async def test_gamestats_missing(c: Cmds):
     assert await c.run("?gamestats nobody_here") == "No stats for that user yet."
     assert await c.run("?gamestats bad/name") == "That's not a valid username."
+    assert await c.run("?gamestats @") == "That's not a valid username."
     assert await c.run("?gamestats hangman bob") == "No hangman stats for Bob yet."
     assert await c.run("?gamestats", "dave") == "No stats for dave yet."
 
@@ -4106,9 +4115,9 @@ async def test_help_overview_and_details(c: Cmds):
     )
 
 
-async def test_help_unknown_never_echoes_unsafe_text(c: Cmds):
-    assert await c.run("?help nope") == "No command named nope. Try ?help."
-    assert await c.run("?help <script>") == "No command. Try ?help."
+async def test_help_unknown_never_echoes_what_was_typed(c: Cmds):
+    assert await c.run("?help nope") == "No command by that name. Try ?help."
+    assert await c.run("?help jason_is_trash") == "No command by that name. Try ?help."
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -4124,6 +4133,7 @@ Expected: FAIL. `ModuleNotFoundError: No module named 'bot.help'`
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from bot.commands import Command, CommandContext, CommandRegistry
@@ -4132,16 +4142,17 @@ from bot.text import clean_username
 
 DEFAULT_LIMIT = 5
 MAX_LIMIT = 10
+_NUMBER = re.compile(r"-?[0-9]+")  # ASCII only: str.isdigit() accepts "²", which int() rejects
 
 
 def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: Sequence[str]) -> None:
-    games = list(game_names)
+    games = [g.lower() for g in game_names]
 
     async def leaderboard(ctx: CommandContext) -> None:
         game: str | None = None
         limit = DEFAULT_LIMIT
         for arg in ctx.argv[:2]:
-            if arg.isdigit():
+            if _NUMBER.fullmatch(arg):
                 limit = max(1, min(MAX_LIMIT, int(arg)))
             elif arg.lower() in games:
                 game = arg.lower()
@@ -4159,6 +4170,7 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
     async def gamestats(ctx: CommandContext) -> None:
         argv = ctx.argv
         game: str | None = None
+        # A first argument that names a game is the game, even if someone's login is the same word.
         if argv and argv[0].lower() in games:
             game = argv[0].lower()
             argv = argv[1:]
@@ -4220,11 +4232,7 @@ def register_stats(registry: CommandRegistry, *, stats: StatsStore, game_names: 
 
 from __future__ import annotations
 
-import re
-
 from bot.commands import Command, CommandContext, CommandRegistry
-
-_SAFE_NAME = re.compile(r"^[a-z0-9_]{1,20}$")
 
 
 def register_help(registry: CommandRegistry) -> None:
@@ -4232,12 +4240,9 @@ def register_help(registry: CommandRegistry) -> None:
         if not ctx.argv:
             ctx.reply(registry.help_overview())
             return
-        name = ctx.argv[0].lower().removeprefix(ctx.prefix)
-        text = registry.help_for(name)
-        if text is None:
-            shown = f" named {name}" if _SAFE_NAME.fullmatch(name) else ""
-            text = f"No command{shown}. Try {ctx.prefix}help."
-        ctx.reply(text)
+        text = registry.help_for(ctx.argv[0].lower().removeprefix(ctx.prefix))
+        # Never repeat what was typed: an unknown name could be any phrase a troll chose.
+        ctx.reply(text or f"No command by that name. Try {ctx.prefix}help.")
 
     registry.add(
         Command(
@@ -4256,7 +4261,7 @@ def register_help(registry: CommandRegistry) -> None:
 
 Run: `.venv/bin/pytest tests/test_stats_help_commands.py -q`
 
-Expected: PASS (9 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
+Expected: PASS (10 passed). Then run the full suite: `.venv/bin/pytest -q`. Expected: all pass.
 
 - [ ] **Step 6: Commit**
 
@@ -6287,7 +6292,7 @@ Every entry was checked against the linked page on <date>. Robert reviews this f
 - [ ] **Step 7: Run the content test and the full suite**
 
 Run: `.venv/bin/pytest tests/test_content.py -q`, then `.venv/bin/pytest -q`.
-Expected: `15 passed`, then all 235 tests pass.
+Expected: `15 passed`, then all 236 tests pass.
 
 - [ ] **Step 8: Play every game by hand in console mode**
 
@@ -6463,7 +6468,7 @@ bot detects this at startup and uses the `certifi` certificate bundle automatica
 
 - [ ] **Step 3: Full verification**
 
-Run: `.venv/bin/pytest -q`. Expected: all tests pass (235).
+Run: `.venv/bin/pytest -q`. Expected: all tests pass (236).
 
 Then follow the README's "Try it without Twitch" section exactly as written, from a fresh clone (`git clone . /tmp/ocb-check && cd /tmp/ocb-check`), to confirm the instructions work. Delete `/tmp/ocb-check` afterwards.
 
