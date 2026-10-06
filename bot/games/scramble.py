@@ -40,7 +40,7 @@ class Scramble(Game):
         "Your own word to unscramble: type it, or {p}g <word>. 10 points, or 7 or 4 if you take hints "
         "with {p}hint. {p}scramble categories lists topics. {p}skip ends your game."
     )
-    time_limit = 45
+    time_limit = 60
     POINTS = (10, 7, 4)
     commands = {
         "hint": ("{p}hint", "Get a hint in your Scramble game (fewer points)."),

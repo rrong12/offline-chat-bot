@@ -316,14 +316,14 @@ Substrings do not count, which avoids false positives in a busy chat.
 - **Answer:** a random word from `content/words/<category>.txt`, 4 to 10 letters, letters
   only. The displayed scramble must differ from the word; reshuffle until it does.
 - **Messages:**
-  - start: "🔤 Unscramble (animals): LGRATIOAL · 45s · ?hint for a hint".
+  - start: "🔤 Unscramble (animals): LGRATIOAL · 60s · ?hint for a hint".
   - `?hint` (first use) shows the first and last letters (`A _ _ _ _ _ _ _ R`).
   - `?hint` (second use) reveals about half of the letters, chosen at random but stable.
     Further `?hint`s are ignored.
 - **Answering:** the player types the word. Wrong answers cost nothing.
 - **Win:** the player's message equals the word after normalization. Points are 10 with no
   hints, 7 after one, and 4 after two. "✅ \<name\> got it: ALLIGATOR (+7)".
-- **Timeout:** at 45 s, "⏰ Time's up! It was ALLIGATOR." No points.
+- **Timeout:** at 60 s (45 s until Robert lengthened it after the live test, 2026-10-05), "⏰ Time's up! It was ALLIGATOR." No points.
 
 ### Hangman
 - **Answer:** a random entry from `content/words/<category>.txt`. It may be a short phrase;

@@ -117,7 +117,9 @@ async def test_skip_ends_your_game(bot: Bot):
 
 async def test_game_times_out(bot: Bot):
     await bot.say("alice: ?scramble animals")
-    await bot.wait(45)
+    await bot.wait(59)
+    assert bot.out[-1].startswith("🔤 Unscramble")  # still running just before the 60 s limit
+    await bot.wait(1)
     assert bot.out[-1] == "⏰ Time's up! It was ALLIGATOR."
 
 
@@ -291,7 +293,7 @@ async def test_tick_survives_a_failing_log_rollover(bot: Bot, monkeypatch):
 
     monkeypatch.setattr(bot.log, "maybe_rollover", broken)
     await bot.say("alice: ?scramble animals")
-    await bot.wait(45)  # the game still times out even though rollover fails every tick
+    await bot.wait(60)  # the game still times out even though rollover fails every tick
     assert bot.out[-1] == "⏰ Time's up! It was ALLIGATOR."
     assert any(e["event"] == "error" and e["where"] == "log_rollover" for e in bot.events())
 

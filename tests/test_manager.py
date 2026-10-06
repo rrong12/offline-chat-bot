@@ -308,7 +308,7 @@ async def test_hangman_board_updates_coalesce_per_game(h: Harness):
 
 async def test_timeout_ends_the_game(h: Harness):
     await h.command("?scramble animals")
-    h.clock.advance(44)
+    h.clock.advance(59)
     h.manager.tick()
     assert "id-alice" in h.manager.sessions
     h.clock.advance(1)

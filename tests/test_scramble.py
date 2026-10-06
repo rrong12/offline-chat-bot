@@ -61,7 +61,7 @@ def test_start_message_shows_scramble_that_differs(assets):
     game = make(assets)
     assert game.scrambled != game.word
     assert sorted(game.scrambled) == sorted(game.word)
-    assert game.start() == f"🔤 Unscramble (animals): {game.scrambled} · 45s · {{p}}hint for a hint"
+    assert game.start() == f"🔤 Unscramble (animals): {game.scrambled} · 60s · {{p}}hint for a hint"
 
 
 def test_unrelated_chatter_is_not_an_attempt(assets):
