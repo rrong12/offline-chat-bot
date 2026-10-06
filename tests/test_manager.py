@@ -438,7 +438,7 @@ async def test_category_and_level_in_either_order(h: Harness):
 
 async def test_level_without_category_picks_a_category(h: Harness):
     await h.command("?quiz easy")
-    assert re.fullmatch(r"quiz (science|history) easy q[123]", h.texts()[-1])
+    assert re.fullmatch(r"quiz (science|history) easy q[123] · random topic, see \?quiz categories", h.texts()[-1])
 
 
 async def test_categories_list_includes_levels(h: Harness):
@@ -631,3 +631,17 @@ async def test_games_without_banked_points_still_score_nothing_on_skip(h: Harnes
     await h.command("?skip")
     assert h.texts()[-1] == "⏭️ Skipped. It was ALLIGATOR."
     assert h.stats.leaderboard(None, 5) == []
+
+
+async def test_a_random_category_comes_with_a_tip(h: Harness):
+    await h.command("?scramble")
+    assert h.texts()[-1].endswith(" · random topic, see ?scramble categories")
+    await h.command("?hangman animals", "bob")
+    assert "random topic" not in h.texts()[-1]  # chosen on purpose: no tip
+
+
+async def test_giveup_is_another_name_for_skip(h: Harness):
+    await h.command("?scramble animals")
+    await h.command("?giveup")
+    assert h.texts()[-1] == "⏭️ Skipped. It was ALLIGATOR."
+    assert h.registry.get("giveup") is h.registry.get("skip")

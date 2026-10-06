@@ -115,3 +115,9 @@ def test_the_streak_is_banked(assets):
     assert game.banked() == (1, False)
     game.streak = 5
     assert game.banked() == (5, True)  # a streak of 5+ also counts as a win
+
+
+def test_plain_chat_and_nonsense_share_one_reminder(assets):
+    game = make(assets)
+    assert game.on_message(make_msg("higher"), None).messages == ["Answer with {p}g higher or {p}g lower."]
+    assert g(game, "maybe") is None  # the reminder was already given

@@ -88,6 +88,9 @@ class Hangman(Game):
             f"{{p}}g <answer> · {self.LIVES} lives, {self.time_limit}s"
         )
 
+    def chat_reminder(self) -> str | None:
+        return "Guess with {p}g, like {p}g e for a letter or {p}g <answer>."
+
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
         guess = normalize(args)
         if name != "g" or not guess:

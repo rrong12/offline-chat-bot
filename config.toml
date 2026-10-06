@@ -23,3 +23,6 @@ retention_days = 30
 
 [rng]
 meme_badges = true          # ?rng's 69 and 420 badges; false turns them off
+
+[live]
+sleep_when_live = true      # the bot is for offline chat: it ignores chat while the channel is live

@@ -9,7 +9,7 @@ import logging
 import os
 import socket
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +123,12 @@ class _Client(twitchio.Client):
     async def event_token_refreshed(self, payload: Any) -> None:
         self.connector.save_bot_token()  # persist right away, so a hard kill doesn't lose the refresh
 
+    async def event_stream_online(self, payload: Any) -> None:
+        await self.connector._live_changed(True)
+
+    async def event_stream_offline(self, payload: Any) -> None:
+        await self.connector._live_changed(False)
+
     async def event_websocket_welcome(self, payload: Any) -> None:
         self.connector._welcomed()
 
@@ -150,6 +156,7 @@ class TwitchConnector:
         self._closing = False
         self._welcomes = 0
         self._watchdog: asyncio.Task[None] | None = None
+        self.on_live: Callable[[bool], Awaitable[None]] | None = None  # set by BotCore
 
     async def run(self, on_message: OnMessage, on_ready: OnReady) -> None:
         self._on_message, self._on_ready = on_message, on_ready
@@ -188,6 +195,14 @@ class TwitchConnector:
             eventsub.ChatMessageSubscription(broadcaster_user_id=self.channel_id, user_id=self.config.bot_id),
             as_bot=True,
         )
+        for live_sub in (
+            eventsub.StreamOnlineSubscription(broadcaster_user_id=self.channel_id),
+            eventsub.StreamOfflineSubscription(broadcaster_user_id=self.channel_id),
+        ):
+            try:  # instant live/offline notices; the core also checks every few minutes, so this is optional
+                await client.subscribe_websocket(live_sub, as_bot=True)
+            except twitchio.HTTPException as exc:
+                logger.warning("could not subscribe to %s: %s", live_sub.type, exc)
         self._watchdog = asyncio.create_task(self._watch(client))
         assert self._on_ready is not None
         await self._on_ready(ReadyInfo(self.config.channel, self.channel_id, self.is_mod))
@@ -231,6 +246,16 @@ class TwitchConnector:
     async def _fail(self, exc: BaseException) -> None:
         self._fatal = exc
         await self.close()
+
+    async def _live_changed(self, live: bool) -> None:
+        if self.on_live is not None:
+            await self.on_live(live)
+
+    async def is_live(self) -> bool:
+        assert self._client is not None
+        async for _ in self._client.fetch_streams(user_ids=[self.channel_id], type="live", first=1):
+            return True
+        return False
 
     async def send(self, text: str, reply_to: str | None = None) -> SendResult:
         assert self._client is not None

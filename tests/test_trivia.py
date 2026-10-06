@@ -72,7 +72,7 @@ def test_typed_forgives_one_typo_on_long_answers(assets):
 def test_numbers_must_be_exact(assets):
     game = make(assets, category="history", level="hard", recent=("h2",))
     assert game.answer == "1945"
-    assert g(game, "1946").messages == ["❌ Not it, 2 guesses left."]
+    assert g(game, "1946").messages == ["❌ Not it, 2 guesses left · {p}giveup to see the answer."]
     assert g(game, "1945").awards == {"id-alice": 15}
 
 
@@ -84,8 +84,8 @@ def test_articles_spaces_and_punctuation_are_ignored(assets):
 
 def test_three_wrong_guesses_lose(assets):
     game = make(assets, level="medium")
-    assert g(game, "mars").messages == ["❌ Not it, 2 guesses left."]
-    assert g(game, "venus").messages == ["❌ Not it, 1 guess left."]
+    assert g(game, "mars").messages == ["❌ Not it, 2 guesses left · {p}giveup to see the answer."]
+    assert g(game, "venus").messages == ["❌ Not it, 1 guess left · {p}giveup to see the answer."]
     out = g(game, "pluto")
     assert out.finished and out.result == "lost" and out.messages == ["💀 Out of guesses! It was Jupiter."]
 
@@ -276,7 +276,8 @@ def test_hints_describe_what_is_typed(tmp_path, answer, hint):
 
 def test_unusual_digits_never_crash(tmp_path):
     game = one_question(tmp_path, "Fifty-Seven")
-    assert g(game, "fifty " + chr(0x10A40)).messages == ["❌ Not it, 2 guesses left."]  # a Kharosthi digit
+    out = g(game, "fifty " + chr(0x10A40))  # a Kharosthi digit
+    assert out.messages == ["❌ Not it, 2 guesses left · {p}giveup to see the answer."]
 
 
 def test_who_shortcut_needs_a_plain_surname(tmp_path):
@@ -321,3 +322,9 @@ def asked(tmp_path, question: str, answer: str) -> Trivia:
 ])
 def test_more_natural_forms(tmp_path, question, answer, guess, right):
     assert asked(tmp_path, question, answer)._matches(guess) is right
+
+
+def test_plain_chat_gets_one_reminder_to_use_g(tmp_path):
+    game = one_question(tmp_path, "Jupiter")
+    assert game.on_message(make_msg("jupiter"), None).messages == ["Answer with {p}g, like {p}g paris."]
+    assert game.on_message(make_msg("jupiter"), None) is None  # only once per game

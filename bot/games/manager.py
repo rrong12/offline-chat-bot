@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 Say = Callable[..., None]  # say(text, *, reply_to=None, coalesce_key=None, priority=False)
 
 NOTICE_SECONDS = 5.0  # at most one "can't start" or category-list reply per player this often
+MAX_OPENING = 480  # characters: an opening message with the topic tip still fits in one chat message
 RECENT_ITEMS = 50  # a player doesn't get the same question again within their last 50 of that game
 RECENT_PLAYERS = 10_000  # remembered (game, player) pairs; the least recently active are forgotten
 # Help for in-game commands that several games share; a command only one game uses keeps its own text.
@@ -89,7 +90,10 @@ class GameManager:
             registry.add(
                 Command(cls.name, handler, cls.usage, cls.description, "Games", aliases=cls.aliases, cooldown=False)
             )
-        registry.add(Command("skip", self._skip_command, "{p}skip", "End your current game.", "Games", cooldown=False))
+        registry.add(Command(
+            "skip", self._skip_command, "{p}skip", "Give up: end your current game and see the answer.", "Games",
+            aliases=("giveup",), cooldown=False,
+        ))
         users = Counter(name for cls in self.games.values() for name in cls.commands)
         seen: set[str] = set()
         for cls in self.games.values():
@@ -196,7 +200,8 @@ class GameManager:
                 kind = "option" if cls.levels else "category"
                 self._notice(ctx, cls, f"Unknown {kind}. {self._options(cls, categories)}")
                 return
-        if categories and category is None:
+        random_topic = bool(categories) and category is None
+        if random_topic:
             category = self.rng.choice(categories)
         recent_key = (cls.name, uid)
         try:
@@ -222,6 +227,9 @@ class GameManager:
         if isinstance(game.item_id, str):
             self._remember(recent_key, game.item_id)
         self.log.write("game_start", round=session.key, game=cls.name, category=category, player=ctx.msg.login)
+        tip = f" · random topic, see {{p}}{cls.name} categories"
+        if random_topic and len(opening) + len(tip) <= MAX_OPENING:  # tell players they can pick one
+            opening += tip
         self._reply(session, opening)
 
     def _remember(self, key: tuple[str, str], item_id: str) -> None:

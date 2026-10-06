@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 EXIT_OK, EXIT_CRASH, EXIT_CONFIG, EXIT_AUTH = 0, 1, 2, 3
 # While the busy brake is on, these groups are ignored so game messages keep flowing.
 BUSY_SKIPPED_GROUPS = ("Stats", "Fun", "Info")
+LIVE_CHECK_SECONDS = 120  # how often to ask Twitch whether the channel is live, besides its live/offline events
 NON_MOD_RATE = 0.6  # messages/s; Twitch's limit for a non-mod account is 20 per 30 s
 
 
@@ -100,6 +101,9 @@ class BotCore:
         self.exit_code = EXIT_OK
         self.shutdown_by: str | None = None
         self._stop = asyncio.Event()
+        self.live = False  # the channel is streaming: the bot sleeps (it's for offline chat)
+        if hasattr(connector, "on_live"):
+            connector.on_live = self.set_live  # instant live/offline notices, when the connector has them
 
     # state
 
@@ -115,9 +119,39 @@ class BotCore:
         self.stats.set_state("paused", "1" if paused else "0")
 
     def status_line(self) -> str:
-        state = "PAUSED" if self.paused else "ON"
+        state = "PAUSED" if self.paused else "SLEEPING (channel is live)" if self.live else "ON"
         uptime = format_duration(self.clock.mono() - self.started_mono).replace(" ", "")
         return f"{state} · up {uptime} · games: {self.games.status()} · v{__version__}"
+
+    async def set_live(self, live: bool) -> None:
+        """The channel went live (sleep: end games quietly, ignore chat) or offline (wake up)."""
+        if not self.config.sleep_when_live or live == self.live:
+            return
+        self.live = live
+        self.log.write("stream", live=live)
+        if live:
+            self.games.stop_all()  # streak points already earned are kept
+
+    async def check_live(self) -> None:
+        """Ask the connector whether the channel is live. An error keeps the last known state."""
+        is_live = getattr(self.connector, "is_live", None)
+        if is_live is None or not self.config.sleep_when_live:
+            return
+        try:
+            live = await asyncio.wait_for(is_live(), 10)
+        except Exception as exc:
+            logger.warning("could not check whether the channel is live: %s", exc)
+            self.log.write("error", where="live_check", type=type(exc).__name__, message=str(exc))
+            return
+        await self.set_live(bool(live))
+
+    async def _live_loop(self) -> None:
+        while not self._stop.is_set():
+            if self._ready:
+                await self.check_live()
+                await asyncio.sleep(LIVE_CHECK_SECONDS)
+            else:
+                await asyncio.sleep(1)
 
     def request_shutdown(self, by: str, exit_code: int = EXIT_OK) -> None:
         if self.shutdown_by is None:
@@ -136,7 +170,7 @@ class BotCore:
         if msg.source_channel_id is not None and msg.source_channel_id != self.connector.channel_id:
             return
         parsed = parse_command(msg.text, self.config.prefix)
-        if self.paused:
+        if self.paused or self.live:
             if parsed is not None and parsed[0] == "bot" and self.is_controller(msg):
                 await self._dispatch(self.registry.get("bot"), msg, *parsed)
             return
@@ -225,6 +259,7 @@ class BotCore:
         connector_task = asyncio.create_task(self.connector.run(self.on_message, self._on_ready))
         outbox_task = asyncio.create_task(self.outbox.run(self._stop))
         tick_task = asyncio.create_task(self._tick_loop())
+        live_task = asyncio.create_task(self._live_loop())
         stop_task = asyncio.create_task(self._stop.wait())
         try:
             await asyncio.wait({connector_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -249,9 +284,9 @@ class BotCore:
             if self.shutdown_by is None:  # run() itself was cancelled
                 self.request_shutdown(by="cancelled")
             self._stop.set()
-            for task in (tick_task, stop_task):
+            for task in (tick_task, live_task, stop_task):
                 task.cancel()
-            await asyncio.gather(tick_task, stop_task, return_exceptions=True)
+            await asyncio.gather(tick_task, live_task, stop_task, return_exceptions=True)
             # Let the send loop finish its current message (each send is bounded by the outbox's
             # send timeout) instead of cancelling it mid-send.
             done, _ = await asyncio.wait({outbox_task}, timeout=self.outbox.send_timeout)

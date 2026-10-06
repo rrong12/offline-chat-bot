@@ -91,8 +91,10 @@ async def test_hangman_win_through_g_and_plain_letters_ignored(bot: Bot):
     await bot.say("alice: ?hangman animals")
     answer = bot.core.games.sessions["console-alice"].game.answer
     assert "guess with ?g <letter> or ?g <answer>" in bot.out[-1]
+    await bot.say("alice: W")  # a reaction, not a guess: one reminder to use ?g
+    assert bot.out[-1].startswith("Guess with ?g") and bot.core.games.sessions["console-alice"].game.wrong == []
     sent_before = len(bot.out)
-    await bot.say("alice: W")
+    await bot.say("alice: L")  # and after that, silence
     assert len(bot.out) == sent_before and bot.core.games.sessions["console-alice"].game.wrong == []
     await bot.say(f"alice: ?g {answer.lower()}")
     assert bot.out[-1] == f"🎉 alice solved it: {answer} (+10)"
@@ -477,7 +479,7 @@ async def test_riddle_round(allbot: Bot):
     await allbot.say("alice: ?riddle")
     answer = "clock" if "hands" in allbot.out[-1] else "towel"
     await allbot.say("alice: ?g nope")
-    assert allbot.out[-1] == "❌ Not it, 2 guesses left."
+    assert allbot.out[-1] == "❌ Not it, 2 guesses left · ?giveup to see the answer."
     await allbot.say(f"alice: ?g is it a {answer}")
     assert allbot.out[-1] == f"✅ alice got it: {answer} (+10)"
 
@@ -534,3 +536,52 @@ async def test_a_higherlower_streak_is_kept_when_skipped_or_stopped(allbot: Bot)
     await allbot.wait(6)
     await allbot.say("carol: ?leaderboard higherlower")
     assert allbot.out[-1] == "🏆 Top 2 higherlower: 1. alice (1) 2. bob (1)"
+
+
+async def test_bot_sleeps_while_the_channel_is_live(bot: Bot):
+    await bot.say("alice: ?scramble animals")
+    await bot.core.set_live(True)
+    assert bot.core.games.sessions == {}  # going live ends running games quietly
+    before = len(bot.out)
+    await bot.say("bob: ?coinflip")
+    await bot.say("carol: ?scramble animals")
+    assert len(bot.out) == before  # everything is ignored while live...
+    await bot.say("@mod: ?bot status")
+    assert bot.out[-1].startswith("SLEEPING (channel is live) · up ")  # ...except a mod's ?bot
+    await bot.core.set_live(False)
+    await bot.say("dave: ?coinflip")
+    assert bot.out[-1] in ("🪙 Heads", "🪙 Tails")
+    assert [e["live"] for e in bot.events() if e["event"] == "stream"] == [True, False]
+
+
+async def test_live_check_asks_the_connector_and_survives_errors(tmp_path, clock, assets):
+    class LiveConsole(ConsoleConnector):
+        answers = [True, RuntimeError("Twitch is down"), False]
+
+        async def is_live(self):
+            answer = self.answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    bot = Bot(tmp_path, clock, assets, connector=LiveConsole(clock=clock, lines=[], out=lambda s: None))
+    await bot.core.check_live()
+    assert bot.core.live
+    await bot.core.check_live()  # an error keeps the last known state
+    assert bot.core.live and any(e["event"] == "error" and e["where"] == "live_check" for e in bot.events())
+    await bot.core.check_live()
+    assert not bot.core.live
+
+
+async def test_sleeping_when_live_can_be_turned_off(tmp_path, clock, assets):
+    bot = Bot(tmp_path, clock, assets, sleep_when_live=False)
+    await bot.core.set_live(True)
+    await bot.say("alice: ?coinflip")
+    assert bot.out[-1] in ("🪙 Heads", "🪙 Tails")
+
+
+async def test_resuming_while_live_says_it_is_still_sleeping(bot: Bot):
+    await bot.say("@mod: ?bot off")
+    await bot.core.set_live(True)
+    await bot.say("@mod: ?bot on")
+    assert bot.out[-1] == "Bot resumed by mod. It's sleeping until the stream ends."

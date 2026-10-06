@@ -150,6 +150,11 @@ Reviews of the built games led to these refinements; the plan's execution log ha
   such points through `Game.banked()`; the others bank nothing, so skipping them still scores nothing.
 - **Starting games:** a game without options ignores extra words (`?hl lets go`); `?leaderboard hl`
   works.
+- **After the live test (Robert, 2026-10-06):** a game started on a random topic says how to pick
+  one ("· random topic, see ?scramble categories"); `?giveup` is another name for `?skip`, and Trivia
+  and Riddle mention it after a wrong guess; a player who chats without `?g` in a game that needs it
+  gets one reminder per game ("Answer with ?g, like ?g clock"), never echoing what they typed.
+  Scramble gives 60 seconds.
 
 ## 9. Out of scope
 

@@ -28,7 +28,8 @@ def register_admin(registry: CommandRegistry, core: BotCore) -> None:
                 return
             core.log.write("admin", user_id=ctx.msg.user_id, login=ctx.msg.login, action="on")
             core.set_paused(False)
-            ctx.reply(f"Bot resumed by {who}.", priority=True)
+            sleeping = " It's sleeping until the stream ends." if core.live else ""
+            ctx.reply(f"Bot resumed by {who}.{sleeping}", priority=True)
         elif sub == "status":
             ctx.reply(core.status_line(), priority=True)
         elif sub == "shutdown":

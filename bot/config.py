@@ -25,6 +25,7 @@ _SCHEMA: dict[str, set[str] | None] = {
     "outbox": {"rate_per_second", "burst", "max_queue"},
     "logs": {"retention_days"},
     "rng": {"meme_badges"},
+    "live": {"sleep_when_live"},
 }
 
 
@@ -52,6 +53,7 @@ class Config:
     log_retention_days: int
     data_dir: Path
     rng_meme_badges: bool = True  # ?rng's 69/420 badges
+    sleep_when_live: bool = True  # the bot is for offline chat: it ignores chat while the channel is live
 
 
 def _get(table: Mapping[str, Any], dotted: str, default: Any) -> Any:
@@ -166,7 +168,10 @@ def load_config(path: Path, env: Mapping[str, str], *, require_twitch: bool = Tr
     meme_badges = _get(table, "rng.meme_badges", True)
     if not isinstance(meme_badges, bool):
         raise ConfigError(f"rng.meme_badges must be true or false, got {meme_badges!r}")
-    config = replace(config, rng_meme_badges=meme_badges)
+    sleep_when_live = _get(table, "live.sleep_when_live", True)
+    if not isinstance(sleep_when_live, bool):
+        raise ConfigError(f"live.sleep_when_live must be true or false, got {sleep_when_live!r}")
+    config = replace(config, rng_meme_badges=meme_badges, sleep_when_live=sleep_when_live)
     if config.busy_queue > config.outbox_max_queue:
         raise ConfigError(
             f"games.busy_queue ({config.busy_queue}) can't be larger than outbox.max_queue ({config.outbox_max_queue})"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from itertools import count
 from typing import TextIO
 
@@ -13,7 +13,10 @@ from bot.clock import Clock
 from bot.connectors.base import ChatMessage, OnMessage, OnReady, ReadyInfo, SendResult, UserRef
 from bot.text import clean_username
 
-BANNER = "Console mode. Type lines like `alice: ?scramble` (a leading @ makes the user a mod). Ctrl+D to quit."
+BANNER = (
+    "Console mode. Type lines like `alice: ?scramble` (a leading @ makes the user a mod); "
+    "`!live` and `!offline` pretend the stream started or ended. Ctrl+D to quit."
+)
 
 
 def parse_console_line(line: str, clock: Clock, ids: Iterator[int]) -> ChatMessage | None:
@@ -71,8 +74,18 @@ class ConsoleConnector:
         self._queue: asyncio.Queue[str | None] | None = None
         self._closed = False
         self.sent: list[str] = []
+        self.live = False
+        self.on_live: Callable[[bool], Awaitable[None]] | None = None  # set by BotCore
+
+    async def is_live(self) -> bool:
+        return self.live
 
     async def _deliver(self, line: str, on_message: OnMessage) -> None:
+        if line.strip() in ("!live", "!offline"):  # pretend the stream started or ended
+            self.live = line.strip() == "!live"
+            if self.on_live is not None:
+                await self.on_live(self.live)
+            return
         msg = parse_console_line(line, self._clock, self._ids)
         if msg is not None:
             self._names[msg.id] = msg.display_name

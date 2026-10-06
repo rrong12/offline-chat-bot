@@ -308,3 +308,36 @@ async def test_rejected_app_credentials_are_a_setup_error(tmp_path, clock, monke
 
     with pytest.raises(ConfigError, match="TWITCH_CLIENT_SECRET"):
         await conn.run(noop, noop)
+
+
+async def test_stream_events_and_live_check(tmp_path, clock):
+    class Streams(FakeClient):
+        live = True
+
+        def fetch_streams(self, *, user_ids, type, first):
+            assert user_ids == ["999"] and type == "live"
+            streams = [object()] if self.live else []
+
+            async def gen():
+                for s in streams:
+                    yield s
+
+            return gen()
+
+    client = Streams()
+    conn = connector_for(tmp_path, clock, client)
+    conn.channel_id = "999"
+    assert await conn.is_live() is True
+    client.live = False
+    assert await conn.is_live() is False
+    changes = []
+
+    async def on_live(live):
+        changes.append(live)
+
+    conn.on_live = on_live
+    twitch_client = twitch._Client.__new__(twitch._Client)
+    twitch_client.connector = conn
+    await twitch_client.event_stream_online(None)
+    await twitch_client.event_stream_offline(None)
+    assert changes == [True, False]

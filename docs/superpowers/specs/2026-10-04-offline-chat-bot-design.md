@@ -35,7 +35,7 @@ Not built: the `casino` option of `?leaderboard`. The bot has no gambling or cur
 | Who can play | Every user | Requested. |
 | Who can control the bot | Broadcaster, any moderator, and listed owners (Robert); all control commands | Option (b), plus the owner so Robert can control his bot in a chat where he is not a mod. |
 | Shutdown | `?bot shutdown` exits the process for real (emergency kill switch) | No chat command can restart a stopped process. `?bot off/on` covers everyday pausing. |
-| Auto-pause when live | No | The bot runs whether or not Jason is live. Mods use `?bot off` if needed. |
+| Auto-pause when live | Yes (changed by Robert on 2026-10-06; it was No) | The bot is for offline chat. While the channel is live it sleeps: games end quietly (streak points kept) and only mods' `?bot` commands work. Detected through Twitch's stream online/offline events plus a check every 2 minutes and at startup. `[live] sleep_when_live` turns it off. |
 | Points | Per game, stored per round, plus leaderboard and stats | Requested (`?gamestats`, `?leaderboard [game]`). |
 | Logs | Bot activity only, JSONL, one file per UTC day, 30-day retention | No full chat archive. |
 | Where it runs | Robert's laptop for development and testing in his own channel. Later, an always-on Linux server under systemd | Moving to the server is a copy plus a service file. |

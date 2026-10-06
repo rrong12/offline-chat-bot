@@ -39,13 +39,14 @@ def test_alternative_answers_and_plurals_count(assets):
 def test_a_list_of_answers_costs_a_guess(assets):
     game = make(assets)
     out = g(game, "towel map keyboard piano candle clock")
-    assert not out.finished and out.messages == ["❌ One answer per guess, 2 guesses left."]
+    assert not out.finished
+    assert out.messages == ["❌ One answer per guess, 2 guesses left · {p}giveup to see the answer."]
 
 
 def test_three_wrong_guesses_lose(assets):
     game = make(assets)
-    assert g(game, "a map").messages == ["❌ Not it, 2 guesses left."]
-    assert g(game, "piano").messages == ["❌ Not it, 1 guess left."]
+    assert g(game, "a map").messages == ["❌ Not it, 2 guesses left · {p}giveup to see the answer."]
+    assert g(game, "piano").messages == ["❌ Not it, 1 guess left · {p}giveup to see the answer."]
     out = g(game, "teapot")
     assert out.finished and out.result == "lost" and out.messages == ["💀 Out of guesses! It was: clock."]
 
@@ -85,7 +86,8 @@ def test_apostrophes_are_removed_not_split(tmp_path):
               "clue": "Look at the spelling."}
     (root / "riddles.json").write_text(json.dumps([riddle]), encoding="utf-8")
     game = Riddle(None, random.Random(1), Assets(root))
-    assert g(game, "I'm guessing time").messages == ["❌ Not it, 2 guesses left."]  # not a lone "m"
+    # not a lone "m"
+    assert g(game, "I'm guessing time").messages == ["❌ Not it, 2 guesses left · {p}giveup to see the answer."]
     assert g(game, "the letter M").result == "won"
 
 
@@ -175,3 +177,9 @@ def test_multi_word_hint(tmp_path):
 ])
 def test_review_cases(tmp_path, riddle_text, answers, guess, expected):
     assert outcome(riddle(tmp_path, riddle_text, answers), guess) == expected
+
+
+def test_plain_chat_gets_one_reminder_to_use_g(assets):
+    game = make(assets)
+    assert game.on_message(make_msg("clock"), None).messages == ["Answer with {p}g, like {p}g clock."]
+    assert game.on_message(make_msg("clock"), None) is None

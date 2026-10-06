@@ -205,7 +205,6 @@ class Trivia(Game):
         self._asked = set(_canonical(self.question).split())
         self.guesses_left = self.GUESSES
         self.hints_used = 0
-        self._told_how = False  # the "answer with A-D" reminder is sent at most once
         self._told_no_hints = False
         outside = _PARENTHETICAL.sub("", self.answer).strip()
         inner = _PARENTHETICAL.search(self.answer)
@@ -240,6 +239,11 @@ class Trivia(Game):
             result="won",
         )
 
+    def chat_reminder(self) -> str | None:
+        if self.easy:
+            return f"Answer with {{p}}g and a letter, A to {LETTERS[len(self.options) - 1]}."
+        return "Answer with {p}g, like {p}g paris."
+
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
         if name == "hint":
             return self._hint()
@@ -255,10 +259,7 @@ class Trivia(Game):
             matches = [i for i, o in enumerate(self.options) if said & {f.replace(" ", "") for f in _forms(o)}]
             index = matches[0] if len(matches) == 1 else -1  # two options that read alike: ask for the letter
         if index < 0:
-            if self._told_how:
-                return None
-            self._told_how = True
-            return Outcome(messages=[f"Answer with {{p}}g and a letter, A to {LETTERS[len(self.options) - 1]}."])
+            return self.remind_once()
         if self.options[index] == self.answer:
             return self._win(msg)
         return Outcome(messages=[f"❌ It was {self._correct_text()}."], finished=True, result="lost")
@@ -283,7 +284,8 @@ class Trivia(Game):
         self.guesses_left -= 1
         if self.guesses_left == 0:
             return Outcome(messages=[f"💀 Out of guesses! It was {self.answer}."], finished=True, result="lost")
-        return Outcome(messages=[f"❌ Not it, {_plural(self.guesses_left, 'guess')} left."])
+        left = _plural(self.guesses_left, "guess")
+        return Outcome(messages=[f"❌ Not it, {left} left · {{p}}giveup to see the answer."])
 
     def _hint(self) -> Outcome | None:
         text = self._hint_text

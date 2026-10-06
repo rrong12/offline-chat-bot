@@ -43,7 +43,6 @@ class HigherLower(Game):
         self.used: set[str] = set()
         self.streak = 0
         self.player_id = ""  # set by the first answer; a streak above 0 always has one
-        self._told_how = False
         for _ in range(20):  # nearly every term has a partner; retry the rare one that doesn't
             self.current = self._pick(rng.choice(self.terms))
             self.next = self._partner()
@@ -84,16 +83,16 @@ class HigherLower(Game):
         winners = {self.player_id} if self.streak >= WIN_STREAK else set()
         return Outcome(messages=[text], awards=awards, winners=winners, finished=True, result=result)
 
+    def chat_reminder(self) -> str | None:
+        return "Answer with {p}g higher or {p}g lower."
+
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
         guess = normalize(args)
         if name != "g" or not guess:
             return None
         self.player_id = msg.user_id
         if guess not in HIGHER | LOWER:
-            if self._told_how:
-                return None
-            self._told_how = True
-            return Outcome(messages=["Answer with {p}g higher or {p}g lower."])
+            return self.remind_once()
         assert self.next is not None
         before, after = self.current["views"], self.next["views"]
         right = after >= before if guess in HIGHER else after <= before

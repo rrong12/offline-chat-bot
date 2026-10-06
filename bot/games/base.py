@@ -54,6 +54,7 @@ class Game(ABC):
         self.level = level  # one of `levels`, or None to let the game pick
         self.recent = recent  # ids of questions this player saw lately, oldest first
         self.item_id: str | None = None  # id of the question shown, so the manager can avoid repeats
+        self._reminded = False  # the "answer with ?g" reminder is given at most once per game
 
     def pick_unseen(self, items: list[T], item_id: Callable[[T], str]) -> T:
         """A random item the player hasn't seen lately; if they've seen them all, the one seen longest ago."""
@@ -71,9 +72,21 @@ class Game(ABC):
     @abstractmethod
     def start(self) -> str: ...
 
-    def on_message(self, msg: ChatMessage, now: datetime) -> Outcome | None:
-        """Plain chat while the game runs. None = not an attempt."""
+    def chat_reminder(self) -> str | None:
+        """What to tell a player who chats plainly instead of using ?g. None: plain chat needs no reminder."""
         return None
+
+    def remind_once(self) -> Outcome | None:
+        """The ?g reminder the first time it's needed in a game, then nothing (chatting mid-game isn't spam)."""
+        text = self.chat_reminder()
+        if text is None or self._reminded:
+            return None
+        self._reminded = True
+        return Outcome(messages=[text])
+
+    def on_message(self, msg: ChatMessage, now: datetime) -> Outcome | None:
+        """Plain chat while the game runs. None = not an attempt. By default: one ?g reminder, then nothing."""
+        return self.remind_once()
 
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
         """One of this game's in-game commands. None = rejected / not an attempt."""

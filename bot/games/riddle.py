@@ -178,6 +178,9 @@ class Riddle(Game):
             return False
         return True
 
+    def chat_reminder(self) -> str | None:
+        return "Answer with {p}g, like {p}g clock."
+
     def on_command(self, name: str, args: str, msg: ChatMessage, now: datetime) -> Outcome | None:
         if name == "hint":
             return self._hint()
@@ -198,7 +201,8 @@ class Riddle(Game):
         if self.guesses_left == 0:
             return Outcome(messages=[f"💀 Out of guesses! It was: {self.answers[0]}."], finished=True, result="lost")
         why = "One answer per guess" if too_long else "Not it"
-        return Outcome(messages=[f"❌ {why}, {_plural(self.guesses_left, 'guess')} left."])
+        left = _plural(self.guesses_left, "guess")
+        return Outcome(messages=[f"❌ {why}, {left} left · {{p}}giveup to see the answer."])
 
     def _hint(self) -> Outcome | None:
         if self.hints_used >= len(self.POINTS) - 1:

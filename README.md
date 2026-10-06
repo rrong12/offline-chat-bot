@@ -10,6 +10,13 @@ answers you in threaded replies. Many people can play at once (25 games by defau
 person runs one game at a time, and new games are refused ("try again in a moment") while the
 bot's outgoing messages are backed up.
 
+The bot is for **offline chat**: while the channel is live it sleeps. Running games end quietly
+(streak points are kept), and it ignores everything except mods' `?bot` commands until the stream
+ends, then wakes up by itself. `[live] sleep_when_live = false` in `config.toml` turns this off.
+
+When a game starts on a random topic, its first message says how to pick one, and players who
+chat without `?g` in a game that needs it get one reminder.
+
 ## Commands
 
 | Command | Who | What it does |
@@ -20,7 +27,7 @@ bot's outgoing messages are backed up.
 | `?trivia [category] [easy\|medium\|hard]`, `?trivia categories` | anyone | Your own trivia question. Easy is multiple choice (`?g A`-`D`, 5 points); medium and hard are typed (`?g <answer>`, 3 guesses, `?hint`; medium 10/7/4, hard 15/10/6 points). Questions from Open Trivia DB (CC BY-SA 4.0) |
 | `?riddle` | anyone | Your own riddle: `?g <answer>`, 3 guesses, `?hint` for a clue then the letter count (10/7/4 points) |
 | `?higherlower` / `?hl` | anyone | Does the next thing get more monthly Wikipedia views? `?g higher` or `?g lower`; 1 point per right answer, one miss ends the streak. Your streak's points are kept even if you `?skip` or a mod stops games |
-| `?skip` | anyone | End your current game (no points, except a Higher or Lower streak you've already built) |
+| `?skip` / `?giveup` | anyone | Give up: end your current game and see the answer (no points, except a Higher or Lower streak you've already built) |
 | `?leaderboard [game] [1-10]` | anyone | Top players by points |
 | `?gamestats [game] [username]` | anyone | Wins, games played, points |
 | `?8ball`, `?coinflip`, `?catfact`, `?dogfact`, `?fact`, `?dadjoke` | anyone | Quick fun |
@@ -52,6 +59,7 @@ Any Python from 3.11 to 3.13 works.
 ```
 
 Type lines like `alice: ?scramble animals`. A leading `@` makes the user a mod (`@mod: ?bot off`).
+`!live` and `!offline` pretend the stream started or ended.
 Console mode keeps its own database under `data/console/`, separate from the real one.
 
 On macOS, the python.org installer ships without root certificates, so HTTPS would fail. The

@@ -29,10 +29,11 @@ def test_start_shows_blank_board_with_word_gap(assets):
     )
 
 
-def test_plain_chat_is_ignored(assets):
+def test_plain_chat_never_counts_as_a_guess(assets):
     game = make(assets)
-    assert game.on_message(make_msg("W"), T0) is None
+    assert game.on_message(make_msg("W"), T0).messages[0].startswith("Guess with {p}g")  # one reminder
     assert game.on_message(make_msg("sea lion"), T0) is None
+    assert game.wrong == [] and game.guessed == set()
 
 
 def test_correct_letter_reveals_and_holds_a_point(assets):
@@ -137,3 +138,12 @@ def test_six_wrong_letters_loses_and_awards_nothing(assets):
 def test_timeout(assets):
     out = make(assets).on_timeout()
     assert out.result == "timeout" and out.messages == ["💀 Time's up! The word was SEA LION."]
+
+
+def test_plain_chat_gets_one_reminder_to_use_g(assets):
+    import random as random_module
+
+    game = Hangman("animals", random_module.Random(1), assets)
+    expected = ["Guess with {p}g, like {p}g e for a letter or {p}g <answer>."]
+    assert game.on_message(make_msg("W"), None).messages == expected
+    assert game.on_message(make_msg("L"), None) is None

@@ -74,3 +74,25 @@ async def test_console_lookup_user(clock: FakeClock):
     conn = ConsoleConnector(clock=clock, lines=[])
     assert (await conn.lookup_user("@Bob")).login == "bob"
     assert await conn.lookup_user("x") is None
+
+
+async def test_console_can_simulate_going_live(clock: FakeClock):
+    from bot.connectors.console import ConsoleConnector
+
+    changes = []
+
+    async def on_live(live):
+        changes.append(live)
+
+    conn = ConsoleConnector(clock=clock, lines=["!live", "!offline"], out=lambda s: None)
+    conn.on_live = on_live
+    seen = []
+
+    async def on_message(msg):
+        seen.append(msg)
+
+    async def on_ready(info):
+        pass
+
+    await conn.run(on_message, on_ready)
+    assert changes == [True, False] and seen == [] and await conn.is_live() is False
