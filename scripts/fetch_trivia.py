@@ -29,7 +29,7 @@ from bot.text import normalize, strip_invisible  # noqa: E402
 
 API = "https://opentdb.com"
 OUT = Path(__file__).resolve().parent.parent / "bot" / "content" / "trivia.json"
-USER_AGENT = "offline-chat-bot (https://github.com/rrong12/offline-chat-bot)"
+USER_AGENT = "twitch-chat-games-bot (https://github.com/rrong12/twitch-chat-games-bot)"
 DELAY = 5.5  # seconds between requests
 
 # Our category -> Open Trivia DB category IDs.

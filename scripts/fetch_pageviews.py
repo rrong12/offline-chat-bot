@@ -23,7 +23,7 @@ import bot  # noqa: E402, F401  (points Python at certifi's certificates when th
 
 TERMS = ROOT / "scripts" / "higherlower_terms.txt"
 OUT = ROOT / "bot" / "content" / "higherlower.json"
-USER_AGENT = "offline-chat-bot/0.1 (https://github.com/rrong12/offline-chat-bot)"
+USER_AGENT = "twitch-chat-games-bot/0.1 (https://github.com/rrong12/twitch-chat-games-bot)"
 ACTION_API = "https://en.wikipedia.org/w/api.php"
 VIEWS_API = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user"
 REVIEW_BELOW = 3000  # monthly views this low usually mean the wrong article
