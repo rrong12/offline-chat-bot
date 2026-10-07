@@ -7941,3 +7941,21 @@ The code blocks above are the final, reviewed versions; the entries below say wh
   - **Minors taken:** the cut-off check rejects only a lowercase first letter (curly quotes and `$` now pass); while the busy brake is on, Stats, Fun, and Info commands are ignored so personal replies can't crowd out game messages; the `config.toml` cooldown comment and spec notice wording are updated; tests added for "1 win" in the per-game line and for `synchronous=NORMAL`.
   - Kept: "Moby Dick" and "Van Dyke" still fall back (cheap); losing mod status is one-way until a restart.
   - Tests: 296 → 303.
+- **Task 20, live test** (2026-10-05 to 2026-10-07): bot account `nmsb0t`, modded in Robert's channel `wifi520`, run from his laptop with all of Phases 1-3.
+  - **Passed:**
+    - setup and login;
+    - `is_mod: true` with the purple Chat Bot badge, and threaded replies;
+    - Scramble, Hangman, Trivia, Riddle, Higher or Lower and `?rng`;
+    - `?help`, `?coinflip`, `?8ball`, `?dadjoke` (live HTTP), `?cookie`;
+    - `?bot status`, `?bot off`, `?bot on`, `?stopgame`, and `?bot shutdown` (exit 0, token file updated, mode 0600);
+    - SIGINT (exit 0); a bad channel exits 2; a missing token exits 3;
+    - automatic reconnects: 5 dropped connections recovered in an 11-hour unattended run;
+    - the activity log has every expected event and no chat text.
+  - **Found and fixed:** after the laptop slept, TwitchIO kept listing a subscription Twitch had dropped, so the bot stayed connected but deaf with no watchdog exit. The watchdog now confirms the chat subscription with Twitch (f986e4c).
+  - **Changed at Robert's request during the test:**
+    - Scramble 60 s;
+    - Higher or Lower streaks kept on skip or stop;
+    - the bot sleeps while the channel is live;
+    - a random-topic tip, `?giveup`, and a one-time `?g` reminder;
+    - streamer list reviewed: 20 non-English streamers removed (Ibai kept), 19 English Twitch Partners added.
+  - **Not run live** (covered by the automated tests): the non-mod account checks, answering with the reply button, the run before modding, the stats and fact commands, a restart while paused, token revocation, and sleeping during a real stream (the stream online/offline subscriptions were confirmed enabled on Twitch).
