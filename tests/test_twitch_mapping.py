@@ -115,11 +115,31 @@ async def test_unexpected_end_of_connection_is_an_error(tmp_path, clock: FakeClo
 
 
 class FakeClient:
-    def __init__(self, tokens=None, subscriptions=None):
+    def __init__(self, tokens=None, subscriptions=None, on_twitch=("channel.chat.message",)):
         self.tokens = tokens if tokens is not None else {}
         self.subscriptions = subscriptions if subscriptions is not None else {}
+        self.on_twitch = on_twitch  # enabled subscription types Twitch reports; an exception = unreachable
         self.closed = False
         self.sent = []
+
+    async def fetch_eventsub_subscriptions(self, *, token_for, status):
+        assert status == "enabled"
+        if isinstance(self.on_twitch, Exception):
+            raise self.on_twitch
+        types = self.on_twitch
+
+        class Sub:
+            def __init__(self, type_):
+                self.type = type_
+
+        async def gen():
+            for t in types:
+                yield Sub(t)
+
+        class Result:
+            subscriptions = gen()
+
+        return Result()
 
     def websocket_subscriptions(self):
         return self.subscriptions
@@ -341,3 +361,33 @@ async def test_stream_events_and_live_check(tmp_path, clock):
     await twitch_client.event_stream_online(None)
     await twitch_client.event_stream_offline(None)
     assert changes == [True, False]
+
+
+async def test_watchdog_trusts_twitch_over_the_local_subscription_list(tmp_path, clock, monkeypatch):
+    # After a laptop sleep, TwitchIO can still list a subscription that Twitch has dropped: the bot is deaf.
+    monkeypatch.setattr(twitch, "WATCHDOG_SECONDS", 0.01)
+    monkeypatch.setattr(twitch, "NO_SUBSCRIPTION_GRACE", 0.05)
+    client = FakeClient(tokens={"123": {}}, subscriptions={"s": object()}, on_twitch=())
+    conn = connector_for(tmp_path, clock, client)
+    await asyncio.wait_for(conn._watch(client), timeout=2)
+    assert isinstance(conn._fatal, RuntimeError) and "chat connection" in str(conn._fatal)
+
+
+async def test_watchdog_waits_while_twitch_cannot_be_reached(tmp_path, clock, monkeypatch):
+    monkeypatch.setattr(twitch, "WATCHDOG_SECONDS", 0.01)
+    monkeypatch.setattr(twitch, "NO_SUBSCRIPTION_GRACE", 0.05)
+    client = FakeClient(tokens={"123": {}}, subscriptions={"s": object()}, on_twitch=OSError("offline"))
+    conn = connector_for(tmp_path, clock, client)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(conn._watch(client), timeout=0.3)  # no restart loop while offline
+    assert conn._fatal is None
+
+
+async def test_watchdog_is_quiet_while_the_chat_subscription_is_enabled(tmp_path, clock, monkeypatch):
+    monkeypatch.setattr(twitch, "WATCHDOG_SECONDS", 0.01)
+    monkeypatch.setattr(twitch, "NO_SUBSCRIPTION_GRACE", 0.05)
+    client = FakeClient(tokens={"123": {}}, subscriptions={"s": object()})
+    conn = connector_for(tmp_path, clock, client)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(conn._watch(client), timeout=0.3)
+    assert conn._fatal is None

@@ -216,13 +216,31 @@ class TwitchConnector:
             if self.config.bot_id not in client.tokens:  # a runtime refresh failed and TwitchIO dropped it
                 await self._fail(AuthRequired("the bot's Twitch login expired and could not be refreshed"))
                 return
-            if client.websocket_subscriptions():
+            alive = await self._chat_subscription_alive(client)
+            if alive is None:  # Twitch can't be reached (asleep, offline): a restart wouldn't help yet
+                continue
+            if alive:
                 empty_since = None
             elif empty_since is None:
                 empty_since = loop.time()
             elif loop.time() - empty_since >= NO_SUBSCRIPTION_GRACE:
                 await self._fail(RuntimeError("lost the chat connection and could not get it back"))
                 return
+
+    async def _chat_subscription_alive(self, client: _Client) -> bool | None:
+        """Is the chat subscription live? Asks Twitch, because after a laptop sleep TwitchIO can keep listing a
+        subscription Twitch has dropped, leaving the bot deaf. None if Twitch can't be reached."""
+        if not client.websocket_subscriptions():
+            return False
+        try:
+            found = await client.fetch_eventsub_subscriptions(token_for=self.config.bot_id, status="enabled")
+            async for sub in found.subscriptions:
+                if sub.type == "channel.chat.message":
+                    return True
+            return False
+        except Exception as exc:  # network down, DNS failing, Twitch erroring: can't tell right now
+            logger.debug("could not ask Twitch about the chat subscription: %s", exc)
+            return None
 
     def save_bot_token(self) -> None:
         """Write the bot's current (possibly refreshed) token to disk. Never raises."""
