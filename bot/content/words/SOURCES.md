@@ -1,6 +1,7 @@
 # Sources for streamers.txt and games.txt
 
-Every entry was checked against the linked page on 2026-10-04. Robert reviews this file before go-live.
+Every entry was checked against the linked page on 2026-10-04. Entries linking to twitch.tv were added on
+2026-10-07 (Robert's review) and checked with the Twitch API: English-language Partner channels. Robert reviews this file before go-live.
 
 ## streamers
 
@@ -41,14 +42,6 @@ Every entry was checked against the linked page on 2026-10-04. Robert reviews th
 | typical gamer | https://en.wikipedia.org/wiki/Typical_Gamer |
 | lazarbeam | https://en.wikipedia.org/wiki/LazarBeam |
 | ibai | https://en.wikipedia.org/wiki/Ibai_Llanos |
-| auronplay | https://en.wikipedia.org/wiki/AuronPlay |
-| thegrefg | https://en.wikipedia.org/wiki/TheGrefg |
-| gaules | https://en.wikipedia.org/wiki/Gaules |
-| squeezie | https://en.wikipedia.org/wiki/Squeezie |
-| zerator | https://en.wikipedia.org/wiki/Zerator |
-| papaplatte | https://en.wikipedia.org/wiki/Papaplatte |
-| knossi | https://en.wikipedia.org/wiki/Jens_Knossalla |
-| gronkh | https://en.wikipedia.org/wiki/Gronkh |
 | emiru | https://en.wikipedia.org/wiki/Emiru |
 | qtcinderella | https://en.wikipedia.org/wiki/QTCinderella |
 | fuslie | https://en.wikipedia.org/wiki/Fuslie |
@@ -68,16 +61,9 @@ Every entry was checked against the linked page on 2026-10-04. Robert reviews th
 | neuro-sama | https://en.wikipedia.org/wiki/Neuro-sama |
 | gawr gura | https://en.wikipedia.org/wiki/Gawr_Gura |
 | corpse husband | https://en.wikipedia.org/wiki/Corpse_Husband |
-| alanzoka | https://en.wikipedia.org/wiki/Alanzoka |
-| coscu | https://en.wikipedia.org/wiki/Coscu |
-| spreen | https://en.wikipedia.org/wiki/Spreen |
-| illojuan | https://en.wikipedia.org/wiki/IlloJuan |
 | thebausffs | https://en.wikipedia.org/wiki/Thebausffs |
 | captainsparklez | https://en.wikipedia.org/wiki/CaptainSparklez |
 | ali-a | https://en.wikipedia.org/wiki/Ali-A |
-| cellbit | https://en.wikipedia.org/wiki/Cellbit |
-| nobru | https://en.wikipedia.org/wiki/Nobru |
-| fernanfloo | https://en.wikipedia.org/wiki/Fernanfloo |
 | vanossgaming | https://en.wikipedia.org/wiki/VanossGaming |
 | prestonplayz | https://en.wikipedia.org/wiki/PrestonPlayz |
 | benjyfishy | https://en.wikipedia.org/wiki/Benjyfishy |
@@ -96,8 +82,6 @@ Every entry was checked against the linked page on 2026-10-04. Robert reviews th
 | sapnap | https://en.wikipedia.org/wiki/Sapnap |
 | stable ronaldo | https://en.wikipedia.org/wiki/Stable_Ronaldo |
 | philza | https://en.wikipedia.org/wiki/Philza |
-| casimiro | https://en.wikipedia.org/wiki/Casimiro_(streamer) |
-| rubius | https://en.wikipedia.org/wiki/El_Rubius |
 | esfand | https://en.wikipedia.org/wiki/Esfand_(streamer) |
 | bugha | https://en.wikipedia.org/wiki/Bugha_(gamer) |
 | lirik | https://en.wikipedia.org/wiki/Lirik_(gamer) |
@@ -105,13 +89,29 @@ Every entry was checked against the linked page on 2026-10-04. Robert reviews th
 | nihachu | https://en.wikipedia.org/wiki/Nihachu |
 | jasontheween | https://twitchtracker.com/jasontheween |
 | caseoh | https://twitchtracker.com/caseoh_ |
-| gotaga | https://twitchtracker.com/gotaga |
-| trymacs | https://twitchtracker.com/trymacs |
 | cohhcarnage | https://twitchtracker.com/cohhcarnage |
-| juansguarnizo | https://twitchtracker.com/juansguarnizo |
 | kitboga | https://twitchtracker.com/kitboga |
 | lacy | https://twitchtracker.com/lacy |
 | ranboo | https://twitchtracker.com/ranboolive |
+| asmongold | https://www.twitch.tv/asmongold |
+| jerma | https://www.twitch.tv/jerma985 |
+| summit | https://www.twitch.tv/summit1g |
+| extraemily | https://www.twitch.tv/extraemily |
+| sketch | https://www.twitch.tv/sketch |
+| berleezy | https://www.twitch.tv/berleezy |
+| silky | https://www.twitch.tv/silky |
+| pokelawls | https://www.twitch.tv/pokelawls |
+| brookeab | https://www.twitch.tv/brookeab |
+| adapt | https://www.twitch.tv/adapt |
+| nmplol | https://www.twitch.tv/nmplol |
+| tectone | https://www.twitch.tv/tectone |
+| cinna | https://www.twitch.tv/cinna |
+| shotzzy | https://www.twitch.tv/shotzzy |
+| cloakzy | https://www.twitch.tv/cloakzy |
+| symfuhny | https://www.twitch.tv/symfuhny |
+| loserfruit | https://www.twitch.tv/loserfruit |
+| bruce drop em off | https://www.twitch.tv/brucedropemoff |
+| yourragegaming | https://www.twitch.tv/yourragegaming |
 
 ## games
 
